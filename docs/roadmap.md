@@ -13,7 +13,7 @@
 | Order | ID | Milestone | Version | Branch | Status | Closed |
 |---|---|---|---|---|---|---|
 | 0 | — | Documentation baseline | `docs-v1.0` | `docs/v1.0` | Done | 2026-10-04 |
-| 1 | S1 | Contracts | `v0.1.0` | `feature/v0.1.0` | Planned | — |
+| 1 | S1 | Contracts | `v0.1.0` | `feature/v0.1.0` | In progress | — |
 | 2 | C1 | Core | `v0.2.0` | `feature/v0.2.0` | Planned | — |
 | 3 | S2 | card-auth | `v0.3.0` | `feature/v0.3.0` | Planned | — |
 | 4 | S3 | EVM connector, reconciliation | `v0.4.0` | `feature/v0.4.0` | Planned | — |
@@ -77,8 +77,10 @@ Work in other systems that a milestone needs. It runs outside the milestone bran
 
 | Task | System | Needed for | Status |
 |---|---|---|---|
-| Check which pairs to USD are served, and in which direction | CRS | S2 | Open |
-| Add pairs so that card quotes work for more authorization currencies | CRS | S2 | Open |
+| Check which pairs to USD are served, and in which direction | CRS | S2 | Done 2026-10-04: `EUR→USD` and `RSD→USD`; the rate is USD per one unit, no inversion |
+| Add fiat pairs to USD so that card quotes work for more authorization currencies | CRS | S2 | Open. Configuration only. Not blocking: other currencies are declined |
+| Serve the rate as a decimal string beside the `double` | CRS | S2 | Open. Not blocking: the stored value has 10 decimal places and is recovered exactly |
+| Shorter polling interval for `EUR→USD` | CRS | S2 | Open. Not blocking |
 | Add crypto pairs for the valuation of balances | CRS | E1 | Open |
 | Extend the gRPC contract, frozen at v0.4.0, if E1 needs it | ET | E1 | Open |
 
