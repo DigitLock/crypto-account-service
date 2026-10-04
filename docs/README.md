@@ -16,8 +16,9 @@ Source of truth for CAS requirements and design. Markdown in the repository.
 | ADR | `adr/` | One decision per file | 1–13 accepted |
 | C4 | `c4/context.md`, `c4/container.md` | Context and container diagrams | Pre-approved |
 | Glossary | `glossary.md` | Card, on-chain, exchange and CAS terms | Pre-approved |
+| Roadmap | `roadmap.md` | Order of the milestones, versions, status, log | Living |
 
-Status: `Draft` → `Pre-approved` (reviewed by the owner) → `Approved` (merged to `main`).
+Status: `Draft` → `Pre-approved` (reviewed by the owner) → `Approved` (merged to `main`). `Living`: updated after each milestone, no approval status.
 
 ## Conventions
 
