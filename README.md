@@ -9,8 +9,8 @@
 | Part | State |
 |---|---|
 | Requirements and design | Written for milestones C1, S1–S3, X1–X2, W1. X3, X4, E1: outlined in the BRD |
-| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI |
-| Milestone | Closed: S1 — Contracts, `v0.1.0`. Next: C1 — Core, `v0.2.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
+| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI. C1 — Core in progress, branch `feature/v0.2.0` |
+| Milestone | Current: C1 — Core, `v0.2.0`. Closed: S1 — Contracts, `v0.1.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
 
 ## Design highlights
 
