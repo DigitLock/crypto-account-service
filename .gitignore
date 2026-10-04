@@ -1,0 +1,11 @@
+# IDE and OS
+.idea/
+.DS_Store
+
+# Local rules for AI coding sessions
+CLAUDE.md
+
+# Environment files
+.env
+.env.*
+!.env.example
