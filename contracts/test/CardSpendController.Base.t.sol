@@ -46,4 +46,19 @@ abstract contract CardSpendControllerBase is Test {
     function storedUser(bytes32 authId) internal view returns (address user) {
         (user,,) = controller.authorizations(authId);
     }
+
+    function fundTreasury(uint256 amount) internal {
+        token.mint(treasury, amount);
+        vm.prank(treasury);
+        token.approve(address(controller), amount);
+    }
+
+    function refundAs(address caller, bytes32 authId, bytes32 refundId, uint256 amount) internal {
+        vm.prank(caller);
+        controller.refund(authId, refundId, amount);
+    }
+
+    function storedAmounts(bytes32 authId) internal view returns (uint256 debited, uint256 refunded) {
+        (, debited, refunded) = controller.authorizations(authId);
+    }
 }

@@ -6,7 +6,7 @@ import {CardSpendControllerBase} from "./CardSpendController.Base.t.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-// Phase 2 of docs/test-plan-s1.md. T205 and T212 need refund and are added in st5.
+// Phase 2 of docs/test-plan-s1.md.
 contract CardSpendControllerSetupTest is CardSpendControllerBase {
     bytes32 internal constant ADMIN_ROLE = 0x00;
     bytes32 internal constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
@@ -66,6 +66,27 @@ contract CardSpendControllerSetupTest is CardSpendControllerBase {
         debitAs(stranger, alice, 1_000_000, keccak256("auth-1"), VALID_UNTIL);
 
         assertEq(token.balanceOf(alice), 10_000_000);
+    }
+
+    // S1-T205 — Req: ADR-9
+    function test_T205_refundByNonOperator() public {
+        bytes32 authId = keccak256("auth-1");
+        bytes32 refundId = keccak256("refund-1");
+        fund(alice, 10_000_000);
+        limit(alice, 10_000_000);
+        fundTreasury(10_000_000);
+        debitAs(operator, alice, 5_000_000, authId, VALID_UNTIL);
+
+        expectUnauthorized(admin, OPERATOR_ROLE);
+        refundAs(admin, authId, refundId, 1_000_000);
+
+        expectUnauthorized(stranger, OPERATOR_ROLE);
+        refundAs(stranger, authId, refundId, 1_000_000);
+
+        assertFalse(controller.refundUsed(refundId));
+        (, uint256 refunded) = storedAmounts(authId);
+        assertEq(refunded, 0);
+        assertEq(token.balanceOf(alice), 5_000_000);
     }
 
     // S1-T206 — Req: ADR-9, BR-9
@@ -141,5 +162,10 @@ contract CardSpendControllerSetupTest is CardSpendControllerBase {
     // S1-T211 — Req: §2.1.5
     function test_T211_remainingDailyLimitWithoutLimit() public view {
         assertEq(controller.remainingDailyLimit(alice), 0);
+    }
+
+    // S1-T212 — Req: §2.1.5
+    function test_T212_refundUsedBeforeAnyRefund() public view {
+        assertFalse(controller.refundUsed(keccak256("random-refund")));
     }
 }

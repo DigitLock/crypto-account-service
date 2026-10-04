@@ -3,7 +3,7 @@ pragma solidity 0.8.37;
 
 // Pulls card spend from a cardholder wallet to the treasury under an ERC-20 allowance (ADR-9).
 // The contract never holds tokens. Token and treasury are immutable. authId is single-use;
-// a per-wallet daily limit applies by UTC day. refund is added in st5.
+// a per-wallet daily limit applies by UTC day.
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -71,6 +71,21 @@ contract CardSpendController is AccessControl, Pausable {
         authorizations[authId] = Authorization(user, amount, 0);
         emit Debited(authId, user, amount);
         token.safeTransferFrom(user, treasury, amount);
+    }
+
+    /// @notice Returns `amount` of debit `authId` from the treasury to its stored user once per `refundId`; works while paused.
+    function refund(bytes32 authId, bytes32 refundId, uint256 amount) external onlyRole(OPERATOR_ROLE) {
+        if (amount == 0) revert ZeroAmount();
+        Authorization storage auth = authorizations[authId];
+        address user = auth.user;
+        if (user == address(0)) revert UnknownAuth();
+        if (refundUsed[refundId]) revert RefundAlreadyUsed();
+        if (amount > auth.debited - auth.refunded) revert RefundExceedsDebit();
+
+        refundUsed[refundId] = true;
+        auth.refunded += amount;
+        emit Refunded(authId, refundId, user, amount);
+        token.safeTransferFrom(treasury, user, amount);
     }
 
     /// @notice Sets the daily limit of `user` in token base units.

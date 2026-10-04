@@ -194,8 +194,15 @@ contract CardSpendControllerDebitTest is CardSpendControllerBase {
 
     // S1-T312 — Req: §2.1.5, ADR-9
     function test_T312_refundDoesNotRestoreLimit() public {
-        // enabled in st5: needs refund.
-        vm.skip(true);
+        fundTreasury(LIMIT);
+        debit(alice, LIMIT, AUTH_1);
+        refundAs(operator, AUTH_1, keccak256("refund-1"), AMOUNT);
+
+        assertEq(token.balanceOf(alice), BALANCE - LIMIT + AMOUNT);
+        assertEq(controller.remainingDailyLimit(alice), 0);
+
+        vm.expectRevert(CardSpendController.DailyLimitExceeded.selector);
+        debit(alice, 1, AUTH_2);
     }
 
     // S1-T313 — Req: BR-9
