@@ -105,7 +105,7 @@ sequenceDiagram
 
 ##### Common rules
 
-- **Protocol:** gRPC, package `cas.v1`. The `.proto` files in `proto/cas/v1/` are the contract; `buf lint` and `buf breaking` run in CI.
+- **Protocol:** gRPC, package `cas.v1`. The `.proto` files in `proto/cas/v1/` are the contract; `buf lint` and `buf breaking` run in CI. The contract is frozen as the image `proto/frozen/cas_v1.json`: CI compares every build with it, and a change of the contract updates the image by the owner's decision.
 - **Transport:** plain gRPC inside the internal network, no TLS (ADR-7). Server reflection is on.
 - **Authorization:** metadata `authorization: Bearer <service token>`. The token resolves to one tenant. Format and handling of the token: UC-105.
 - **Tenant scope:** every request reads and writes only the caller's tenant. A resource of another tenant is reported as `NOT_FOUND`.
@@ -248,6 +248,7 @@ See Common rules.
 | key_fingerprint | String | For exchanges | Last 4 characters of the API key, after `…` | `…9SDq` |
 | permissions | Array of strings | For exchanges | Permissions reported by the source | `["READ"]` |
 
+- On the wire the response carries this object in its field `connection`. `GetConnection` and `ListConnections` return the same object.
 - `FAILED_PRECONDITION / KEY_NOT_READ_ONLY`: the key allows trading, withdrawal or transfer.
 - `FAILED_PRECONDITION / KEY_INVALID`: the source rejects the key.
 - `ALREADY_EXISTS`: this exchange account or wallet address is already connected in the tenant.

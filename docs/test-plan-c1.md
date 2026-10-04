@@ -67,7 +67,7 @@
 | C1-T202 | Method catalogue | Contract | Read the service descriptors | `ConnectionService` with 6 methods, `AccountDataService` with 2; no `CardService` | §2.1.1 | — |
 | C1-T203 | Messages against the SRS | Contract | Compare with §2.1.1 – §2.1.4 | Every field of the SRS exists with the stated type; no amount and no `seq` is a float; the selectors of `CreateConnection` and `GetBalances` are `oneof` | §2.1.1 – §2.1.4, handoff §4 | — |
 | C1-T204 | Generated code is current | Contract | `buf generate`; `git diff` | No diff | Handoff §3.4 | — |
-| C1-T205 | Freeze guard | Frozen contract | On a throw-away copy remove a field, then a method; `buf breaking` against the frozen baseline | Fails in both cases | §2.1.1, QA gate | — |
+| C1-T205 | Freeze guard | Frozen contract | On a throw-away copy remove a field; remove a method; add a field. Run the freeze check against `proto/frozen/cas_v1.json` | Fails in all three cases: `buf breaking` for the removals, the comparison with the image for the addition | §2.1.1, QA gate | — |
 
 ### Phase 3 — Schema
 
@@ -285,7 +285,7 @@ Batches run in the QA stage in phase order; one line per batch and attempt. Cycl
 
 - Every row of §4 is `Pass`, locally and in CI.
 - 0 open P0 and P1. Open P2 and P3 are listed in `known-issues.md` with their row IDs.
-- The contract in `proto/cas/v1` passes `buf breaking` against its frozen baseline; the generated code is current.
+- The contract in `proto/cas/v1` equals its frozen image `proto/frozen/cas_v1.json`; the generated code is current.
 - `docs/srs/core.md` and `docs/srs/evm-connector.md` match the code.
 
 | Role | Name | Date | Result |
