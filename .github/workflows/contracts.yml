@@ -49,3 +49,8 @@ jobs:
         run: forge test -vvv
         env:
           FOUNDRY_PROFILE: ci
+
+      - name: ABI frozen
+        run: |
+          forge inspect CardSpendController abi --json | diff - abi/CardSpendController.json
+          forge inspect MockUSDC abi --json | diff - abi/MockUSDC.json
