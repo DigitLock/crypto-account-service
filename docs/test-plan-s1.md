@@ -13,6 +13,7 @@
 | Foundry | `v1.8.3` (forge, cast, anvil; 2026-09-15). Same version locally and in CI |
 | Solidity | `0.8.37`, exact pin; `evm_version = cancun` |
 | OpenZeppelin Contracts | `v5.6.1`, git submodule in `contracts/lib/` |
+| forge-std | `v1.17.0`, git submodule in `contracts/lib/` |
 | Keys | Anvil's unlocked default accounts. No private key in the repository |
 | Runs | Local profile: fuzz 256, invariant 256 runs × depth 15. CI profile: fuzz 1 000, invariant 500 runs × depth 50 |
 
