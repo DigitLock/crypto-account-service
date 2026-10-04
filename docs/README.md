@@ -17,6 +17,7 @@ Source of truth for CAS requirements and design. Markdown in the repository.
 | C4 | `c4/context.md`, `c4/container.md` | Context and container diagrams | Approved |
 | Glossary | `glossary.md` | Card, on-chain, exchange and CAS terms | Approved |
 | Roadmap | `roadmap.md` | Order of the milestones, versions, status, log | Living |
+| Test Plan — S1 | `test-plan-s1.md` | Test matrix of the contracts, run log, sign-off of S1 | Approved |
 
 Status: `Draft` → `Pre-approved` (reviewed by the owner) → `Approved` (merged to `main`). `Living`: updated after each milestone, no approval status.
 

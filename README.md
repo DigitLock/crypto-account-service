@@ -9,8 +9,8 @@
 | Part | State |
 |---|---|
 | Requirements and design | Written for milestones C1, S1–S3, X1–X2, W1. X3, X4, E1: outlined in the BRD |
-| Implementation | Not started |
-| Milestone | Closed: documentation baseline, `docs-v1.0`. Next: S1 — Contracts, `v0.1.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
+| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI |
+| Milestone | Closed: S1 — Contracts, `v0.1.0`. Next: C1 — Core, `v0.2.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
 
 ## Design highlights
 
@@ -54,11 +54,11 @@ Tracks S and X are independent. Details and dependencies: BRD §7.3.
 
 ## Repository layout
 
-Only `docs/` exists today. The rest is the planned structure.
+`docs/` and `contracts/` exist today. The rest is the planned structure.
 
 ```
 docs/         requirements and design
-contracts/    CardSpendController, MockUSDC, Foundry tests      S1
+contracts/    CardSpendController, MockUSDC, Foundry tests      S1 (done)
 proto/        cas/v1 gRPC contract                              C1
 cmd/          server, card-auth, CLI                            C1, S2
 internal/     connectors, sync engine, ledger, card spend       C1 and later

@@ -9,3 +9,8 @@ CLAUDE.md
 .env
 .env.*
 !.env.example
+
+# Foundry build output
+contracts/out/
+contracts/cache/
+contracts/broadcast/

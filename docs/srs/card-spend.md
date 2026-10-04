@@ -9,7 +9,7 @@
 - **Milestones:** S1 (contract), S2 (`card-auth`), S3 (reconciliation, UC-4).
 - **Out of scope:** tenants, card registry (US-6) and ledger — SRS — Core; event indexer — [SRS — EVM Connector](evm-connector.md). Items marked `Design only` in the PRD are outlined in §2.3.5.
 - **Parents:** [PRD — Card Spend](../prd/card-spend.md) (`US-n`, `EC-n`), [BRD](../brd.md) (`BR-n`), [ADR](../adr/README.md) 3, 7–13.
-- **Version:** 1.0, 2026-10-04, approved.
+- **Version:** 1.1, 2026-10-04. §2.1.5 completed by the discovery of S1: constructor, roles, check order, `ZeroAddress`, `MockUSDC`. Version 1.0 approved 2026-10-04.
 
 | Term | Meaning |
 |---|---|
@@ -315,27 +315,42 @@ See Common rules.
 
 `CardSpendController`. Token and treasury addresses are immutable. The contract never holds tokens.
 
+- Constructor: `(address token, address treasury, address admin, address operator)`. A zero address in any argument reverts with `ZeroAddress`. `admin` receives `ADMIN`, `operator` receives `OPERATOR`.
+- Roles: `ADMIN` is OpenZeppelin `DEFAULT_ADMIN_ROLE` and is the role admin of `OPERATOR_ROLE = keccak256("OPERATOR_ROLE")`: `ADMIN` grants and revokes `OPERATOR`.
+
 | Function | Caller | Rules | Event |
 |---|---|---|---|
-| `debit(address user, uint256 amount, bytes32 authId, uint64 validUntil)` | `OPERATOR`, not paused | Reverts if: `authId` already used; `block.timestamp > validUntil`; amount is 0; spent today + amount > daily limit of `user`. Then pulls `amount` from `user` to the treasury. | `Debited(authId, user, amount)` |
-| `refund(bytes32 authId, bytes32 refundId, uint256 amount)` | `OPERATOR` | Reverts if: `authId` unknown; `refundId` already used; refunded + amount > debited. Pulls `amount` from the treasury to the user stored for `authId`. Works while paused. | `Refunded(authId, refundId, user, amount)` |
-| `setDailyLimit(address user, uint256 limit)` | `ADMIN` | Default limit is 0: no spending until set. | `DailyLimitSet(user, limit)` |
-| `pause()`, `unpause()` | `ADMIN` | Pause blocks debits only. | `Paused`, `Unpaused` |
+| `debit(address user, uint256 amount, bytes32 authId, uint64 validUntil)` | `OPERATOR`, not paused | Checks in this order; the first failure reverts: amount is 0 → `ZeroAmount`; `user` is the zero address → `ZeroAddress`; `block.timestamp > validUntil` → `AuthExpired`; `authId` already used → `AuthAlreadyUsed`; spent today + amount > daily limit of `user` → `DailyLimitExceeded`. Then pulls `amount` from `user` to the treasury. | `Debited(authId, user, amount)` |
+| `refund(bytes32 authId, bytes32 refundId, uint256 amount)` | `OPERATOR` | Checks in this order: amount is 0 → `ZeroAmount`; `authId` unknown → `UnknownAuth`; `refundId` already used → `RefundAlreadyUsed`; refunded + amount > debited → `RefundExceedsDebit`. Then pulls `amount` from the treasury to the user stored for `authId`. Works while paused. | `Refunded(authId, refundId, user, amount)` |
+| `setDailyLimit(address user, uint256 limit)` | `ADMIN` | Default limit is 0: no spending until set. Lowering the limit below today's spend takes nothing back; it blocks further debits until the next UTC day. | `DailyLimitSet(user, limit)` |
+| `pause()`, `unpause()` | `ADMIN` | Pause blocks debits only. | `Paused(account)`, `Unpaused(account)` |
 
 | View | Returns |
 |---|---|
-| `authorizations(authId)` | `user`, `debited`, `refunded` |
-| `remainingDailyLimit(user)` | Limit minus today's spend |
+| `authorizations(authId)` | `(address user, uint256 debited, uint256 refunded)`. All zero for an unknown `authId` |
+| `remainingDailyLimit(user)` | Limit minus today's spend; 0 if today's spend already exceeds the limit |
 | `refundUsed(refundId)` | `bool` |
 | `token()`, `treasury()` | The immutable addresses |
 
 - `authId = keccak256(tenant_id, auth_id)`; `refundId = keccak256(tenant_id, return_id)`. IDs of different tenants cannot collide.
+- A known `authId` is one whose stored `user` is not the zero address. This is why `debit` rejects a zero `user`. A zero `authId` has no special rule.
 - Day = UTC day: `block.timestamp / 1 days`. A refund does not restore the day's limit.
-- `validUntil` is a Unix time in whole seconds. `block.timestamp` advances by the block time (2 s on Base), so the expiry takes effect at a block boundary.
+- `validUntil` is a Unix time in whole seconds; it is the last second at which the debit is accepted. `block.timestamp` advances by the block time (2 s on Base), so the expiry takes effect at a block boundary.
 - The refund recipient is fixed by the debit. The operator cannot redirect tokens.
 - The treasury grants the contract an allowance for refunds.
-- Indexed event fields: `authId` and `user` in `Debited`; `authId`, `refundId` and `user` in `Refunded`. They allow log filters by authorization and by wallet.
-- Custom errors: `AuthAlreadyUsed`, `AuthExpired`, `ZeroAmount`, `DailyLimitExceeded`, `UnknownAuth`, `RefundAlreadyUsed`, `RefundExceedsDebit`.
+- A failed token transfer — missing allowance or balance of the wallet in `debit`, of the treasury in `refund` — reverts with the token's own error. The contract adds no check of its own; `card-auth` reads balance and allowance before the debit (UC-1, step 9).
+- Indexed event fields: `authId` and `user` in `Debited`; `authId`, `refundId` and `user` in `Refunded`; `user` in `DailyLimitSet`. They allow log filters by authorization and by wallet.
+- Custom errors: `ZeroAddress`, `ZeroAmount`, `AuthExpired`, `AuthAlreadyUsed`, `DailyLimitExceeded`, `UnknownAuth`, `RefundAlreadyUsed`, `RefundExceedsDebit`. Errors and events of OpenZeppelin `AccessControl` and `Pausable` apply in addition: `AccessControlUnauthorizedAccount`, `EnforcedPause`, `ExpectedPause`.
+- Libraries and build: OpenZeppelin `AccessControl`, `Pausable`, `SafeERC20` (ADR-9). No proxy.
+
+`MockUSDC`, the funding token of the test networks (ADR-8):
+
+| Item | Value |
+|---|---|
+| Standard | ERC-20, OpenZeppelin `ERC20` + `ERC20Burnable`. A plain token as SRS — EVM Connector §2.1.1 requires: no fee, no rebasing, a `Transfer` log on mint and burn |
+| Name, symbol, decimals | `Mock USDC`, `USDC`, 6 |
+| `mint(address to, uint256 amount)` | Callable by anyone. Emits `Transfer(0x0, to, amount)` |
+| `burn(uint256 amount)`, `burnFrom(address account, uint256 amount)` | Emit `Transfer(from, 0x0, amount)` |
 
 ---
 
