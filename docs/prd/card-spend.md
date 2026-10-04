@@ -8,7 +8,7 @@
 - **Link to architecture documentation:** [C4](../c4/), [ADR](../adr/README.md) 3, 7–13
 - **Link to Rollout plan:** §4
 - **Other related documents:** SRS — Card Spend (`../srs/card-spend.md`)
-- **Document Version:** 0.9, 2026-10-03, pre-approved
+- **Document Version:** 1.0, 2026-10-04, approved
 
 ---
 

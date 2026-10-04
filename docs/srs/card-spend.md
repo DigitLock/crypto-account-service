@@ -9,7 +9,7 @@
 - **Milestones:** S1 (contract), S2 (`card-auth`), S3 (reconciliation, UC-4).
 - **Out of scope:** tenants, card registry (US-6) and ledger — SRS — Core; event indexer — [SRS — EVM Connector](evm-connector.md). Items marked `Design only` in the PRD are outlined in §2.3.5.
 - **Parents:** [PRD — Card Spend](../prd/card-spend.md) (`US-n`, `EC-n`), [BRD](../brd.md) (`BR-n`), [ADR](../adr/README.md) 3, 7–13.
-- **Version:** 0.9, 2026-10-03, pre-approved.
+- **Version:** 1.0, 2026-10-04, approved.
 
 | Term | Meaning |
 |---|---|

@@ -3,7 +3,7 @@
 ## 1. Document Overview
 
 - **Document Owner:** Igor (DigitLock)
-- **Date / Version:** 2026-10-03 / 0.9, pre-approved
+- **Date / Version:** 2026-10-04 / 1.0, approved
 - **Related Initiatives / Projects:** Currency Rate Service (CRS), Expense Tracker (ET)
 - **Main Stakeholders:** see §5
 - **Project type:** reference implementation. Card spend runs on test networks only. Exchange access is read-only.

@@ -8,7 +8,7 @@
 - **Link to architecture documentation:** [C4](../c4/), [ADR](../adr/README.md) 1–6, 13, [SRS — Core](../srs/core.md)
 - **Link to Rollout plan:** §4
 - **Other related documents:** SRS — Binance (`../srs/exchange-binance.md`)
-- **Document Version:** 0.9, 2026-10-03, pre-approved
+- **Document Version:** 1.0, 2026-10-04, approved
 
 ---
 
