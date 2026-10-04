@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/DigitLock/crypto-account-service/internal/testdb"
+	"github.com/DigitLock/crypto-account-service/migrations"
 )
 
 func newTestServer(t *testing.T, checks ...ReadinessCheck) *httptest.Server {
@@ -140,5 +141,39 @@ func TestT106_Metrics(t *testing.T) {
 	}
 	if runtime.GOOS == "linux" && !strings.Contains(body, "process_start_time_seconds") {
 		t.Error("process collector metrics missing")
+	}
+}
+
+// C1-T308 — Req: §3.1. The check runs as cas_server, as in server; the owner role changes schema_migrations.
+func TestT308_ReadyzSchemaVersion(t *testing.T) {
+	owner := testdb.Open(t)
+	server := testdb.OpenServer(t)
+	latest := migrations.Latest()
+	srv := newTestServer(t, DatabasePing{DB: server}, SchemaVersion{DB: server, Want: latest})
+
+	setVersion := func(version uint, dirty bool) {
+		t.Helper()
+		if _, err := owner.Exec(context.Background(),
+			`UPDATE schema_migrations SET version = $1, dirty = $2`, int64(version), dirty); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { setVersion(latest, false) })
+
+	for _, c := range []struct {
+		name    string
+		version uint
+		dirty   bool
+		want    int
+	}{
+		{"current schema", latest, false, http.StatusOK},
+		{"one migration behind", latest - 1, false, http.StatusServiceUnavailable},
+		{"dirty", latest, true, http.StatusServiceUnavailable},
+		{"restored", latest, false, http.StatusOK},
+	} {
+		setVersion(c.version, c.dirty)
+		if status, _, body := get(t, srv.URL+"/readyz"); status != c.want {
+			t.Errorf("%s: GET /readyz = %d %q, want %d", c.name, status, body, c.want)
+		}
 	}
 }

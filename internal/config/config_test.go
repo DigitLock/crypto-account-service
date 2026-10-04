@@ -153,12 +153,13 @@ func TestT102_Defaults(t *testing.T) {
 		env["LOG_FORMAT"] = "text"
 		env["LOG_LEVEL"] = "debug"
 		env["ENABLE_FAKE_SOURCE"] = "true"
+		env["CAS_MASTER_KEY_VERSION"] = "32767"
 		cfg, err := Load(getenvFrom(env))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if cfg.GRPCPort != 6000 || cfg.SyncBackoffMax != 2*time.Hour || cfg.LogFormat != "text" ||
-			cfg.LogLevel != slog.LevelDebug || !cfg.EnableFakeSource {
+			cfg.LogLevel != slog.LevelDebug || !cfg.EnableFakeSource || cfg.MasterKeyVersion != 32767 {
 			t.Errorf("set values not applied: %+v", cfg)
 		}
 	})
@@ -189,6 +190,7 @@ func TestT103_InvalidConfiguration(t *testing.T) {
 		{"boolean not true or false", "ENABLE_FAKE_SOURCE", "yes-please"},
 		{"zero workers", "SYNC_WORKERS", "0"},
 		{"master key version zero", "CAS_MASTER_KEY_VERSION", "0"},
+		{"master key version above SMALLINT", "CAS_MASTER_KEY_VERSION", "32768"},
 		{"pool min above max", "DB_POOL_MIN_CONNS", "20"},
 		{"backoff initial above max", "SYNC_BACKOFF_INITIAL", "2h"},
 	}

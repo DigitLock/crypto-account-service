@@ -909,7 +909,7 @@ Append-only record of changes made through the API or the CLI, and of the status
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| id | BIGSERIAL | Yes | Primary key |
+| id | BIGINT | Yes | Primary key, generated |
 | tenant_id | UUID | Yes | Tenant |
 | credential_id | UUID | No | Acting credential; null for the CLI and the engine |
 | action | TEXT | Yes | Connections: `CONNECTION_CREATED`, `CONNECTION_DELETED`, `CONNECTION_DEGRADED`, `CONNECTION_RECOVERED`, `CREDENTIALS_INVALID`. Tenants and credentials: `TENANT_CREATED`, `TENANT_DISABLED`, `TENANT_ENABLED`, `CREDENTIAL_ISSUED`, `CREDENTIAL_REVOKED`. Cards, from S2: `CARD_REGISTERED`, `CARD_UPDATED` |
@@ -1012,10 +1012,12 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 
 | Tables | Rights of `cas_server` |
 |---|---|
-| `connections`, `sync_cursors` | Read and write |
+| `connections` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
+| `sync_cursors` | `SELECT`, `INSERT`, `UPDATE`. Rows are removed only by the cascade of a deleted connection |
 | `balance_snapshots`, `snapshot_balances`, `ledger_entries` | `SELECT`, `INSERT`. Rows are removed only by the cascade of a deleted connection |
 | `audit_log` | `INSERT` |
 | `tenants`, `api_credentials`, `sources`, `asset_aliases` | `SELECT` |
+| `schema_migrations` | `SELECT`, for `/readyz` |
 
 - **Compliance:** no personal data. `owner_ref`, `card_ref` and labels are supplied by the tenant and must not contain any.
 

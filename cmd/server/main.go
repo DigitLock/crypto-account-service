@@ -21,6 +21,7 @@ import (
 
 	"github.com/DigitLock/crypto-account-service/internal/config"
 	"github.com/DigitLock/crypto-account-service/internal/health"
+	"github.com/DigitLock/crypto-account-service/migrations"
 )
 
 func main() {
@@ -61,7 +62,10 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}
 
 	healthSrv := &http.Server{
-		Handler:           health.NewHandler(logger, health.NewRegistry(), health.DatabasePing{DB: pool}),
+		Handler: health.NewHandler(logger, health.NewRegistry(),
+			health.DatabasePing{DB: pool},
+			health.SchemaVersion{DB: pool, Want: migrations.Latest()},
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	grpcSrv := grpc.NewServer()

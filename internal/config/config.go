@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -59,7 +60,7 @@ func Load(getenv func(string) string) (Config, error) {
 	p := parser{getenv: getenv}
 	cfg := Config{
 		MasterKey:        p.masterKey("CAS_MASTER_KEY"),
-		MasterKeyVersion: p.integer("CAS_MASTER_KEY_VERSION", 1, 1, 1<<31-1),
+		MasterKeyVersion: p.integer("CAS_MASTER_KEY_VERSION", 1, 1, math.MaxInt16), // kek_version is SMALLINT
 		DatabaseURL:      Secret[string]{v: p.required("DATABASE_URL")},
 
 		DBPoolMaxConns: int32(p.integer("DB_POOL_MAX_CONNS", 10, 1, 1<<31-1)),
