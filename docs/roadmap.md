@@ -12,7 +12,7 @@
 
 | Order | ID | Milestone | Version | Branch | Status | Closed |
 |---|---|---|---|---|---|---|
-| 0 | — | Documentation baseline | `docs-v1.0` | `docs/v1.0` | In progress | — |
+| 0 | — | Documentation baseline | `docs-v1.0` | `docs/v1.0` | Done | 2026-10-04 |
 | 1 | S1 | Contracts | `v0.1.0` | `feature/v0.1.0` | Planned | — |
 | 2 | C1 | Core | `v0.2.0` | `feature/v0.2.0` | Planned | — |
 | 3 | S2 | card-auth | `v0.3.0` | `feature/v0.3.0` | Planned | — |
@@ -91,6 +91,7 @@ One line per closed milestone or significant state. Newest last.
 | Date | Milestone | Result |
 |---|---|---|
 | 2026-10-03 | Documentation | BRD, two PRDs, four SRS, 13 ADRs, C4, glossary: pre-approved, version 0.9 |
+| 2026-10-04 | Documentation | Document set approved, version 1.0. Tag docs-v1.0 |
 
 ---
 

@@ -13,7 +13,7 @@
   - the EVM connector (event indexer) — [SRS — EVM Connector](evm-connector.md);
   - tenant self-onboarding, credential rotation through the API, data retention jobs — §4.
 - **Parents:** [BRD](../brd.md) BR-1 … BR-5, BR-13; [PRD — Card Spend](../prd/card-spend.md) US-6, US-7, US-8, US-13; [PRD — Exchange Accounts](../prd/exchange-accounts.md) US-204, US-205, US-208 … US-210, US-213; [ADR](../adr/README.md) 1–7, 11, 13.
-- **Version:** 0.9, 2026-10-03, pre-approved.
+- **Version:** 1.0, 2026-10-04, approved.
 
 | Term | Meaning |
 |---|---|

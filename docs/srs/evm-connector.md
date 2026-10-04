@@ -12,7 +12,7 @@
   - the authorization flow, the contract and the reconciliation rules: [SRS — Card Spend](card-spend.md);
   - real-time signals: `card-auth` tracks its own transactions (ADR-13). This connector reads logs from final blocks only.
 - **Parents:** [BRD](../brd.md) BR-1, BR-3, BR-4, BR-5, BR-12; [PRD — Card Spend](../prd/card-spend.md) US-13; [ADR](../adr/README.md) 2, 3, 5, 6, 8, 11, 13.
-- **Version:** 0.9, 2026-10-03, pre-approved.
+- **Version:** 1.0, 2026-10-04, approved.
 - **Network facts:** finality stages and their timing are taken from the Base documentation for Base mainnet, checked on 2026-10-03. Base Sepolia may differ; the values are measured at S3.
 
 | Term | Meaning |

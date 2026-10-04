@@ -6,16 +6,16 @@ Source of truth for CAS requirements and design. Markdown in the repository.
 
 | Document | Path | Answers | Status |
 |---|---|---|---|
-| BRD | `brd.md` | Why, and what the business needs | Pre-approved |
-| PRD — Card Spend | `prd/card-spend.md` | What the card spend module does, for whom, in which stages | Pre-approved |
-| PRD — Exchange Accounts | `prd/exchange-accounts.md` | What exchange connections deliver, in which stages | Pre-approved |
-| SRS — Core | `srs/core.md` | Tenants, connections, sync engine, ledger model, gRPC API | Pre-approved |
-| SRS — Card Spend | `srs/card-spend.md` | Authorization flow, states, edge cases, contract, idempotency | Pre-approved |
-| SRS — Binance | `srs/exchange-binance.md` | Key check, limits, balances and history sync for Binance | Pre-approved |
-| SRS — EVM Connector | `srs/evm-connector.md` | Wallet balances, event logs from final blocks, reorg guard, completeness check, inputs for reconciliation | Pre-approved |
+| BRD | `brd.md` | Why, and what the business needs | Approved |
+| PRD — Card Spend | `prd/card-spend.md` | What the card spend module does, for whom, in which stages | Approved |
+| PRD — Exchange Accounts | `prd/exchange-accounts.md` | What exchange connections deliver, in which stages | Approved |
+| SRS — Core | `srs/core.md` | Tenants, connections, sync engine, ledger model, gRPC API | Approved |
+| SRS — Card Spend | `srs/card-spend.md` | Authorization flow, states, edge cases, contract, idempotency | Approved |
+| SRS — Binance | `srs/exchange-binance.md` | Key check, limits, balances and history sync for Binance | Approved |
+| SRS — EVM Connector | `srs/evm-connector.md` | Wallet balances, event logs from final blocks, reorg guard, completeness check, inputs for reconciliation | Approved |
 | ADR | `adr/` | One decision per file | 1–13 accepted |
-| C4 | `c4/context.md`, `c4/container.md` | Context and container diagrams | Pre-approved |
-| Glossary | `glossary.md` | Card, on-chain, exchange and CAS terms | Pre-approved |
+| C4 | `c4/context.md`, `c4/container.md` | Context and container diagrams | Approved |
+| Glossary | `glossary.md` | Card, on-chain, exchange and CAS terms | Approved |
 | Roadmap | `roadmap.md` | Order of the milestones, versions, status, log | Living |
 
 Status: `Draft` → `Pre-approved` (reviewed by the owner) → `Approved` (merged to `main`). `Living`: updated after each milestone, no approval status.

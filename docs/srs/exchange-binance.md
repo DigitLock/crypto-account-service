@@ -9,7 +9,7 @@
 - **Milestones:** X1 (key check, balances), X2 (history, completeness check), W1 (event triggers).
 - **Out of scope:** everything shared by all sources — engine, cursors, ledger schema, consumer API: [SRS — Core](core.md).
 - **Parents:** [PRD — Exchange Accounts](../prd/exchange-accounts.md) (`US-2xx`, `EC-2xx`), [BRD](../brd.md) BR-2 … BR-5, [ADR](../adr/README.md) 2, 3, 5, 6, 13.
-- **Version:** 0.9, 2026-10-03, pre-approved.
+- **Version:** 1.0, 2026-10-04, approved.
 - **API facts:** checked against the official Binance documentation on 2026-10-03. They are re-checked on recorded responses before each milestone.
 
 | Term | Meaning |

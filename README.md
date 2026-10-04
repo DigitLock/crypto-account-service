@@ -10,7 +10,7 @@
 |---|---|
 | Requirements and design | Written for milestones C1, S1–S3, X1–X2, W1. X3, X4, E1: outlined in the BRD |
 | Implementation | Not started |
-| Milestone | Current: documentation baseline, `docs-v1.0`. Next: S1 — Contracts, `v0.1.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
+| Milestone | Closed: documentation baseline, `docs-v1.0`. Next: S1 — Contracts, `v0.1.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
 
 ## Design highlights
 
