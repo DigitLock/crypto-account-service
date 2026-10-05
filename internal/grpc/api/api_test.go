@@ -6,12 +6,16 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,11 +29,15 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	"github.com/DigitLock/crypto-account-service/internal/auth"
+	"github.com/DigitLock/crypto-account-service/internal/connector"
+	"github.com/DigitLock/crypto-account-service/internal/connector/evm"
+	"github.com/DigitLock/crypto-account-service/internal/connector/fake"
 	"github.com/DigitLock/crypto-account-service/internal/grpc/api"
 	casv1 "github.com/DigitLock/crypto-account-service/internal/grpc/pb/cas/v1"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 	"github.com/DigitLock/crypto-account-service/internal/testdb"
+	"github.com/DigitLock/crypto-account-service/internal/vault"
 )
 
 var ctx = context.Background()
@@ -53,13 +61,20 @@ func (b *syncBuffer) String() string {
 }
 
 type env struct {
-	owner  *pgxpool.Pool
-	server *pgxpool.Pool
-	reg    *registry.Registry
-	log    *syncBuffer
-	logger *slog.Logger
-	tokens []string
+	owner     *pgxpool.Pool
+	server    *pgxpool.Pool
+	reg       *registry.Registry
+	log       *syncBuffer
+	logger    *slog.Logger
+	tokens    []string
+	fake      *fake.Connector
+	vault     *vault.Envelope
+	masterKey []byte
+	now       time.Time
 }
+
+// testNow is the fake clock of the tests.
+var testNow = time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
 
 func setup(t *testing.T) *env {
 	t.Helper()
@@ -68,9 +83,23 @@ func setup(t *testing.T) *env {
 	e.server = testdb.OpenServer(t)
 	e.reg = registry.New(e.owner)
 	e.logger = slog.New(slog.NewJSONHandler(e.log, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	// The token secrets of the test appear nowhere in the captured log.
+	e.fake = fake.New()
+	e.now = testNow
+	e.masterKey = randomBytes(t, 32)
+	var err error
+	if e.vault, err = vault.New(e.masterKey, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.reg.AddFakeSource(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The token secrets and the master key of the test appear nowhere in the captured log.
 	t.Cleanup(func() {
 		out := e.log.String()
+		if strings.Contains(out, base64.StdEncoding.EncodeToString(e.masterKey)) ||
+			strings.Contains(out, hex.EncodeToString(e.masterKey)) {
+			t.Error("the captured log contains the master key")
+		}
 		for _, tok := range e.tokens {
 			if strings.Contains(out, tok) || strings.Contains(out, tok[len("cas_")+13:]) {
 				t.Error("the captured log contains a token secret")
@@ -120,10 +149,36 @@ func dial(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
 	return conn
 }
 
-// realServer is the server of cmd/server: api.NewServer with the queries of cas_server.
+// connectors is the set of the tests: the scripted fake and the EVM connector with the default allow-list.
+func (e *env) connectors() *connector.Set {
+	set := connector.NewSet()
+	set.Register(fake.Code, e.fake)
+	set.RegisterEVM(evm.New([]uint64{31337, 84532}))
+	return set
+}
+
+// deps are the dependencies of the server of cmd/server, on db as cas_server, with the fake clock.
+func (e *env) deps(db registry.DB) api.Deps {
+	return api.Deps{
+		Credentials: repository.New(e.server),
+		Connections: registry.NewConnections(db, e.vault, e.connectors(), func() time.Time { return e.now }),
+		Logger:      e.logger,
+	}
+}
+
+// realServer is the server of cmd/server: api.NewServer on the pool of cas_server.
 func (e *env) realServer(t *testing.T) *grpc.ClientConn {
 	t.Helper()
-	return dial(t, api.NewServer(repository.New(e.server), e.logger))
+	return dial(t, api.NewServer(e.deps(e.server)))
+}
+
+func randomBytes(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func bearer(token string) context.Context {
@@ -181,9 +236,8 @@ func TestT403_ValidToken(t *testing.T) {
 		}
 	})
 
-	t.Run("real registration answers UNIMPLEMENTED", func(t *testing.T) {
-		assertCode(t, "ListSources with a valid token", listSources(e.realServer(t), bearer(tok.Value)),
-			codes.Unimplemented)
+	t.Run("real registration serves the call", func(t *testing.T) {
+		assertCode(t, "ListSources with a valid token", listSources(e.realServer(t), bearer(tok.Value)), codes.OK)
 	})
 }
 
@@ -232,7 +286,9 @@ func TestT404_BadToken(t *testing.T) {
 	}
 
 	t.Run("database failure is INTERNAL without the driver error", func(t *testing.T) {
-		failing := dial(t, api.NewServer(failingStore{}, e.logger))
+		deps := e.deps(e.server)
+		deps.Credentials = failingStore{}
+		failing := dial(t, api.NewServer(deps))
 		err := listSources(failing, bearer(tok.Value))
 		assertCode(t, "store failure", err, codes.Internal)
 		if strings.Contains(status.Convert(err).Message(), "driver") {
@@ -248,7 +304,7 @@ func TestT405_RevokedToken(t *testing.T) {
 	tok := e.issue(t, "tenant-a")
 	conn := e.realServer(t)
 
-	assertCode(t, "before revoke", listSources(conn, bearer(tok.Value)), codes.Unimplemented)
+	assertCode(t, "before revoke", listSources(conn, bearer(tok.Value)), codes.OK)
 	if _, err := e.reg.RevokeToken(ctx, tok.KeyID); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +332,7 @@ func TestT406_DisabledTenant(t *testing.T) {
 	if _, err := e.reg.EnableTenant(ctx, "tenant-a"); err != nil {
 		t.Fatal(err)
 	}
-	assertCode(t, "after enable", listSources(conn, bearer(tok.Value)), codes.Unimplemented)
+	assertCode(t, "after enable", listSources(conn, bearer(tok.Value)), codes.OK)
 	if after := tenantRows(t, e.owner); after != before {
 		t.Errorf("rows of the tenant changed:\nbefore %s\nafter  %s", before, after)
 	}
@@ -294,7 +350,7 @@ func tenantRows(t *testing.T, pool *pgxpool.Pool) string {
 }
 
 // C1-T407 — Req: FR-105. Every method of every service of cas.v1, read from the descriptors, so that a
-// method added later is covered.
+// method added later is covered. With a valid token a method must not answer UNAUTHENTICATED.
 func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 	e := setup(t)
 	e.tenant(t, "tenant-a")
@@ -329,7 +385,10 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 				return conn.Invoke(callCtx, name, in, out)
 			}
 			assertCode(t, "without a token", call(ctx), codes.Unauthenticated)
-			assertCode(t, "with a valid token", call(bearer(tok.Value)), codes.Unimplemented)
+			// With a valid token the method runs: any answer but UNAUTHENTICATED.
+			if err := call(bearer(tok.Value)); status.Code(err) == codes.Unauthenticated {
+				t.Errorf("with a valid token: %v", err)
+			}
 		})
 	}
 }
@@ -351,12 +410,12 @@ func TestT412_SeveralValidTokens(t *testing.T) {
 	second := e.issue(t, "tenant-a")
 	conn := e.realServer(t)
 
-	assertCode(t, "first", listSources(conn, bearer(first.Value)), codes.Unimplemented)
-	assertCode(t, "second", listSources(conn, bearer(second.Value)), codes.Unimplemented)
+	assertCode(t, "first", listSources(conn, bearer(first.Value)), codes.OK)
+	assertCode(t, "second", listSources(conn, bearer(second.Value)), codes.OK)
 
 	if _, err := e.reg.RevokeToken(ctx, first.KeyID); err != nil {
 		t.Fatal(err)
 	}
 	assertCode(t, "first after revoke", listSources(conn, bearer(first.Value)), codes.Unauthenticated)
-	assertCode(t, "second after revoke", listSources(conn, bearer(second.Value)), codes.Unimplemented)
+	assertCode(t, "second after revoke", listSources(conn, bearer(second.Value)), codes.OK)
 }

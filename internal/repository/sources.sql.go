@@ -9,6 +9,21 @@ import (
 	"context"
 )
 
+const addFakeSource = `-- name: AddFakeSource :execrows
+INSERT INTO sources (code, kind, enabled, config)
+VALUES ('fake', 'EXCHANGE', true, '{}')
+ON CONFLICT (code) DO NOTHING
+`
+
+// Development seed of the fake connector: 1 row when added, 0 when it exists.
+func (q *Queries) AddFakeSource(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, addFakeSource)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getSourceByCode = `-- name: GetSourceByCode :one
 SELECT id, code, kind, enabled, config
 FROM sources

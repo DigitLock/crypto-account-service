@@ -114,7 +114,7 @@ sequenceDiagram
 - **Pagination:** `page_size`: 100 when absent or 0, maximum 500; a larger value is cut to 500; a negative one is `INVALID_ARGUMENT`. `ListConnections` continues with `page_token` → `next_page_token`. `ListLedgerEntries` continues with `after_seq` (§2.1.4).
 - **Lengths** of strings count characters, not bytes.
 - **Enum values** carry the name of their enum as a prefix on the wire: `CONNECTION_STATUS_ACTIVE`. The examples of this document show the short form.
-- **Available source:** a source is offered when it is enabled, its connector is registered and, for an EVM network, its chain ID is in the allow-list (SRS — EVM Connector §2.1.1). Any other source is treated as disabled.
+- **Available source:** a source is offered when it is enabled, its connector is registered and, for an EVM network, its chain ID is in the allow-list (SRS — EVM Connector §2.1.1). Any other source is treated as disabled. Availability is evaluated on every request.
 - **Errors:**
 
 | gRPC status | Meaning |
@@ -125,7 +125,7 @@ sequenceDiagram
 | `ALREADY_EXISTS` | The account is already connected, or the card is already registered with different data |
 | `FAILED_PRECONDITION` | The request is valid but not allowed in the current state; the reason is in the error detail |
 | `RESOURCE_EXHAUSTED` | Manual sync requested inside the cooldown |
-| `UNAVAILABLE` | The source cannot be reached during key verification |
+| `UNAVAILABLE` | During key verification the source cannot be reached or answers with a rate limit |
 | `INTERNAL` | Unexpected failure; nothing was stored |
 
 - **Error detail:** `google.rpc.ErrorInfo` with `domain = "cas"` and one of these reasons:
@@ -159,7 +159,7 @@ Methods with non-obvious rules are specified below. The others follow the common
 
 | Method | Request | Response | Rules |
 |---|---|---|---|
-| `ListSources` | — | `sources[]`: `code`, `kind` | Available sources only. No pagination |
+| `ListSources` | — | `sources[]`: `code`, `kind` | Available sources only, ordered by `code`. No pagination |
 | `ListConnections` | `owner_ref`, optional; `page_size`, `page_token` | `connections[]`: the connection of §2.1.2; `next_page_token` | Order: `created_at`, `connection_id`. No stream health |
 | `GetConnection` | `connection_id` | The connection of §2.1.2 and `streams[]`: `stream`, `mode`, `next_run_at`, `last_success_at`, `last_error`, `consecutive_failures` | The cursor is not returned |
 | `DeleteConnection` | `connection_id` | Empty | UC-104. A second call: `NOT_FOUND` |
@@ -171,7 +171,7 @@ What the engine expects from every connector (ADR-2). The Go types are fixed in 
 
 | Topic | Rule |
 |---|---|
-| Registration | A connector is registered under the code of its source. A source without a registered connector is not available |
+| Registration | A connector is registered under the code of its source. The EVM connector is one for every source of kind `EVM`. A source without a connector is not available |
 | Capabilities | Flags declared by the connector. C1 reads one: key permissions readable (EC-103). A flag is added when the engine starts to use it |
 | Account check | Returns the account identity and, for a key, its permissions. Used by `CreateConnection` and by the periodic key check |
 | Streams | The connector declares the streams of a connection: name, family, interval, first mode, first cursor. It reads the interval from `sources.config` |
@@ -181,7 +181,7 @@ What the engine expects from every connector (ADR-2). The Go types are fixed in 
 | Errors | Typed: key rejected, key not read-only, rate limit with the pause the source demands, source unreachable. Anything else is a plain failure of the run |
 | Entry | Positive amount with at most 18 decimal places and 20 integer digits; `external_id` not empty. An entry that breaks this fails its page (EC-117) |
 | Secrets | A connector gets the decrypted key only for the call and never puts it into an error or a log line. The engine removes the key and the secret from `last_error` and from its own log lines |
-| Fake connector | Scripted connector for tests. In a running `server` only with `ENABLE_FAKE_SOURCE`: development and demo, fictitious data only |
+| Fake connector | Scripted connector for tests. In a running `server` only with `ENABLE_FAKE_SOURCE`: development and demo, fictitious data only. Without a script it accepts any key, derives the account from the API key and reports `READ` |
 
 #### 2.1.2 CreateConnection
 
@@ -223,6 +223,7 @@ See Common rules.
 | wallet | Object | For EVM networks | Wallet address | — |
 
 - `exchange_key` and `wallet` are alternatives (`oneof`). The one sent must match the kind of the source; otherwise `INVALID_ARGUMENT`.
+- `api_key`: 16 to 256 characters. `api_secret`: 16 to 4096 characters. Neither is trimmed or changed; another length is `INVALID_ARGUMENT`.
 
 ##### Response parameters
 ###### Response body example
@@ -460,7 +461,7 @@ N/A — one request, one optional call to the source; the steps are in the algor
 |---|---|---|
 | 1 | Authenticate, resolve the tenant, validate | `UNAUTHENTICATED`, `INVALID_ARGUMENT` |
 | 2 | Check that the source exists and is available (Common rules) | `NOT_FOUND`, `FAILED_PRECONDITION / SOURCE_DISABLED` |
-| 3 | Exchange: call the connector's key check. It returns the account ID and the permissions. | `KEY_INVALID`, `UNAVAILABLE` |
+| 3 | Exchange: call the connector's key check. It returns the account ID and the permissions. | Key rejected: `KEY_INVALID`. Source unreachable or rate limit: `UNAVAILABLE`. Another failure: `INTERNAL` |
 | 4 | Exchange: reject a key with any permission beyond reading | `KEY_NOT_READ_ONLY` |
 | 5 | Wallet: validate the address format and checksum | `INVALID_ARGUMENT` |
 | 6 | Check uniqueness of `(tenant, source, account)`: exchange account ID or wallet address | `ALREADY_EXISTS` |
@@ -497,7 +498,7 @@ Steps 1–9.
 | EC-101 | Key with trade, withdrawal or transfer permission | Step 4: rejected; no connection and no key are stored |
 | EC-102 | Same account or address registered again | Step 6: `ALREADY_EXISTS` |
 | EC-103 | The source cannot report key permissions | The connector declares it; the connection is created with `permissions: ["UNVERIFIED"]` and the audit record says so |
-| EC-104 | Source unreachable during the key check | Step 3: `UNAVAILABLE`, nothing stored |
+| EC-104 | Source unreachable, or a rate-limit answer, during the key check | Step 3: `UNAVAILABLE`, nothing stored |
 
 ##### Acceptance Criteria
 
@@ -766,7 +767,7 @@ Service tokens for gRPC and Basic credentials for the processor API of `card-aut
 
 ##### sources
 ###### Description
-Exchanges and EVM networks. Business configuration lives here; system configuration lives in the environment. The migrations of C1 add the EVM networks (SRS — EVM Connector §2.4); an exchange is added with its connector. The row `fake` of the fake connector is a development seed, not a migration.
+Exchanges and EVM networks. Business configuration lives here; system configuration lives in the environment. The migrations of C1 add the EVM networks (SRS — EVM Connector §2.4); an exchange is added with its connector. The row `fake` of the fake connector is a development seed, not a migration: `casctl source add-fake` adds it as an enabled `EXCHANGE` source; a second run changes nothing.
 
 ###### Data model
 
@@ -1004,6 +1005,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
   - a rate-limit answer pauses the affected budget instead of retrying (EC-107).
 - **Security:**
   - envelope encryption of exchange secrets; the master key only in the environment (ADR-4);
+  - `credentials_enc` is one block: a format byte, the data key wrapped by the master key, and the key and secret encrypted by the data key. Both use AES-256-GCM with a random nonce; the data key is new for every encryption. The connection ID and `kek_version` are authenticated data. A block that fails a check is not decrypted, and the error says nothing about the cause;
   - service tokens and processor passwords stored as hashes;
   - tenant filter on every query (FR-105), covered by an automated test with two tenants;
   - database roles: `cas_server` for `server`, `cas_card_auth` for `card-auth` (S2). The operator creates a role once per environment; the migrations run under the owner role and grant the rights below;

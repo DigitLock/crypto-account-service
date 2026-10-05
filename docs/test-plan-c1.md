@@ -41,7 +41,7 @@
 | 2 | Contract | st3 | 5 |
 | 3 | Schema | st4 | 8 |
 | 4 | Tenants and access | st5 | 14 |
-| 5 | Connections and vault | st6 | 37 |
+| 5 | Connections and vault | st6a, st6b | 37 |
 | 6 | Sync engine and ledger | st7 | 35 |
 | 7 | Read API | st8 | 21 |
 | 8 | CI and repository | st2, st9 | 6 |
@@ -105,14 +105,14 @@
 
 | ID | Description | Preconditions | Steps | Expected | Req | Status |
 |---|---|---|---|---|---|---|
-| C1-T501 | `ListSources` | Common; one disabled source; one source without a connector | `ListSources` | Available sources only, with `code` and `kind` | §2.1.1 | — |
+| C1-T501 | `ListSources` | Common; one disabled source; one source without a connector | `ListSources` | Available sources only, with `code` and `kind`, ordered by `code` | §2.1.1 | — |
 | C1-T502 | Create, exchange | Common | `CreateConnection` with `exchange_key` | Response of §2.1.2: `ACTIVE`, `EXCHANGE`, fingerprint, permissions `["READ"]`; one cursor per declared stream, due at once; audit `CONNECTION_CREATED` with the acting credential | UC-101, FR-101, FR-117 | — |
 | C1-T503 | Create, wallet | Common | `CreateConnection` with `wallet` on `anvil` | `EVM_WALLET`; identity in EIP-55 form; `credentials_enc` empty, no fingerprint; audit record | UC-101, FR-101, FR-302, FR-117 | — |
-| C1-T504 | Validation | Common | Send: no `owner_ref`; `owner_ref` of 129 characters; `label` of 65; no source; no credential; `wallet` for an exchange; `exchange_key` for a network | `INVALID_ARGUMENT` in each case; nothing stored. 128 and 64 characters of a multi-byte script are accepted | UC-101 step 1, §2.1.1 | — |
+| C1-T504 | Validation | Common | Send: no `owner_ref`; `owner_ref` of 129 characters; `label` of 65; no source; no credential; `wallet` for an exchange; `exchange_key` for a network; `api_key` of 15 and of 257 characters; `api_secret` of 15 and of 4097 | `INVALID_ARGUMENT` in each case; nothing stored. 128 and 64 characters of a multi-byte script are accepted; so are keys and secrets at both ends of their ranges | UC-101 step 1, §2.1.1 | — |
 | C1-T505 | Source unknown or disabled | Common; one disabled source | Create on an unknown code; on the disabled source | `NOT_FOUND`; `FAILED_PRECONDITION` with `ErrorInfo` reason `SOURCE_DISABLED`, domain `cas` | UC-101 step 2, §2.1.1 | — |
 | C1-T506 | Key not read-only | Common; the fake reports a trade permission | `CreateConnection` | `FAILED_PRECONDITION / KEY_NOT_READ_ONLY`; no connection, no ciphertext | EC-101, FR-102 | — |
 | C1-T507 | Key rejected by the source | Common; the fake rejects the key | `CreateConnection` | `FAILED_PRECONDITION / KEY_INVALID`; nothing stored | UC-101 step 3 | — |
-| C1-T508 | Source unreachable at the key check | Common; the fake is unreachable | `CreateConnection` | `UNAVAILABLE`; nothing stored | EC-104 | — |
+| C1-T508 | Source unreachable at the key check | Common; the fake is unreachable; then it answers with a rate limit; then it fails in another way | `CreateConnection` | `UNAVAILABLE`; `UNAVAILABLE`; `INTERNAL`. Nothing stored | EC-104, UC-101 step 3 | — |
 | C1-T509 | Permissions not reported | Common; the fake declares that it cannot read permissions | `CreateConnection` | Created with `["UNVERIFIED"]`; the audit record says so | EC-103, FR-117 | — |
 | C1-T510 | Same account again | Exchange connection | Create with another key of the same account | `ALREADY_EXISTS` | EC-102, FR-104 | — |
 | C1-T511 | Same account, concurrent requests | Common | Send the same `CreateConnection` from several goroutines | Exactly one succeeds; the others get `ALREADY_EXISTS` | FR-104 | — |
@@ -140,7 +140,7 @@
 | C1-T533 | Same address on two networks | Wallet connection | Create with the same address on `base-sepolia` | Second connection created | FR-104 | — |
 | C1-T534 | No network call | — | Run the address check with no network | Passes: the connector of C1 has no RPC client | UC-301 | — |
 | C1-T535 | Chain outside the allow-list | `EVM_ALLOWED_CHAIN_IDS` without 84532 | Start; `ListSources`; create on `base-sepolia` | A log line at start; `base-sepolia` is not listed; `FAILED_PRECONDITION / SOURCE_DISABLED` | FR-318, EC-318 | — |
-| C1-T536 | Fake source behind its flag | The row `fake` exists | `ListSources` and create without `ENABLE_FAKE_SOURCE`; then with it | Without the flag: not listed, `SOURCE_DISABLED`. With it: listed, creation works | §2.1.1, §3.1 | — |
+| C1-T536 | Fake source behind its flag | Migrated database | `casctl source add-fake` twice; `ListSources` and create without `ENABLE_FAKE_SOURCE`; then with it | One row `fake`, enabled, kind `EXCHANGE`. Without the flag: not listed, `SOURCE_DISABLED`. With it: listed, creation works | §2.1.1, §2.4, §3.1 | — |
 | C1-T537 | Wallet without streams | Wallet connection | Read `sync_cursors`; `GetConnection` | No cursor, no sync; `streams` is empty | UC-101 postcondition, SRS — EVM §2.1.1 | — |
 
 ### Phase 6 — Sync engine and ledger

@@ -95,7 +95,7 @@ func TestT101_RequiredConfiguration(t *testing.T) {
 			}
 		}
 
-		for _, want := range []string{`"SHUTDOWN_TIMEOUT":"15s"`, `"KEY_CHECK_INTERVAL":"24h0m0s"`, `SYNC_TICK=1s`} {
+		for _, want := range []string{`"SHUTDOWN_TIMEOUT":"15s"`, `"EVM_ALLOWED_CHAIN_IDS":"31337,84532"`, `"KEY_CHECK_INTERVAL":"24h0m0s"`, `SYNC_TICK=1s`} {
 			if !strings.Contains(buf.String(), want) {
 				t.Errorf("log does not show the duration as %s: %s", want, buf.String())
 			}
@@ -145,6 +145,7 @@ func TestT102_Defaults(t *testing.T) {
 		{"TRIGGER_SYNC_COOLDOWN", cfg.TriggerSyncCooldown, 60 * time.Second},
 		{"KEY_CHECK_INTERVAL", cfg.KeyCheckInterval, 24 * time.Hour},
 		{"ENABLE_FAKE_SOURCE", cfg.EnableFakeSource, false},
+		{"EVM_ALLOWED_CHAIN_IDS", fmt.Sprint(cfg.EVMAllowedChainIDs), "[31337 84532]"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -160,12 +161,14 @@ func TestT102_Defaults(t *testing.T) {
 		env["LOG_LEVEL"] = "debug"
 		env["ENABLE_FAKE_SOURCE"] = "true"
 		env["CAS_MASTER_KEY_VERSION"] = "32767"
+		env["EVM_ALLOWED_CHAIN_IDS"] = " 31337 ,84532,  11155111 "
 		cfg, err := Load(getenvFrom(env))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if cfg.GRPCPort != 6000 || cfg.SyncBackoffMax != 2*time.Hour || cfg.LogFormat != "text" ||
-			cfg.LogLevel != slog.LevelDebug || !cfg.EnableFakeSource || cfg.MasterKeyVersion != 32767 {
+			cfg.LogLevel != slog.LevelDebug || !cfg.EnableFakeSource || cfg.MasterKeyVersion != 32767 ||
+			fmt.Sprint(cfg.EVMAllowedChainIDs) != "[31337 84532 11155111]" {
 			t.Errorf("set values not applied: %+v", cfg)
 		}
 	})
@@ -197,6 +200,10 @@ func TestT103_InvalidConfiguration(t *testing.T) {
 		{"zero workers", "SYNC_WORKERS", "0"},
 		{"master key version zero", "CAS_MASTER_KEY_VERSION", "0"},
 		{"master key version above SMALLINT", "CAS_MASTER_KEY_VERSION", "32768"},
+		{"chain ID not a number", "EVM_ALLOWED_CHAIN_IDS", "31337,anvil"},
+		{"chain ID zero", "EVM_ALLOWED_CHAIN_IDS", "0"},
+		{"chain ID negative", "EVM_ALLOWED_CHAIN_IDS", "31337,-5"},
+		{"empty chain ID item", "EVM_ALLOWED_CHAIN_IDS", "31337,,84532"},
 		{"pool min above max", "DB_POOL_MIN_CONNS", "20"},
 		{"backoff initial above max", "SYNC_BACKOFF_INITIAL", "2h"},
 	}

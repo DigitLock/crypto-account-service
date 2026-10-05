@@ -242,3 +242,10 @@ func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == codeUniqueViolation
 }
+
+// AddFakeSource adds the development seed of the fake connector: the source fake, kind EXCHANGE,
+// enabled, empty config. It reports false and changes nothing when the row exists. No audit row.
+func (r *Registry) AddFakeSource(ctx context.Context) (bool, error) {
+	n, err := repository.New(r.pool).AddFakeSource(ctx)
+	return n == 1, err
+}

@@ -491,7 +491,7 @@ FR-316 and FR-317 apply from S3.
 
 | Parameter | Where | Default | Meaning |
 |---|---|---|---|
-| `EVM_ALLOWED_CHAIN_IDS` | Environment | 31337, 84532 | Allow-list of test networks. Read from C1 |
+| `EVM_ALLOWED_CHAIN_IDS` | Environment | 31337, 84532 | Allow-list of test networks: chain IDs separated by commas. Read from C1 |
 | `EVM_RPC_URL_<SOURCE>`, `EVM_RPC_FALLBACK_URL_<SOURCE>` | Environment | — | Endpoints; `<SOURCE>` is the source code in upper case with `_` for `-`. Kept out of the database: a provider URL usually contains an API key |
 | `chain_id` | `sources.config` | — | Chain ID of the network |
 | `finality_mode` | `sources.config` | Per network | `tag` or `confirmations` (§2.1.1) |

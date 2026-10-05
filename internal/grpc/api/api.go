@@ -17,6 +17,7 @@ import (
 
 	"github.com/DigitLock/crypto-account-service/internal/auth"
 	casv1 "github.com/DigitLock/crypto-account-service/internal/grpc/pb/cas/v1"
+	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 )
 
@@ -33,12 +34,21 @@ type CredentialStore interface {
 	GetServiceTokenByKeyID(ctx context.Context, keyID string) (repository.GetServiceTokenByKeyIDRow, error)
 }
 
-// NewServer returns the gRPC server of cas.v1: authentication on every unary call, the services
-// with their Unimplemented servers until their stages, and server reflection, which needs no token.
-func NewServer(store CredentialStore, logger *slog.Logger, opts ...grpc.ServerOption) *grpc.Server {
-	opts = append([]grpc.ServerOption{grpc.ChainUnaryInterceptor(UnaryAuth(store, logger))}, opts...)
+// Deps are the dependencies of the server, given in one place.
+type Deps struct {
+	// Credentials loads the credential of a token: the queries on the pool of cas_server.
+	Credentials CredentialStore
+	// Connections manages the connections of a tenant.
+	Connections *registry.Connections
+	Logger      *slog.Logger
+}
+
+// NewServer returns the gRPC server of cas.v1: authentication on every unary call, the services, and
+// server reflection, which needs no token. cmd/server and the tests use it.
+func NewServer(deps Deps, opts ...grpc.ServerOption) *grpc.Server {
+	opts = append([]grpc.ServerOption{grpc.ChainUnaryInterceptor(UnaryAuth(deps.Credentials, deps.Logger))}, opts...)
 	srv := grpc.NewServer(opts...)
-	casv1.RegisterConnectionServiceServer(srv, casv1.UnimplementedConnectionServiceServer{})
+	casv1.RegisterConnectionServiceServer(srv, &connectionService{conns: deps.Connections, logger: deps.Logger})
 	casv1.RegisterAccountDataServiceServer(srv, casv1.UnimplementedAccountDataServiceServer{})
 	reflection.Register(srv)
 	return srv

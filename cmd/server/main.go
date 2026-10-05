@@ -19,9 +19,14 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/DigitLock/crypto-account-service/internal/config"
+	"github.com/DigitLock/crypto-account-service/internal/connector"
+	"github.com/DigitLock/crypto-account-service/internal/connector/evm"
+	"github.com/DigitLock/crypto-account-service/internal/connector/fake"
 	"github.com/DigitLock/crypto-account-service/internal/grpc/api"
 	"github.com/DigitLock/crypto-account-service/internal/health"
+	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
+	"github.com/DigitLock/crypto-account-service/internal/vault"
 	"github.com/DigitLock/crypto-account-service/migrations"
 )
 
@@ -69,9 +74,21 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	grpcSrv := api.NewServer(repository.New(pool), logger)
+	v, err := vault.New(cfg.MasterKey.Value(), cfg.MasterKeyVersion)
+	if err != nil {
+		_ = healthLn.Close()
+		_ = grpcLn.Close()
+		return err
+	}
+	connectors := newConnectors(cfg)
+	grpcSrv := api.NewServer(api.Deps{
+		Credentials: repository.New(pool),
+		Connections: registry.NewConnections(pool, v, connectors, time.Now),
+		Logger:      logger,
+	})
 
 	logger.Info("server starting", "config", cfg)
+	warnUnavailableSources(ctx, logger, pool, connectors)
 
 	errc := make(chan error, 2)
 	go func() {
@@ -100,6 +117,42 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	shutdownErr := shutdown(cfg.ShutdownTimeout, healthSrv, grpcSrv)
 	logger.Info("server stopped")
 	return errors.Join(serveErr, shutdownErr)
+}
+
+// newConnectors registers the EVM connector with the allow-list and, only with ENABLE_FAKE_SOURCE,
+// the fake connector.
+func newConnectors(cfg config.Config) *connector.Set {
+	set := connector.NewSet()
+	set.RegisterEVM(evm.New(cfg.EVMAllowedChainIDs))
+	if cfg.EnableFakeSource {
+		set.Register(fake.Code, fake.New())
+	}
+	return set
+}
+
+// warnUnavailableSources logs one line per enabled EVM source that is not available (EC-318).
+// Availability is evaluated on every request; this is information for the operator only.
+func warnUnavailableSources(ctx context.Context, logger *slog.Logger, db repository.DBTX, connectors *connector.Set) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	rows, err := repository.New(db).ListSources(ctx)
+	if err != nil {
+		logger.Warn("cannot read the sources at start; the start goes on", "error", err)
+		return
+	}
+	for _, row := range rows {
+		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config}
+		if src.Kind != connector.KindEVM || !src.Enabled || connectors.Available(src) {
+			continue
+		}
+		if chainID, ok := connector.ChainID(src); ok {
+			logger.Warn("EVM source not available: its chain ID is outside EVM_ALLOWED_CHAIN_IDS",
+				"source", src.Code, "chain_id", chainID)
+		} else {
+			logger.Warn("EVM source not available: chain_id is missing or malformed in sources.config",
+				"source", src.Code, "chain_id", "invalid")
+		}
+	}
 }
 
 // shutdown stops both servers within timeout: graceful first, then forced.

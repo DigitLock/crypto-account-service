@@ -371,3 +371,33 @@ func lineWith(text, s string) string {
 	}
 	return ""
 }
+
+// C1-T536 — Req: §2.1.1, §2.4, §3.1. source add-fake; cmd/server checks the flag of the server.
+func TestT536_FakeSourceBehindItsFlag(t *testing.T) {
+	pool := setup(t)
+
+	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake added\n" {
+		t.Errorf("first run printed %q", r.stdout)
+	}
+	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake exists: nothing changed\n" {
+		t.Errorf("second run printed %q", r.stdout)
+	}
+
+	var rows int
+	var kind, config string
+	var enabled bool
+	if err := pool.QueryRow(ctx, `SELECT count(*) OVER (), kind, enabled, config::text FROM sources WHERE code = 'fake'`).
+		Scan(&rows, &kind, &enabled, &config); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || kind != "EXCHANGE" || !enabled || config != "{}" {
+		t.Errorf("fake: %d rows, kind %s, enabled %v, config %s; want one enabled EXCHANGE row with {}", rows, kind, enabled, config)
+	}
+	var audits int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if audits != 0 {
+		t.Errorf("add-fake wrote %d audit rows, want none", audits)
+	}
+}

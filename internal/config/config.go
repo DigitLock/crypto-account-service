@@ -12,18 +12,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DigitLock/crypto-account-service/internal/vault"
 )
 
 // MasterKeySize is the length of CAS_MASTER_KEY after base64 decoding (ADR-4).
 const MasterKeySize = 32
 
 // Config is the parsed environment of server.
-// CAS_MASTER_KEY and DATABASE_URL are held as Secret values: no method prints them,
+// CAS_MASTER_KEY and DATABASE_URL are held as vault.Secret values: no method prints them,
 // and LogValue omits them.
 type Config struct {
-	MasterKey        Secret[[]byte]
+	MasterKey        vault.Secret[[]byte]
 	MasterKeyVersion int
-	DatabaseURL      Secret[string]
+	DatabaseURL      vault.Secret[string]
 
 	DBPoolMaxConns int32
 	DBPoolMinConns int32
@@ -46,6 +48,8 @@ type Config struct {
 	KeyCheckInterval     time.Duration
 
 	EnableFakeSource bool
+
+	EVMAllowedChainIDs []uint64
 }
 
 // Log formats of LOG_FORMAT.
@@ -61,7 +65,7 @@ func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
 		MasterKey:        p.masterKey("CAS_MASTER_KEY"),
 		MasterKeyVersion: p.integer("CAS_MASTER_KEY_VERSION", 1, 1, math.MaxInt16), // kek_version is SMALLINT
-		DatabaseURL:      Secret[string]{v: p.required("DATABASE_URL")},
+		DatabaseURL:      vault.NewSecret(p.required("DATABASE_URL")),
 
 		DBPoolMaxConns: int32(p.integer("DB_POOL_MAX_CONNS", 10, 1, 1<<31-1)),
 		DBPoolMinConns: int32(p.integer("DB_POOL_MIN_CONNS", 2, 0, 1<<31-1)),
@@ -84,6 +88,8 @@ func Load(getenv func(string) string) (Config, error) {
 		KeyCheckInterval:     p.duration("KEY_CHECK_INTERVAL", 24*time.Hour),
 
 		EnableFakeSource: p.boolean("ENABLE_FAKE_SOURCE", false),
+
+		EVMAllowedChainIDs: p.chainIDs("EVM_ALLOWED_CHAIN_IDS", []uint64{31337, 84532}),
 	}
 
 	if cfg.DBPoolMinConns > cfg.DBPoolMaxConns {
@@ -119,6 +125,7 @@ func (c Config) LogValue() slog.Value {
 		duration("TRIGGER_SYNC_COOLDOWN", c.TriggerSyncCooldown),
 		duration("KEY_CHECK_INTERVAL", c.KeyCheckInterval),
 		slog.Bool("ENABLE_FAKE_SOURCE", c.EnableFakeSource),
+		slog.String("EVM_ALLOWED_CHAIN_IDS", joinUint(c.EVMAllowedChainIDs)),
 	)
 }
 
@@ -126,23 +133,6 @@ func (c Config) LogValue() slog.Value {
 func duration(key string, d time.Duration) slog.Attr {
 	return slog.String(key, d.String())
 }
-
-// Secret holds a value that must never be printed. Every fmt verb, String, GoString,
-// LogValue and text marshalling yield "[redacted]"; Value returns the value itself.
-type Secret[T []byte | string] struct {
-	v T
-}
-
-const redacted = "[redacted]"
-
-// Value returns the secret value.
-func (s Secret[T]) Value() T { return s.v }
-
-func (Secret[T]) String() string               { return redacted }
-func (Secret[T]) GoString() string             { return redacted }
-func (Secret[T]) Format(f fmt.State, _ rune)   { _, _ = f.Write([]byte(redacted)) }
-func (Secret[T]) LogValue() slog.Value         { return slog.StringValue(redacted) }
-func (Secret[T]) MarshalText() ([]byte, error) { return []byte(redacted), nil }
 
 // parser collects one error per invalid variable. Messages name the variable, never the value.
 type parser struct {
@@ -162,18 +152,18 @@ func (p *parser) required(name string) string {
 	return v
 }
 
-func (p *parser) masterKey(name string) Secret[[]byte] {
+func (p *parser) masterKey(name string) vault.Secret[[]byte] {
 	v := p.required(name)
 	if v == "" {
-		return Secret[[]byte]{}
+		return vault.Secret[[]byte]{}
 	}
 	// The decoding error is not wrapped: it would point into the value.
 	key, err := base64.StdEncoding.Strict().DecodeString(v)
 	if err != nil || len(key) != MasterKeySize {
 		p.fail(name, fmt.Sprintf("must be standard base64 of exactly %d bytes", MasterKeySize))
-		return Secret[[]byte]{}
+		return vault.Secret[[]byte]{}
 	}
-	return Secret[[]byte]{v: key}
+	return vault.NewSecret(key)
 }
 
 func (p *parser) integer(name string, def, minimum, maximum int) int {
@@ -246,4 +236,31 @@ func (p *parser) logLevel(name string, def slog.Level) slog.Level {
 	}
 	p.fail(name, "must be one of debug, info, warn, error")
 	return def
+}
+
+// chainIDs reads chain IDs separated by commas; spaces around an item are ignored.
+func (p *parser) chainIDs(name string, def []uint64) []uint64 {
+	v := p.getenv(name)
+	if v == "" {
+		return def
+	}
+	var ids []uint64
+	for item := range strings.SplitSeq(v, ",") {
+		// The strconv error is not wrapped: it quotes the value.
+		id, err := strconv.ParseUint(strings.TrimSpace(item), 10, 64)
+		if err != nil || id == 0 {
+			p.fail(name, "must be positive integer chain IDs separated by commas")
+			return def
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func joinUint(ids []uint64) string {
+	items := make([]string, len(ids))
+	for i, id := range ids {
+		items[i] = strconv.FormatUint(id, 10)
+	}
+	return strings.Join(items, ",")
 }

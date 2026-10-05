@@ -90,7 +90,7 @@ func (a *app) rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(a.tenantCmd(), a.tokenCmd())
+	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.sourceCmd())
 	return root
 }
 
@@ -239,6 +239,32 @@ func (a *app) tokenCmd() *cobra.Command {
 			},
 		},
 	)
+	return cmd
+}
+
+func (a *app) sourceCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "source", Short: "Development seeds of sources"}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "add-fake",
+		Short: "Add the source fake of the fake connector: kind EXCHANGE, enabled. Development and demo only",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			reg, err := a.registry(cmd.Context())
+			if err != nil {
+				return err
+			}
+			added, err := reg.AddFakeSource(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if added {
+				fmt.Fprintln(cmd.OutOrStdout(), "Source fake added")
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "Source fake exists: nothing changed")
+			}
+			return nil
+		},
+	})
 	return cmd
 }
 
