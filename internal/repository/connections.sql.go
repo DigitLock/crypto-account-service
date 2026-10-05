@@ -12,6 +12,71 @@ import (
 	"github.com/google/uuid"
 )
 
+const deleteConnection = `-- name: DeleteConnection :execrows
+DELETE FROM connections
+WHERE id = $1 AND tenant_id = $2
+`
+
+type DeleteConnectionParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
+// Deletes a connection of a tenant; the database cascades to cursors, snapshots and ledger entries.
+// 0 rows: no such connection in the tenant, or another call deleted it first.
+func (q *Queries) DeleteConnection(ctx context.Context, arg DeleteConnectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteConnection, arg.ID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getConnection = `-- name: GetConnection :one
+SELECT c.id, s.code AS source_code, s.kind AS source_kind, c.owner_ref, c.label, c.status,
+       c.external_account, c.key_fingerprint, c.permissions, c.created_at
+FROM connections c
+JOIN sources s ON s.id = c.source_id
+WHERE c.id = $1 AND c.tenant_id = $2
+`
+
+type GetConnectionParams struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
+type GetConnectionRow struct {
+	ID              uuid.UUID
+	SourceCode      string
+	SourceKind      string
+	OwnerRef        string
+	Label           *string
+	Status          string
+	ExternalAccount string
+	KeyFingerprint  *string
+	Permissions     []string
+	CreatedAt       time.Time
+}
+
+// One connection of a tenant: another tenant's connection is no row, like an unknown ID.
+func (q *Queries) GetConnection(ctx context.Context, arg GetConnectionParams) (GetConnectionRow, error) {
+	row := q.db.QueryRow(ctx, getConnection, arg.ID, arg.TenantID)
+	var i GetConnectionRow
+	err := row.Scan(
+		&i.ID,
+		&i.SourceCode,
+		&i.SourceKind,
+		&i.OwnerRef,
+		&i.Label,
+		&i.Status,
+		&i.ExternalAccount,
+		&i.KeyFingerprint,
+		&i.Permissions,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertConnection = `-- name: InsertConnection :exec
 INSERT INTO connections (
     id, tenant_id, owner_ref, source_id, external_account, label, status,
@@ -56,4 +121,76 @@ func (q *Queries) InsertConnection(ctx context.Context, arg InsertConnectionPara
 		arg.CreatedAt,
 	)
 	return err
+}
+
+const listConnectionsPage = `-- name: ListConnectionsPage :many
+SELECT c.id, s.code AS source_code, s.kind AS source_kind, c.owner_ref, c.label, c.status,
+       c.external_account, c.key_fingerprint, c.permissions, c.created_at
+FROM connections c
+JOIN sources s ON s.id = c.source_id
+WHERE c.tenant_id = $1
+  AND (c.tenant_id, c.created_at, c.id) > ($1, $2::timestamptz, $3::uuid)
+  AND ($4::text IS NULL OR c.owner_ref = $4::text)
+ORDER BY c.created_at, c.id
+LIMIT $5
+`
+
+type ListConnectionsPageParams struct {
+	TenantID       uuid.UUID
+	AfterCreatedAt time.Time
+	AfterID        uuid.UUID
+	OwnerRef       *string
+	PageLimit      int32
+}
+
+type ListConnectionsPageRow struct {
+	ID              uuid.UUID
+	SourceCode      string
+	SourceKind      string
+	OwnerRef        string
+	Label           *string
+	Status          string
+	ExternalAccount string
+	KeyFingerprint  *string
+	Permissions     []string
+	CreatedAt       time.Time
+}
+
+// One page in the order created_at, id, after the position (after_created_at, after_id). The row comparison
+// on (tenant_id, created_at, id) is a range of the index connections_tenant_created_idx; no OFFSET.
+func (q *Queries) ListConnectionsPage(ctx context.Context, arg ListConnectionsPageParams) ([]ListConnectionsPageRow, error) {
+	rows, err := q.db.Query(ctx, listConnectionsPage,
+		arg.TenantID,
+		arg.AfterCreatedAt,
+		arg.AfterID,
+		arg.OwnerRef,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectionsPageRow{}
+	for rows.Next() {
+		var i ListConnectionsPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceCode,
+			&i.SourceKind,
+			&i.OwnerRef,
+			&i.Label,
+			&i.Status,
+			&i.ExternalAccount,
+			&i.KeyFingerprint,
+			&i.Permissions,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

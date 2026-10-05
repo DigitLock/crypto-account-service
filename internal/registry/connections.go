@@ -23,6 +23,7 @@ const (
 	ConnectionActive        = "ACTIVE"
 	PermissionUnverified    = "UNVERIFIED"
 	ActionConnectionCreated = "CONNECTION_CREATED"
+	ActionConnectionDeleted = "CONNECTION_DELETED"
 
 	connectionAccountKey = "connections_account_key"
 	fingerprintRunes     = 4
@@ -35,6 +36,8 @@ var (
 	ErrKeyInvalid     = errors.New("the source rejects the key")
 	ErrUnavailable    = errors.New("the source cannot be reached or answers with a rate limit")
 	ErrAlreadyExists  = errors.New("this account is already connected")
+	// ErrConnectionNotFound: no such connection in the tenant. Another tenant's connection is not found too.
+	ErrConnectionNotFound = errors.New("no such connection")
 )
 
 // InvalidArgumentError carries a message that is safe to return to the caller.
@@ -66,6 +69,8 @@ type Connection struct {
 	KeyFingerprint string
 	Permissions    []string
 	CreatedAt      time.Time
+	// WalletAddress is the EIP-55 address of an EVM wallet; empty for an exchange.
+	WalletAddress string
 }
 
 // CreateInput is a validated CreateConnection request of a tenant.
@@ -230,6 +235,9 @@ func (c *Connections) Create(ctx context.Context, in CreateInput) (Connection, e
 	if params.KeyFingerprint != nil {
 		out.KeyFingerprint = *params.KeyFingerprint
 	}
+	if src.Kind == connector.KindEVM {
+		out.WalletAddress = info.Identity
+	}
 	return out, nil
 }
 
@@ -293,4 +301,124 @@ func lastRunes(s string, n int) string {
 func isUniqueViolationOf(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == codeUniqueViolation && pgErr.ConstraintName == constraint
+}
+
+// StreamHealth is the health of one stream of a connection; the cursor is not part of it.
+type StreamHealth struct {
+	Stream              string
+	Mode                string
+	NextRunAt           time.Time
+	LastSuccessAt       *time.Time
+	LastError           string
+	ConsecutiveFailures int32
+}
+
+// Position is a place in the order created_at, id of the connections of a tenant.
+type Position struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+// Get returns a connection of the tenant with the health of its streams, ordered by stream.
+// The availability of its source does not matter.
+func (c *Connections) Get(ctx context.Context, tenantID, id uuid.UUID) (Connection, []StreamHealth, error) {
+	q := repository.New(c.db)
+	row, err := q.GetConnection(ctx, repository.GetConnectionParams{ID: id, TenantID: tenantID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Connection{}, nil, ErrConnectionNotFound
+	}
+	if err != nil {
+		return Connection{}, nil, fmt.Errorf("read the connection: %w", err)
+	}
+	rows, err := q.ListStreamHealth(ctx, repository.ListStreamHealthParams{ConnectionID: id, TenantID: tenantID})
+	if err != nil {
+		return Connection{}, nil, fmt.Errorf("read the stream health: %w", err)
+	}
+	streams := make([]StreamHealth, 0, len(rows))
+	for _, r := range rows {
+		h := StreamHealth{
+			Stream: r.Stream, Mode: r.Mode, NextRunAt: r.NextRunAt, LastSuccessAt: r.LastSuccessAt,
+			ConsecutiveFailures: r.ConsecutiveFailures,
+		}
+		if r.LastError != nil {
+			h.LastError = *r.LastError
+		}
+		streams = append(streams, h)
+	}
+	return toConnection(repository.ListConnectionsPageRow(row)), streams, nil
+}
+
+// List returns up to limit connections of the tenant after the position, in the order created_at, id,
+// and whether more follow. ownerRef filters exactly when it is not empty. One query per page.
+func (c *Connections) List(ctx context.Context, tenantID uuid.UUID, ownerRef string, after Position, limit int32) ([]Connection, bool, error) {
+	params := repository.ListConnectionsPageParams{
+		TenantID: tenantID, AfterCreatedAt: after.CreatedAt, AfterID: after.ID, PageLimit: limit + 1,
+	}
+	if ownerRef != "" {
+		params.OwnerRef = &ownerRef
+	}
+	rows, err := repository.New(c.db).ListConnectionsPage(ctx, params)
+	if err != nil {
+		return nil, false, fmt.Errorf("list the connections: %w", err)
+	}
+	more := len(rows) > int(limit)
+	if more {
+		rows = rows[:limit]
+	}
+	out := make([]Connection, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, toConnection(r))
+	}
+	return out, more, nil
+}
+
+// Delete deletes a connection of the tenant with its secret, cursors, snapshots and ledger entries, and
+// writes the audit row, in one transaction (UC-104 step 2). The card check of step 1 comes with S2.
+func (c *Connections) Delete(ctx context.Context, tenantID, credentialID, id uuid.UUID) error {
+	return pgx.BeginFunc(ctx, c.db, func(tx pgx.Tx) error {
+		q := repository.New(tx)
+		row, err := q.GetConnection(ctx, repository.GetConnectionParams{ID: id, TenantID: tenantID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrConnectionNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("read the connection: %w", err)
+		}
+		n, err := q.DeleteConnection(ctx, repository.DeleteConnectionParams{ID: id, TenantID: tenantID})
+		if err != nil {
+			return fmt.Errorf("delete the connection: %w", err)
+		}
+		if n == 0 {
+			// Deleted by a concurrent call.
+			return ErrConnectionNotFound
+		}
+		details, err := json.Marshal(map[string]string{"source": row.SourceCode, "owner_ref": row.OwnerRef})
+		if err != nil {
+			return err
+		}
+		if err := q.InsertAuditLog(ctx, repository.InsertAuditLogParams{
+			TenantID: tenantID, CredentialID: &credentialID, Action: ActionConnectionDeleted,
+			ObjectID: id.String(), Details: details,
+		}); err != nil {
+			return fmt.Errorf("insert the audit row: %w", err)
+		}
+		return nil
+	})
+}
+
+func toConnection(r repository.ListConnectionsPageRow) Connection {
+	out := Connection{
+		ID: r.ID, Source: r.SourceCode, SourceKind: r.SourceKind, OwnerRef: r.OwnerRef, Status: r.Status,
+		Permissions: r.Permissions, CreatedAt: r.CreatedAt,
+	}
+	if r.Label != nil {
+		out.Label = *r.Label
+	}
+	if r.KeyFingerprint != nil {
+		out.KeyFingerprint = *r.KeyFingerprint
+	}
+	if r.SourceKind == connector.KindEVM {
+		out.WalletAddress = r.ExternalAccount
+	}
+	return out
 }

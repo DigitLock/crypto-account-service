@@ -200,7 +200,8 @@ func TestT502_CreateExchange(t *testing.T) {
 		c.GetOwnerRef() != "owner-1" || c.GetLabel() != "Main account" ||
 		c.GetStatus() != casv1.ConnectionStatus_CONNECTION_STATUS_ACTIVE ||
 		c.GetKeyFingerprint() != "…"+k.apiKey[len(k.apiKey)-4:] ||
-		!slices.Equal(c.GetPermissions(), []string{"READ"}) || !c.GetCreatedAt().AsTime().Equal(testNow) {
+		!slices.Equal(c.GetPermissions(), []string{"READ"}) || !c.GetCreatedAt().AsTime().Equal(testNow) ||
+		c.GetWalletAddress() != "" {
 		t.Errorf("response = %v", c)
 	}
 
@@ -272,7 +273,8 @@ func TestT503_CreateWallet(t *testing.T) {
 	}
 	c := resp.GetConnection()
 	if c.GetKind() != casv1.ConnectionKind_CONNECTION_KIND_EVM_WALLET || c.GetSource() != "anvil" ||
-		c.GetKeyFingerprint() != "" || len(c.GetPermissions()) != 0 || c.GetLabel() != "" {
+		c.GetKeyFingerprint() != "" || len(c.GetPermissions()) != 0 || c.GetLabel() != "" ||
+		c.GetWalletAddress() != evm.ToEIP55(address[2:]) {
 		t.Errorf("response = %v", c)
 	}
 	id := uuid.MustParse(c.GetConnectionId())
@@ -593,7 +595,7 @@ func TestT513_EncryptedAtRest(t *testing.T) {
 	}
 }
 
-// C1-T517 — Req: FR-103, §2.1.2. CreateConnection and its errors. Missing until st6b: the responses of
+// C1-T517 — Req: FR-103, §2.1.2. The responses and errors of CreateConnection, and the responses of
 // GetConnection and ListConnections.
 func TestT517_FingerprintOnlyInTheAPI(t *testing.T) {
 	e := setup(t)
@@ -616,6 +618,15 @@ func TestT517_FingerprintOnlyInTheAPI(t *testing.T) {
 		if got := resp.GetConnection().GetKeyFingerprint(); got != "…"+k.apiKey[len(k.apiKey)-4:] {
 			t.Errorf("fingerprint %q", got)
 		}
+		got, err := c.GetConnection(a.ctx, &casv1.GetConnectionRequest{ConnectionId: resp.GetConnection().GetConnectionId()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		js, _ = protojson.Marshal(got)
+		texts = append(texts, string(js))
+		if got.GetConnection().GetKeyFingerprint() != resp.GetConnection().GetKeyFingerprint() {
+			t.Errorf("GetConnection fingerprint %q", got.GetConnection().GetKeyFingerprint())
+		}
 	}
 	call(e.fake.Reset)
 	call(func() {
@@ -628,6 +639,16 @@ func TestT517_FingerprintOnlyInTheAPI(t *testing.T) {
 	keys = append(keys, short)
 	_, err := c.CreateConnection(a.ctx, exchangeRequest("owner-1", short))
 	texts = append(texts, err.Error())
+
+	listed, err := c.ListConnections(a.ctx, &casv1.ListConnectionsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.GetConnections()) == 0 {
+		t.Fatal("ListConnections returned nothing: the test does not exercise it")
+	}
+	js, _ := protojson.Marshal(listed)
+	texts = append(texts, string(js))
 
 	all := strings.Join(texts, "\n")
 	for _, k := range keys {
@@ -760,7 +781,7 @@ func TestT529_ValidChecksum(t *testing.T) {
 	}
 }
 
-// C1-T530 — Req: FR-301, FR-302. Stored in EIP-55 form; the Connection of §2.1.2 has no address field.
+// C1-T530 — Req: FR-301, FR-302. Stored and returned in EIP-55 form: wallet_address of create, get and list.
 func TestT530_SingleCase(t *testing.T) {
 	e := setup(t)
 	a := e.caller(t, "tenant-a")
@@ -778,8 +799,27 @@ func TestT530_SingleCase(t *testing.T) {
 			resp.GetConnection().GetConnectionId()).Scan(&stored); err != nil {
 			t.Fatal(err)
 		}
-		if stored != evm.ToEIP55(address[2:]) || stored == address {
+		want := evm.ToEIP55(address[2:])
+		if stored != want || stored == address {
 			t.Errorf("%s stored as %s, want its EIP-55 form", address, stored)
+		}
+		id := resp.GetConnection().GetConnectionId()
+		got, err := c.GetConnection(a.ctx, &casv1.GetConnectionRequest{ConnectionId: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed, err := c.ListConnections(a.ctx, &casv1.ListConnectionsRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		returned := []string{resp.GetConnection().GetWalletAddress(), got.GetConnection().GetWalletAddress()}
+		for _, l := range listed.GetConnections() {
+			if l.GetConnectionId() == id {
+				returned = append(returned, l.GetWalletAddress())
+			}
+		}
+		if len(returned) != 3 || returned[0] != want || returned[1] != want || returned[2] != want {
+			t.Errorf("%s returned as %v by create, get and list; want %s", address, returned, want)
 		}
 	}
 }
@@ -821,8 +861,7 @@ func TestT533_SameAddressOnTwoNetworks(t *testing.T) {
 	}
 }
 
-// C1-T537 — Req: UC-101 postcondition, SRS — EVM §2.1.1. No cursor. Missing until st6b: GetConnection
-// returning empty streams.
+// C1-T537 — Req: UC-101 postcondition, SRS — EVM §2.1.1. No cursor, and GetConnection returns no stream.
 func TestT537_WalletWithoutStreams(t *testing.T) {
 	e := setup(t)
 	a := e.caller(t, "tenant-a")
@@ -831,8 +870,15 @@ func TestT537_WalletWithoutStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := count(t, e, `SELECT count(*) FROM sync_cursors WHERE connection_id = $1`,
-		resp.GetConnection().GetConnectionId()); n != 0 {
+	id := resp.GetConnection().GetConnectionId()
+	if n := count(t, e, `SELECT count(*) FROM sync_cursors WHERE connection_id = $1`, id); n != 0 {
 		t.Errorf("wallet connection has %d cursors, want none", n)
+	}
+	got, err := client(e.realServer(t)).GetConnection(a.ctx, &casv1.GetConnectionRequest{ConnectionId: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.GetStreams()) != 0 {
+		t.Errorf("streams = %v, want none", got.GetStreams())
 	}
 }

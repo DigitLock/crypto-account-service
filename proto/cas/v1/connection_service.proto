@@ -95,6 +95,8 @@ message Connection {
   // Exchanges only: permissions reported by the source, or `UNVERIFIED`.
   repeated string permissions = 8;
   google.protobuf.Timestamp created_at = 9;
+  // EVM wallets only: the address in EIP-55 form.
+  string wallet_address = 10;
 }
 
 // Health of one stream of a connection.

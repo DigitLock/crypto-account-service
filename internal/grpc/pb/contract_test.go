@@ -182,7 +182,7 @@ func TestT203_MessagesAgainstSRS(t *testing.T) {
 			// §2.1.2 response.
 			"Connection": {
 				"connection_id", "source", "kind", "owner_ref", "label", "status", "key_fingerprint", "permissions",
-				"created_at",
+				"created_at", "wallet_address",
 			},
 			// §2.1.1 method table, GetConnection.
 			"StreamHealth": {

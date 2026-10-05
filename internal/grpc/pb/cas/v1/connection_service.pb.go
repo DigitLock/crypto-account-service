@@ -400,8 +400,10 @@ type Connection struct {
 	// Exchanges only: `…` and the last 4 characters of the API key.
 	KeyFingerprint string `protobuf:"bytes,7,opt,name=key_fingerprint,json=keyFingerprint,proto3" json:"key_fingerprint,omitempty"`
 	// Exchanges only: permissions reported by the source, or `UNVERIFIED`.
-	Permissions   []string               `protobuf:"bytes,8,rep,name=permissions,proto3" json:"permissions,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Permissions []string               `protobuf:"bytes,8,rep,name=permissions,proto3" json:"permissions,omitempty"`
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// EVM wallets only: the address in EIP-55 form.
+	WalletAddress string `protobuf:"bytes,10,opt,name=wallet_address,json=walletAddress,proto3" json:"wallet_address,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -497,6 +499,13 @@ func (x *Connection) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *Connection) GetWalletAddress() string {
+	if x != nil {
+		return x.WalletAddress
+	}
+	return ""
 }
 
 // Health of one stream of a connection.
@@ -1207,7 +1216,7 @@ const file_cas_v1_connection_service_proto_rawDesc = "" +
 	"\n" +
 	"api_secret\x18\x02 \x01(\tR\tapiSecret\"\"\n" +
 	"\x06Wallet\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"\xe0\x02\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"\x87\x03\n" +
 	"\n" +
 	"Connection\x12#\n" +
 	"\rconnection_id\x18\x01 \x01(\tR\fconnectionId\x12\x16\n" +
@@ -1219,7 +1228,9 @@ const file_cas_v1_connection_service_proto_rawDesc = "" +
 	"\x0fkey_fingerprint\x18\a \x01(\tR\x0ekeyFingerprint\x12 \n" +
 	"\vpermissions\x18\b \x03(\tR\vpermissions\x129\n" +
 	"\n" +
-	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xa0\x02\n" +
+	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12%\n" +
+	"\x0ewallet_address\x18\n" +
+	" \x01(\tR\rwalletAddress\"\xa0\x02\n" +
 	"\fStreamHealth\x12\x16\n" +
 	"\x06stream\x18\x01 \x01(\tR\x06stream\x12&\n" +
 	"\x04mode\x18\x02 \x01(\x0e2\x12.cas.v1.StreamModeR\x04mode\x12:\n" +

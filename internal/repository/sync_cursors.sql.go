@@ -35,3 +35,53 @@ func (q *Queries) InsertSyncCursor(ctx context.Context, arg InsertSyncCursorPara
 	)
 	return err
 }
+
+const listStreamHealth = `-- name: ListStreamHealth :many
+SELECT sc.stream, sc.mode, sc.next_run_at, sc.last_success_at, sc.last_error, sc.consecutive_failures
+FROM sync_cursors sc
+JOIN connections c ON c.id = sc.connection_id
+WHERE sc.connection_id = $1 AND c.tenant_id = $2
+ORDER BY sc.stream
+`
+
+type ListStreamHealthParams struct {
+	ConnectionID uuid.UUID
+	TenantID     uuid.UUID
+}
+
+type ListStreamHealthRow struct {
+	Stream              string
+	Mode                string
+	NextRunAt           time.Time
+	LastSuccessAt       *time.Time
+	LastError           *string
+	ConsecutiveFailures int32
+}
+
+// Health of the streams of a connection of a tenant, ordered by stream. The cursor is not read.
+func (q *Queries) ListStreamHealth(ctx context.Context, arg ListStreamHealthParams) ([]ListStreamHealthRow, error) {
+	rows, err := q.db.Query(ctx, listStreamHealth, arg.ConnectionID, arg.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStreamHealthRow{}
+	for rows.Next() {
+		var i ListStreamHealthRow
+		if err := rows.Scan(
+			&i.Stream,
+			&i.Mode,
+			&i.NextRunAt,
+			&i.LastSuccessAt,
+			&i.LastError,
+			&i.ConsecutiveFailures,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

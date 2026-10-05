@@ -111,8 +111,9 @@ sequenceDiagram
 - **Tenant scope:** every request reads and writes only the caller's tenant. A resource of another tenant is reported as `NOT_FOUND`.
 - **Reads never call a source.** Balances and ledger come from the database; freshness is reported, not forced.
 - **Amounts:** decimal strings in asset units, without exponent and without trailing zeros: `0.0125`, `0`. Token base units where stated.
-- **Pagination:** `page_size`: 100 when absent or 0, maximum 500; a larger value is cut to 500; a negative one is `INVALID_ARGUMENT`. `ListConnections` continues with `page_token` → `next_page_token`. `ListLedgerEntries` continues with `after_seq` (§2.1.4).
+- **Pagination:** `page_size`: 100 when absent or 0, maximum 500; a larger value is cut to 500; a negative one is `INVALID_ARGUMENT`. `ListConnections` continues with `page_token` → `next_page_token`; the token is opaque, and a malformed one is `INVALID_ARGUMENT`. `ListLedgerEntries` continues with `after_seq` (§2.1.4).
 - **Lengths** of strings count characters, not bytes.
+- **IDs:** `connection_id` is a UUID in its 36-character form. Any other value is `INVALID_ARGUMENT`; a well-formed ID that matches nothing in the tenant is `NOT_FOUND`.
 - **Enum values** carry the name of their enum as a prefix on the wire: `CONNECTION_STATUS_ACTIVE`. The examples of this document show the short form.
 - **Available source:** a source is offered when it is enabled, its connector is registered and, for an EVM network, its chain ID is in the allow-list (SRS — EVM Connector §2.1.1). Any other source is treated as disabled. Availability is evaluated on every request.
 - **Errors:**
@@ -160,9 +161,9 @@ Methods with non-obvious rules are specified below. The others follow the common
 | Method | Request | Response | Rules |
 |---|---|---|---|
 | `ListSources` | — | `sources[]`: `code`, `kind` | Available sources only, ordered by `code`. No pagination |
-| `ListConnections` | `owner_ref`, optional; `page_size`, `page_token` | `connections[]`: the connection of §2.1.2; `next_page_token` | Order: `created_at`, `connection_id`. No stream health |
-| `GetConnection` | `connection_id` | The connection of §2.1.2 and `streams[]`: `stream`, `mode`, `next_run_at`, `last_success_at`, `last_error`, `consecutive_failures` | The cursor is not returned |
-| `DeleteConnection` | `connection_id` | Empty | UC-104. A second call: `NOT_FOUND` |
+| `ListConnections` | `owner_ref`, optional, ≤ 128; `page_size`, `page_token` | `connections[]`: the connection of §2.1.2; `next_page_token` | Order: `created_at`, `connection_id`. No stream health. `next_page_token` is empty on the last page |
+| `GetConnection` | `connection_id` | The connection of §2.1.2 and `streams[]`: `stream`, `mode`, `next_run_at`, `last_success_at`, `last_error`, `consecutive_failures` | Streams ordered by `stream`. The cursor is not returned |
+| `DeleteConnection` | `connection_id` | Empty | UC-104. A second call: `NOT_FOUND`. Audit `CONNECTION_DELETED` with the acting credential |
 | `TriggerSync` | `connection_id` | Empty | Every stream of the connection becomes due now; the engine runs them on its next tick. Inside `trigger_sync_cooldown` after the last accepted call: `RESOURCE_EXHAUSTED`; the time of that call is `connections.last_manual_sync_at`. Connection in `CREDENTIALS_INVALID`: `FAILED_PRECONDITION / CREDENTIALS_INVALID`. Connection without streams: accepted, nothing runs |
 
 ##### Connector contract
@@ -248,6 +249,7 @@ See Common rules.
 | status | Enum | Yes | Connection state, §2.3.1 | `ACTIVE` |
 | key_fingerprint | String | For exchanges | Last 4 characters of the API key, after `…` | `…9SDq` |
 | permissions | Array of strings | For exchanges | Permissions reported by the source | `["READ"]` |
+| wallet_address | String | For EVM wallets | The address in EIP-55 form, whatever letter case was sent | `0x9aF3…41cE` |
 
 - On the wire the response carries this object in its field `connection`. `GetConnection` and `ListConnections` return the same object.
 - `FAILED_PRECONDITION / KEY_NOT_READ_ONLY`: the key allows trading, withdrawal or transfer.
