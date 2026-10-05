@@ -134,6 +134,9 @@ func (s *connectionService) errorStatus(ctx context.Context, op string, err erro
 		return status.Error(codes.AlreadyExists, "this account is already connected")
 	case errors.Is(err, registry.ErrConnectionNotFound):
 		return status.Error(codes.NotFound, "connection not found")
+	case errors.Is(err, registry.ErrConnectionHasCards):
+		return withReason(codes.FailedPrecondition, "cards are bound to the connection: it cannot be deleted",
+			reasonConnectionHasCards)
 	case errors.Is(err, registry.ErrCredentialsInvalid):
 		return withReason(codes.FailedPrecondition, "the connection is stopped: its key was rejected or is no longer read-only",
 			reasonCredentialsInvalid)

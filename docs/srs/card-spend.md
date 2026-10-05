@@ -120,7 +120,7 @@ sequenceDiagram
 - **Base path:** `/v1`. Media type: `application/json`. A request body above 16 KiB is `422`.
 - **Authorization:** HTTP Basic. One credential pair maps to one tenant. The pair is issued by `casctl processor issue <tenant>` and printed once: username = `key_id`, 12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters. Stored in `api_credentials` with `kind = PROCESSOR_BASIC` and the SHA-256 hash of the password bytes; verified in constant time (SRS — Core UC-105). `casctl processor list` and `revoke` as for service tokens. mTLS and request signing are out of MVP.
 - **TLS:** terminated in front of the service by the deployment (Deployment Guide). `card-auth` itself listens on plain HTTP; S2 runs it locally that way.
-- **Amounts:** fiat amounts are decimal strings; token amounts are base-unit integer strings.
+- **Amounts:** fiat amounts are decimal strings; token amounts are base-unit integer strings. Responses carry decimal amounts without trailing zeros and without exponent, as SRS — Core §2.1.1; a request may carry trailing zeros.
 - **Validation, every endpoint:** `auth_id` and `return_id` are 1 to 64 printable ASCII characters (0x20–0x7E); `amount` is a decimal string greater than 0 with at most 4 decimal places and no exponent; `currency` is three upper-case letters; unknown fields are ignored.
 - **Normalized request:** the body compared for idempotency is the canonical form of the request: keys sorted, no whitespace, `amount` as a decimal without trailing zeros, `currency` upper case, `merchant` canonicalized the same way. `request_hash` is the SHA-256 of that form, so `"25.40"` and `"25.4"` and a different key order are the same request.
 - **HTTP status codes:**
@@ -306,7 +306,7 @@ See Common rules.
 {
   "auth_id": "9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11",
   "status": "DEBIT_CONFIRMED",
-  "amount": "25.40",
+  "amount": "25.4",
   "currency": "EUR",
   "token_amount": "29866387",
   "debited_amount": "29866387",
@@ -334,6 +334,7 @@ See Common rules.
 
 - `amount`, `currency`, `token_amount`, `tx_hash` and `quote` are absent when the authorization has none: a tombstone (UC-2, step 3) answers `200` with `status: DECLINED`, `decline_reason: REVERSED_BEFORE_AUTH`, `debited_amount: "0"`, the return that created it in `returns` with status `NOTHING_TO_RETURN`, and a history of one record.
 - `decline_reason` is returned for `DECLINED` and `TIMED_OUT`.
+- `tx_hash`, of the authorization and of each return: the hash of its `DEBIT` row of `operator_txs` (for a return, of its `REFUND` rows) that is `INCLUDED` or `CONFIRMED`; if none, of its newest such row that has a hash; else absent. The same rule applies to this status query and to `GetAuthorization` and `ListAuthorizations` of SRS — Core.
 - Another tenant's `auth_id` is `404`; so is an `auth_id` in the path that breaks the validation rules: no such authorization can exist.
 - `token` is returned with `token_amount`, as in the authorization response.
 
@@ -714,6 +715,7 @@ One row per `auth_id` of a tenant, including tombstones.
 | fiat_currency | CHAR(3) | No | ISO 4217 |
 | rate | NUMERIC(20,10) | No | USD per one unit of the fiat currency, as used in the quote; 10 decimal places as CRS stores it. Null for USD |
 | buffer_bps | INTEGER | No | Buffer applied |
+| token | TEXT | No | Symbol of the funding token, read by `card-auth` from the token contract at start. Null for a tombstone |
 | token_amount | NUMERIC(78,0) | No | Quoted base units |
 | debited_amount | NUMERIC(78,0) | Yes | 0 until the debit is included |
 | returned_amount | NUMERIC(78,0) | Yes | Sum of accepted returns |
@@ -868,7 +870,7 @@ All parameters come from the environment of `card-auth`; the variable names are 
   - every read of the decision path uses the `pending` block tag: on Base it sees the Flashblocks state the debit will see; on Anvil it equals `latest`;
   - transactions are EIP-1559: `maxPriorityFeePerGas` from `eth_maxPriorityFeePerGas`, `maxFeePerGas` = 2 × base fee of the pending block + the tip; a replacement raises both by `fee_bump_percent` on the same nonce (ADR-10);
   - fallback endpoint: after `rpc_fallback_after` consecutive failures of the primary, reads and sends go to `rpc_fallback_url`; every tracker cycle probes the primary with `eth_chainId` and switches back on success. No retry inside the read budget of step 9: a failed read is `CHAIN_UNAVAILABLE`. The fallback has no WebSocket; the listener stays on the primary;
-  - start checks, the service does not start otherwise: `eth_chainId` of the primary and of the fallback equals `chain_id` and is in the allow-list; `token()` of the controller equals `token_address`; `decimals()` of the token equals `token_decimals`; `next_nonce` of the operator is raised to the chain's transaction count when it is below it.
+  - start checks, the service does not start otherwise: `eth_chainId` of the primary and of the fallback equals `chain_id` and is in the allow-list; `token()` of the controller equals `token_address`; `decimals()` of the token equals `token_decimals`; `next_nonce` of the operator is compared with its transaction count at the pending block tag: a missing `operator_accounts` row is created with that count; a lower `next_nonce` is raised to it and logged; a higher one is kept.
 - **Audit log:**
   - `authorization_events`: every status change;
   - `operator_txs`: every transaction hash ever sent, including replaced ones;

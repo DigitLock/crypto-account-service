@@ -1,7 +1,7 @@
-// Package auth creates and checks service tokens (SRS — Core UC-105, ADR-7).
-// Format: cas_<key_id>_<secret>. key_id is 6 random bytes as 12 lower-case hexadecimal characters;
-// secret is 32 random bytes as 64 lower-case hexadecimal characters. Only the SHA-256 hash of the
-// 32 secret bytes is stored.
+// Package auth creates and checks service tokens and processor credentials (SRS — Core UC-105, ADR-7).
+// Service token: cas_<key_id>_<secret>. Processor credential: a Basic pair, username = key_id, password =
+// secret. key_id is 6 random bytes as 12 lower-case hexadecimal characters; secret is 32 random bytes as
+// 64 lower-case hexadecimal characters. Only the SHA-256 hash of the 32 secret bytes is stored.
 package auth
 
 import (
@@ -33,6 +33,16 @@ func New() (token, keyID string, hash []byte, err error) {
 	keyID = hex.EncodeToString(raw[:keyIDBytes])
 	secret := raw[keyIDBytes:]
 	return prefix + keyID + "_" + hex.EncodeToString(secret), keyID, Hash(secret), nil
+}
+
+// NewBasic returns a new processor credential: the username, the password and the hash to store.
+func NewBasic() (username, password string, hash []byte, err error) {
+	raw := make([]byte, keyIDBytes+secretBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", "", nil, err
+	}
+	secret := raw[keyIDBytes:]
+	return hex.EncodeToString(raw[:keyIDBytes]), hex.EncodeToString(secret), Hash(secret), nil
 }
 
 // Parse splits a token into its key_id and the secret bytes.

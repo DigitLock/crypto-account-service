@@ -1,4 +1,4 @@
-// Package registry manages tenants and service tokens (SRS — Core UC-105).
+// Package registry manages tenants, service tokens and processor credentials (SRS — Core UC-105).
 // Every change and its audit row are written in one transaction (FR-121). Audit rows of these
 // operations have no credential_id: they are made by the operator through casctl.
 package registry
@@ -25,6 +25,7 @@ const (
 	TenantActive   = "ACTIVE"
 	TenantDisabled = "DISABLED"
 	KindService    = "SERVICE_TOKEN"
+	KindProcessor  = "PROCESSOR_BASIC"
 )
 
 // Audit actions of this package (SRS — Core §2.4 audit_log).
@@ -41,6 +42,7 @@ var (
 	ErrTenantExists   = errors.New("a tenant with this name exists")
 	ErrTenantNotFound = errors.New("no tenant with this name")
 	ErrTokenNotFound  = errors.New("no service token with this key_id")
+	ErrPairNotFound   = errors.New("no processor credential with this username")
 )
 
 const codeUniqueViolation = "23505"
@@ -69,6 +71,13 @@ type IssuedToken struct {
 	Value  string
 	KeyID  string
 	Tenant string
+}
+
+// IssuedPair is returned once by IssueProcessorCredential. Password is the only copy of the password.
+type IssuedPair struct {
+	Username string
+	Password string
+	Tenant   string
 }
 
 // Registry works on a pool of the owner role: cas_server cannot write tenants or credentials.
@@ -173,6 +182,76 @@ func (r *Registry) RevokeToken(ctx context.Context, keyID string) (bool, error) 
 		return audit(ctx, q, row.TenantID, ActionCredentialRevoked, keyID, nil)
 	})
 	return changed, err
+}
+
+// IssueProcessorCredential creates a Basic pair of a tenant for the processor API of card-auth (UC-105 row 6).
+// The password is returned once and never stored.
+func (r *Registry) IssueProcessorCredential(ctx context.Context, tenantName string) (IssuedPair, error) {
+	username, password, hash, err := auth.NewBasic()
+	if err != nil {
+		return IssuedPair{}, fmt.Errorf("generate a processor credential: %w", err)
+	}
+	err = r.inTx(ctx, func(q *repository.Queries) error {
+		t, err := q.GetTenantByName(ctx, tenantName)
+		if err != nil {
+			return notFound(err, ErrTenantNotFound)
+		}
+		if _, err := q.CreateCredential(ctx, repository.CreateCredentialParams{
+			TenantID: t.ID, Kind: KindProcessor, KeyID: username, SecretHash: hash,
+		}); err != nil {
+			return err
+		}
+		return audit(ctx, q, t.ID, ActionCredentialIssued, username, map[string]string{"kind": KindProcessor})
+	})
+	if err != nil {
+		return IssuedPair{}, err
+	}
+	return IssuedPair{Username: username, Password: password, Tenant: tenantName}, nil
+}
+
+// RevokeProcessorCredential revokes a processor credential (UC-105 row 7). It reports false and writes
+// nothing when it already is revoked.
+func (r *Registry) RevokeProcessorCredential(ctx context.Context, username string) (bool, error) {
+	var changed bool
+	err := r.inTx(ctx, func(q *repository.Queries) error {
+		row, err := q.RevokeProcessorCredential(ctx, username)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Unknown, or revoked already.
+			if _, err := q.GetProcessorCredentialByKeyID(ctx, username); err != nil {
+				return notFound(err, ErrPairNotFound)
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		changed = true
+		return audit(ctx, q, row.TenantID, ActionCredentialRevoked, username, map[string]string{"kind": KindProcessor})
+	})
+	return changed, err
+}
+
+// ListProcessorCredentials returns the processor credentials of a tenant, or of all tenants when tenantName
+// is empty. No password and no hash.
+func (r *Registry) ListProcessorCredentials(ctx context.Context, tenantName string) ([]Token, error) {
+	q := repository.New(r.pool)
+	var tenantID *uuid.UUID
+	if tenantName != "" {
+		t, err := q.GetTenantByName(ctx, tenantName)
+		if err != nil {
+			return nil, notFound(err, ErrTenantNotFound)
+		}
+		tenantID = &t.ID
+	}
+	rows, err := q.ListProcessorCredentials(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Token, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, Token{KeyID: row.KeyID, Tenant: row.TenantName, CreatedAt: row.CreatedAt, RevokedAt: row.RevokedAt})
+	}
+	return out, nil
 }
 
 // ListTenants returns all tenants by name.

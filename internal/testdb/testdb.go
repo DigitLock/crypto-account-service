@@ -104,7 +104,8 @@ func Clean(t testing.TB) {
 	pool := newPool(t, URL(t))
 	for _, stmt := range []string{
 		`TRUNCATE tenants, api_credentials, connections, sync_cursors, balance_snapshots, snapshot_balances,
-			ledger_entries, audit_log RESTART IDENTITY CASCADE`,
+			ledger_entries, audit_log, cards, authorizations, authorization_events, returns, operator_txs,
+			operator_accounts RESTART IDENTITY CASCADE`,
 		`DELETE FROM asset_aliases`,
 		`DELETE FROM sources WHERE code NOT IN ('anvil', 'base-sepolia')`,
 		// Every setup inserts the source fake again; without this the SMALLINT identity of sources.id

@@ -175,3 +175,15 @@ func (c *Client) describe(err error) string {
 	}
 	return s
 }
+
+// OperatorNonce returns the transaction count of the operator at the pending block tag, from the primary
+// endpoint. A failure is a StartCheckError without a URL.
+func (c *Client) OperatorNonce(ctx context.Context, operator common.Address) (uint64, error) {
+	cctx, cancel := context.WithTimeout(ctx, CheckTimeout)
+	defer cancel()
+	n, err := c.Primary.Client.PendingNonceAt(cctx, operator)
+	if err != nil {
+		return 0, &StartCheckError{Check: "transaction count of the operator", Detail: c.describe(err)}
+	}
+	return n, nil
+}

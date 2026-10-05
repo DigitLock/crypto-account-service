@@ -137,7 +137,7 @@ sequenceDiagram
 | `KEY_INVALID` | `FAILED_PRECONDITION` | The source rejects the key |
 | `SOURCE_DISABLED` | `FAILED_PRECONDITION` | The source is not available |
 | `CREDENTIALS_INVALID` | `FAILED_PRECONDITION` | The connection is stopped: its key was rejected or is no longer read-only |
-| `CONNECTION_NOT_USABLE` | `FAILED_PRECONDITION` | `RegisterCard`: the connection is not a wallet, not `ACTIVE`, or belongs to another owner (EC-113). From S2 |
+| `CONNECTION_NOT_USABLE` | `FAILED_PRECONDITION` | `RegisterCard`: the connection is not a wallet, not `ACTIVE` or `DEGRADED`, or belongs to another owner (EC-113). From S2 |
 | `CONNECTION_HAS_CARDS` | `FAILED_PRECONDITION` | `DeleteConnection`: cards are bound to the connection (EC-114). From S2 |
 
 ##### Method catalogue
@@ -170,7 +170,7 @@ Methods with non-obvious rules are specified below. The others follow the common
 | `UpdateCard` | `card_ref`; optional `daily_limit`; optional `status` | The card of §2.1.5 | S2. At least one of the two optional fields; otherwise `INVALID_ARGUMENT`. `daily_limit`: a base-unit integer string ≥ 0. `status`: `ACTIVE` or `FROZEN`. A value equal to the stored one changes nothing and writes no audit row; a change sets `updated_at` and writes `CARD_UPDATED` with the changed fields. The change applies to the next authorization (EC-115) |
 | `GetCard` | `card_ref` | The card of §2.1.5 | S2. Unknown in the tenant: `NOT_FOUND` |
 | `ListCards` | `owner_ref`, optional, ≤ 128; `page_size`, `page_token` | `cards[]`: the card of §2.1.5; `next_page_token` | S2. Order: `created_at`, `card_ref`. Pagination as `ListConnections` |
-| `GetAuthorization` | `auth_id` | The authorization of SRS — Card Spend §2.1.4: the same fields, `returns` and `history` included, plus `card_ref`, `received_at`, `decided_at`; timestamps as `Timestamp` | S2. Unknown in the tenant: `NOT_FOUND`. A tombstone is returned as in SRS — Card Spend §2.1.4 |
+| `GetAuthorization` | `auth_id` | The authorization of SRS — Card Spend §2.1.4: the same fields, `returns` and `history` included, plus `card_ref`, `received_at`, `decided_at`; timestamps as `Timestamp`; `tx_hash` as SRS — Card Spend §2.1.4 | S2. Unknown in the tenant: `NOT_FOUND`. A tombstone is returned as in SRS — Card Spend §2.1.4 |
 | `ListAuthorizations` | optional `card_ref`, `owner_ref`, `status`, `received_from`, `received_to`; `page_size`, `page_token` | `authorizations[]`: the authorization without `returns` and `history`; `next_page_token` | S2. Filters combine with AND; `received_from` inclusive, `received_to` exclusive; an unknown `status` is `INVALID_ARGUMENT`. Order: `received_at` descending, `auth_id`. Tombstones are included |
 
 ##### Connector contract
@@ -447,7 +447,7 @@ See Common rules.
 |---|---|---|---|---|
 | card_ref | String, ≤ 64 | Yes | Opaque card reference from the processor. Unique per tenant. No card number. | `card_7Q2M` |
 | owner_ref | String | Yes | Must equal the owner of the connection | `user-4821` |
-| connection_id | String, UUID | Yes | An `ACTIVE` connection of kind `EVM_WALLET` | — |
+| connection_id | String, UUID | Yes | An `ACTIVE` or `DEGRADED` connection of kind `EVM_WALLET` | — |
 | daily_limit | String, integer | Yes | Card daily limit in base units of the funding token | `200000000` |
 
 ##### Response parameters
@@ -471,7 +471,7 @@ See Common rules.
 - The same request repeated returns the existing card. A different body for a known `card_ref` → `ALREADY_EXISTS`.
 - `card_ref`: 1 to 64 characters. `daily_limit`: a base-unit integer string ≥ 0, at most 78 digits; no sign, no decimal point, no exponent. Otherwise `INVALID_ARGUMENT`.
 - The response also carries `created_at` and `updated_at`.
-- `FAILED_PRECONDITION / CONNECTION_NOT_USABLE`: the connection is not a wallet, is not `ACTIVE`, or its owner is not `owner_ref` (EC-113).
+- `FAILED_PRECONDITION / CONNECTION_NOT_USABLE`: the connection is not a wallet, is not `ACTIVE` or `DEGRADED`, or its owner is not `owner_ref` (EC-113).
 - Several cards may share one wallet. The wallet daily limit in the contract caps them together (SRS — Card Spend §2.1.5).
 - The wallet daily limit is set on-chain by the admin, not by this method.
 - There is no method that removes a card: a card is frozen instead, and a connection with cards cannot be deleted (EC-114). Audit `CARD_REGISTERED` with the acting credential.
@@ -641,7 +641,7 @@ N/A — database operations only.
 | 4 | Read authorizations | `GetAuthorization`, `ListAuthorizations` (§2.1.1): data of [SRS — Card Spend](card-spend.md) §2.4, read-only, with the role `cas_server` |
 
 ##### Preconditions
-- An `ACTIVE` wallet connection of the same tenant and owner.
+- An `ACTIVE` or `DEGRADED` wallet connection of the same tenant and owner.
 
 ##### Trigger
 `CardService` methods, called by the partner backend or the CLI.
@@ -653,7 +653,7 @@ Row 1, then `card-auth` uses the card.
 
 | EC | Case | Handling |
 |---|---|---|
-| EC-113 | The connection is not a wallet, not `ACTIVE`, or belongs to another owner | `FAILED_PRECONDITION` |
+| EC-113 | The connection is not a wallet, not `ACTIVE` or `DEGRADED`, or belongs to another owner | `FAILED_PRECONDITION` |
 | EC-114 | Delete a connection that has cards | `FAILED_PRECONDITION / CONNECTION_HAS_CARDS`; nothing is deleted. There is no card removal: such a connection stays |
 | EC-115 | Change a card while an authorization is in progress | The authorization keeps the values it read; the change applies to the next one |
 
@@ -1062,6 +1062,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 | `balance_snapshots`, `snapshot_balances`, `ledger_entries` | `SELECT`, `INSERT`. Rows are removed only by the cascade of a deleted connection |
 | `cards`, from S2 | `SELECT`, `INSERT`, `UPDATE` |
 | `authorizations`, `authorization_events`, `returns`, from S2 | `SELECT` |
+| `operator_txs`, from S2 | `SELECT` on `authorization_id`, `return_row_id`, `purpose`, `status`, `tx_hash`, `created_at` |
 | `audit_log` | `INSERT` |
 | `tenants`, `api_credentials`, `sources`, `asset_aliases` | `SELECT` |
 | `schema_migrations` | `SELECT`, for `/readyz` |
@@ -1070,6 +1071,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 |---|---|
 | `authorizations`, `returns`, `operator_txs`, `operator_accounts` | `SELECT`, `INSERT`, `UPDATE` |
 | `authorization_events` | `SELECT`, `INSERT`. Append-only: no `UPDATE`, no `DELETE` |
+| The sequence of `authorization_events.id` | `USAGE` |
 | `audit_log` | `INSERT` |
 | `cards`, `tenants`, `api_credentials`, `sources` | `SELECT` |
 | `connections` | `SELECT` on every column except `credentials_enc` |

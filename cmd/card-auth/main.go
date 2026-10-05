@@ -36,8 +36,9 @@ func main() {
 	}
 }
 
-// run checks the configuration and the chain, starts the servers and blocks until ctx is cancelled or a
-// server fails. The database is not pinged here: an unreachable database makes /readyz answer 503.
+// run checks the configuration, the chain and the nonce of the operator, starts the servers and blocks until
+// ctx is cancelled or a server fails. The nonce check writes operator_accounts: the database must be reachable
+// at start; later an unreachable database makes /readyz answer 503.
 func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
 	cfg, err := config.LoadCardAuth(getenv)
 	if err != nil {
@@ -69,6 +70,13 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		Token:      cfg.TokenAddress,
 		Decimals:   cfg.TokenDecimals,
 	}); err != nil {
+		return err
+	}
+	count, err := client.OperatorNonce(ctx, operator.Address())
+	if err != nil {
+		return err
+	}
+	if err := syncNonce(ctx, pool, logger, cfg.ChainID, operator.Address(), count); err != nil {
 		return err
 	}
 

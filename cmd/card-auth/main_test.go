@@ -224,7 +224,13 @@ func TestT104_Health(t *testing.T) {
 	})
 
 	t.Run("database unreachable", func(t *testing.T) {
-		s := start(t, testEnv(t, c, unreachableDatabaseURL(t)))
+		// The start writes operator_accounts: the database goes away after the start, behind a proxy.
+		p := newProxy(t, databaseURL)
+		s := start(t, testEnv(t, c, p.url))
+		if status, _ := get(t, s.healthURL+"/readyz"); status != http.StatusOK {
+			t.Fatalf("GET /readyz through the proxy = %d, want 200", status)
+		}
+		p.close()
 		if status, _ := get(t, s.healthURL+"/healthz"); status != http.StatusOK {
 			t.Errorf("GET /healthz = %d, want 200", status)
 		}
@@ -278,7 +284,9 @@ func TestT105_OperatorKeyNeverPrinted(t *testing.T) {
 	}
 
 	t.Run("start and configuration dump", func(t *testing.T) {
+		testdb.Open(t)
 		env := newEnv(t)
+		env["CARD_AUTH_DATABASE_URL"] = testdb.CardAuthURL(t)
 		s := start(t, env)
 		if err := s.stop(); err != nil {
 			t.Fatal(err)
@@ -377,7 +385,8 @@ func TestT106_StartChecks(t *testing.T) {
 	}
 
 	t.Run("correct configuration starts", func(t *testing.T) {
-		env := testEnv(t, c, unreachableDatabaseURL(t))
+		testdb.Open(t)
+		env := testEnv(t, c, testdb.CardAuthURL(t))
 		env["CARD_AUTH_RPC_FALLBACK_URL"] = c.RPCURL
 		s := start(t, env)
 		if err := s.stop(); err != nil {
@@ -399,4 +408,63 @@ func TestT106_StartChecks(t *testing.T) {
 			t.Errorf("the operator sent %d transactions", nonce)
 		}
 	})
+}
+
+// proxy forwards TCP connections to the database of a connection string, until close.
+type proxy struct {
+	url   string
+	ln    net.Listener
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+// newProxy listens on a loopback port and returns the connection string with that port.
+func newProxy(t *testing.T, databaseURL string) *proxy {
+	t.Helper()
+	u, err := url.Parse(databaseURL)
+	if err != nil || u.Host == "" {
+		t.Skip("TEST_DATABASE_URL_CARD_AUTH is not in URL form: the proxy cannot rewrite it")
+	}
+	target := u.Host
+	if u.Port() == "" {
+		target = net.JoinHostPort(u.Hostname(), "5432")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &proxy{ln: ln}
+	u.Host = ln.Addr().String()
+	p.url = u.String()
+	go func() {
+		for {
+			in, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			out, err := net.Dial("tcp", target)
+			if err != nil {
+				in.Close()
+				continue
+			}
+			p.mu.Lock()
+			p.conns = append(p.conns, in, out)
+			p.mu.Unlock()
+			go func() { _, _ = io.Copy(out, in); out.Close() }()
+			go func() { _, _ = io.Copy(in, out); in.Close() }()
+		}
+	}()
+	t.Cleanup(p.close)
+	return p
+}
+
+// close stops accepting and cuts every forwarded connection.
+func (p *proxy) close() {
+	p.ln.Close()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, c := range p.conns {
+		c.Close()
+	}
+	p.conns = nil
 }

@@ -188,7 +188,7 @@ paths:
                   value:
                     auth_id: 9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11
                     status: DEBIT_CONFIRMED
-                    amount: '25.40'
+                    amount: '25.4'
                     currency: EUR
                     token_amount: '29866387'
                     debited_amount: '29866387'

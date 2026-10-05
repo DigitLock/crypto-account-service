@@ -43,6 +43,35 @@ func (q *Queries) CreateCredential(ctx context.Context, arg CreateCredentialPara
 	return i, err
 }
 
+const getProcessorCredentialByKeyID = `-- name: GetProcessorCredentialByKeyID :one
+SELECT c.id, c.tenant_id, c.secret_hash, c.revoked_at, t.status AS tenant_status
+FROM api_credentials c
+JOIN tenants t ON t.id = c.tenant_id
+WHERE c.key_id = $1 AND c.kind = 'PROCESSOR_BASIC'
+`
+
+type GetProcessorCredentialByKeyIDRow struct {
+	ID           uuid.UUID
+	TenantID     uuid.UUID
+	SecretHash   []byte
+	RevokedAt    *time.Time
+	TenantStatus string
+}
+
+// Lookup of a Basic username.
+func (q *Queries) GetProcessorCredentialByKeyID(ctx context.Context, keyID string) (GetProcessorCredentialByKeyIDRow, error) {
+	row := q.db.QueryRow(ctx, getProcessorCredentialByKeyID, keyID)
+	var i GetProcessorCredentialByKeyIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.SecretHash,
+		&i.RevokedAt,
+		&i.TenantStatus,
+	)
+	return i, err
+}
+
 const getServiceTokenByKeyID = `-- name: GetServiceTokenByKeyID :one
 SELECT c.id, c.tenant_id, c.secret_hash, c.revoked_at, t.status AS tenant_status
 FROM api_credentials c
@@ -70,6 +99,50 @@ func (q *Queries) GetServiceTokenByKeyID(ctx context.Context, keyID string) (Get
 		&i.TenantStatus,
 	)
 	return i, err
+}
+
+const listProcessorCredentials = `-- name: ListProcessorCredentials :many
+SELECT c.id, c.key_id, t.name AS tenant_name, c.created_at, c.revoked_at
+FROM api_credentials c
+JOIN tenants t ON t.id = c.tenant_id
+WHERE c.kind = 'PROCESSOR_BASIC'
+  AND ($1::uuid IS NULL OR c.tenant_id = $1::uuid)
+ORDER BY t.name, c.created_at, c.key_id
+`
+
+type ListProcessorCredentialsRow struct {
+	ID         uuid.UUID
+	KeyID      string
+	TenantName string
+	CreatedAt  time.Time
+	RevokedAt  *time.Time
+}
+
+// No secret hash. All tenants when tenant_id is null.
+func (q *Queries) ListProcessorCredentials(ctx context.Context, tenantID *uuid.UUID) ([]ListProcessorCredentialsRow, error) {
+	rows, err := q.db.Query(ctx, listProcessorCredentials, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProcessorCredentialsRow{}
+	for rows.Next() {
+		var i ListProcessorCredentialsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.KeyID,
+			&i.TenantName,
+			&i.CreatedAt,
+			&i.RevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listServiceTokens = `-- name: ListServiceTokens :many
@@ -114,6 +187,26 @@ func (q *Queries) ListServiceTokens(ctx context.Context, tenantID *uuid.UUID) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const revokeProcessorCredential = `-- name: RevokeProcessorCredential :one
+UPDATE api_credentials
+SET revoked_at = now()
+WHERE key_id = $1 AND kind = 'PROCESSOR_BASIC' AND revoked_at IS NULL
+RETURNING id, tenant_id
+`
+
+type RevokeProcessorCredentialRow struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
+// Revokes a processor credential that is not revoked yet: no row means unknown or already revoked.
+func (q *Queries) RevokeProcessorCredential(ctx context.Context, keyID string) (RevokeProcessorCredentialRow, error) {
+	row := q.db.QueryRow(ctx, revokeProcessorCredential, keyID)
+	var i RevokeProcessorCredentialRow
+	err := row.Scan(&i.ID, &i.TenantID)
+	return i, err
 }
 
 const revokeServiceToken = `-- name: RevokeServiceToken :one

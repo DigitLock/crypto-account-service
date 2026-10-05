@@ -91,6 +91,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	grpcSrv := api.NewServer(api.Deps{
 		Credentials: repository.New(pool),
 		Connections: registry.NewConnections(pool, v, connectors, limiters, time.Now, keyCheckWait, cfg.TriggerSyncCooldown),
+		Cards:       registry.NewCards(pool, time.Now),
 		Logger:      logger,
 		Metrics:     metrics,
 	})

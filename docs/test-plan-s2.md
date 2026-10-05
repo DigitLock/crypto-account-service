@@ -36,10 +36,10 @@
 | 1 | Configuration, health, start checks | st2 | 7 |
 | 2 | Contracts of the APIs | st3 | 8 |
 | 3 | Schema, roles, card registry | st4 | 19 |
-| 4 | Decision on Anvil | st5 | 26 |
+| 4 | Decision on Anvil | st5 | 27 |
 | 5 | Returns and tracker | st6 | 22 |
 | 6 | Chain listener | st7 | 8 |
-| 7 | Processor CLI and hard tests | st8 | 11 |
+| 7 | Processor CLI and hard tests | st8 | 10 |
 | 8 | Base Sepolia | st9 | 9 |
 | 9 | CI and repository | st2, st10 | 6 |
 
@@ -92,7 +92,7 @@
 | S2-T316 | Several cards on one wallet | Common | Register two cards on the same connection | Both created; the wallet daily limit of the contract caps them together (checked in T409) | SRS — Core §2.1.5 | — |
 | S2-T317 | `GetAuthorization` | Authorizations of T502 and T507 (phase 5); tenant B | `GetAuthorization` on each; on an unknown ID; as B on A's ID | The fields of SRS — Card Spend §2.1.4 with `returns` and `history`; the tombstone as there; `NOT_FOUND`; `NOT_FOUND`. Served with the role `cas_server` | FR-116, FR-105, SRS — Core §2.1.1 | — |
 | S2-T318 | `ListAuthorizations` | 30 authorizations of two cards and two owners, several statuses and times; tenant B | List all; by `card_ref`, `owner_ref`, `status`, `received_from`/`to`, combined; an unknown `status`; pages; as B | Order `received_at` descending, `auth_id`; filters AND, from inclusive, to exclusive; `INVALID_ARGUMENT`; every row once; B sees only B's rows; tombstones included | FR-116, FR-105, SRS — Core §2.1.1 | — |
-| S2-T319 | EC-115 | `card_A` with an authorization blocked at step 12 | `UpdateCard`: lower the limit below the in-flight amount and freeze; release the authorization | The in-flight authorization keeps the values it read and is approved; the next one is declined `CARD_FROZEN` | EC-115, UC-103 | — |
+| S2-T711 | Processor credential CLI | Migrated database | `casctl` issues a Basic pair for tenant A; lists; revokes | Printed once; only the hash stored; audit `CREDENTIAL_ISSUED`, `CREDENTIAL_REVOKED`; `401` after revocation | SRS — Core UC-105 | — |
 
 ### Phase 4 — Decision on Anvil (st5)
 
@@ -124,6 +124,7 @@
 | S2-T424 | EC-15 send result unknown | RPC times out on `eth_sendRawTransaction` but relays it | Authorize | Treated as sent; the inclusion signal of step 12 resolves it to `APPROVED` | EC-15 | — |
 | S2-T425 | Internal error | Database failure injected at step 4; at step 10 | Authorize | `200 DECLINED / INTERNAL_ERROR` in both; nothing sent; the processor always gets a decision | §2.1.1 | — |
 | S2-T426 | Decision latency and metrics | Twenty authorizations: approvals, declines of each reason, one timeout | Read `/metrics` | `auth_decision_seconds` histogram; `auth_decisions_total{decision,reason}` by outcome; p95 of the approvals on Anvil ≤ 2 s (A failure of the p95 is P2 locally) | §2.5.1, §3.2 | — |
+| S2-T319 | EC-115 | `card_A` with an authorization blocked at step 12 | `UpdateCard`: lower the limit below the in-flight amount and freeze; release the authorization | The in-flight authorization keeps the values it read and is approved; the next one is declined `CARD_FROZEN` | EC-115, UC-103 | — |
 
 ### Phase 5 — Returns and tracker (st6)
 
@@ -179,7 +180,6 @@
 | S2-T708 | All metrics | After T702–T707 | Read `/metrics` | The ten `card-auth` metrics of §2.5.1 exist | §2.5.1 | — |
 | S2-T709 | No signer in `server` | Built tree | Check the imports of every package under `cmd/server` and the packages it uses | The signer package of `card-auth` is not imported | ADR-3 | — |
 | S2-T710 | Secrets | Database and logs after the phase | Search for the operator key, the Basic password, `DATABASE_URL` | Only the hash of the password in `api_credentials`; nothing else anywhere | §3.2 Security, handoff §4 | — |
-| S2-T711 | Processor credential CLI | Migrated database | `casctl` issues a Basic pair for tenant A; lists; revokes | Printed once; only the hash stored; audit `CREDENTIAL_ISSUED`, `CREDENTIAL_REVOKED`; `401` after revocation | SRS — Core UC-105 | — |
 
 ### Phase 8 — Base Sepolia (st9)
 
@@ -277,3 +277,5 @@ Filled in st10.
 - T107 runs in st4 with `operator_accounts`.
 - T105 is checked at start and configuration dump in st2 and completed in st5.
 - T709 is built in st2.
+- T711 runs in st4, in phase 3, with the card registry: `casctl processor` issues, lists and revokes. Its `401` after revocation needs the processor API and is checked in st5. The ID is kept.
+- T319 (EC-115) moves to st5, in phase 4: an authorization can be in flight only there. The ID is kept.
