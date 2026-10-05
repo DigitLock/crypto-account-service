@@ -1,0 +1,173 @@
+// Contract of Crypto Account Service: connections.
+// Specification: docs/srs/core.md §2.1.1, §2.1.2.
+syntax = "proto3";
+
+package cas.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/DigitLock/crypto-account-service/internal/grpc/pb/cas/v1;casv1";
+
+// ConnectionService manages the connections of the caller's tenant.
+// Every method needs the metadata `authorization: Bearer <service token>`.
+service ConnectionService {
+  // ListSources returns the available sources.
+  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+  // CreateConnection registers an exchange key or a wallet address and schedules the first sync.
+  // FAILED_PRECONDITION reasons: KEY_NOT_READ_ONLY, KEY_INVALID, SOURCE_DISABLED.
+  rpc CreateConnection(CreateConnectionRequest) returns (CreateConnectionResponse);
+  // ListConnections returns the connections of the tenant, ordered by creation time.
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
+  // GetConnection returns one connection with the health of its streams.
+  rpc GetConnection(GetConnectionRequest) returns (GetConnectionResponse);
+  // DeleteConnection removes a connection with its secret, cursors, snapshots and ledger entries.
+  rpc DeleteConnection(DeleteConnectionRequest) returns (DeleteConnectionResponse);
+  // TriggerSync makes every stream of a connection due now.
+  // RESOURCE_EXHAUSTED inside the cooldown. FAILED_PRECONDITION reason: CREDENTIALS_INVALID.
+  rpc TriggerSync(TriggerSyncRequest) returns (TriggerSyncResponse);
+}
+
+// Kind of a source.
+enum SourceKind {
+  SOURCE_KIND_UNSPECIFIED = 0;
+  SOURCE_KIND_EXCHANGE = 1;
+  SOURCE_KIND_EVM = 2;
+}
+
+// Kind of a connection.
+enum ConnectionKind {
+  CONNECTION_KIND_UNSPECIFIED = 0;
+  CONNECTION_KIND_EXCHANGE = 1;
+  CONNECTION_KIND_EVM_WALLET = 2;
+}
+
+// State of a connection.
+enum ConnectionStatus {
+  CONNECTION_STATUS_UNSPECIFIED = 0;
+  // Usable; sync runs.
+  CONNECTION_STATUS_ACTIVE = 1;
+  // A stream reached the failure threshold; sync runs with backoff.
+  CONNECTION_STATUS_DEGRADED = 2;
+  // The source rejected the key, or the key is no longer read-only; sync is stopped.
+  CONNECTION_STATUS_CREDENTIALS_INVALID = 3;
+}
+
+// Mode of a stream.
+enum StreamMode {
+  STREAM_MODE_UNSPECIFIED = 0;
+  STREAM_MODE_BACKFILL = 1;
+  STREAM_MODE_INCREMENTAL = 2;
+}
+
+// An exchange or an EVM network that CAS can read.
+message Source {
+  // Source code, used in CreateConnection: `binance`, `base-sepolia`.
+  string code = 1;
+  SourceKind kind = 2;
+}
+
+// API key of an exchange account. Never returned.
+message ExchangeKey {
+  string api_key = 1;
+  string api_secret = 2;
+}
+
+// Self-custody wallet.
+message Wallet {
+  // `0x` and 40 hexadecimal characters; mixed case must pass the EIP-55 checksum.
+  string address = 1;
+}
+
+// One account at one source.
+message Connection {
+  // UUID.
+  string connection_id = 1;
+  // Source code.
+  string source = 2;
+  ConnectionKind kind = 3;
+  // Opaque owner ID of the tenant.
+  string owner_ref = 4;
+  // Display name. Empty when not set.
+  string label = 5;
+  ConnectionStatus status = 6;
+  // Exchanges only: `…` and the last 4 characters of the API key.
+  string key_fingerprint = 7;
+  // Exchanges only: permissions reported by the source, or `UNVERIFIED`.
+  repeated string permissions = 8;
+  google.protobuf.Timestamp created_at = 9;
+  // EVM wallets only: the address in EIP-55 form.
+  string wallet_address = 10;
+}
+
+// Health of one stream of a connection.
+message StreamHealth {
+  // Full stream name: `balances`, `trades:BTCUSDT`.
+  string stream = 1;
+  StreamMode mode = 2;
+  google.protobuf.Timestamp next_run_at = 3;
+  // Absent before the first successful run.
+  google.protobuf.Timestamp last_success_at = 4;
+  // Last error, without secrets. Empty after a success.
+  string last_error = 5;
+  int32 consecutive_failures = 6;
+}
+
+message ListSourcesRequest {}
+
+message ListSourcesResponse {
+  repeated Source sources = 1;
+}
+
+message CreateConnectionRequest {
+  // Required, at most 128 characters.
+  string owner_ref = 1;
+  // Required. Source code from ListSources.
+  string source = 2;
+  // Optional, at most 64 characters.
+  string label = 3;
+  // Required. Must match the kind of the source.
+  oneof credential {
+    ExchangeKey exchange_key = 4;
+    Wallet wallet = 5;
+  }
+}
+
+message CreateConnectionResponse {
+  Connection connection = 1;
+}
+
+message ListConnectionsRequest {
+  // Optional filter.
+  string owner_ref = 1;
+  // 100 when 0; at most 500.
+  int32 page_size = 2;
+  // `next_page_token` of the previous response.
+  string page_token = 3;
+}
+
+message ListConnectionsResponse {
+  repeated Connection connections = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+message GetConnectionRequest {
+  string connection_id = 1;
+}
+
+message GetConnectionResponse {
+  Connection connection = 1;
+  repeated StreamHealth streams = 2;
+}
+
+message DeleteConnectionRequest {
+  string connection_id = 1;
+}
+
+message DeleteConnectionResponse {}
+
+message TriggerSyncRequest {
+  string connection_id = 1;
+}
+
+message TriggerSyncResponse {}

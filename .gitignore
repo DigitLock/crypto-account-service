@@ -14,3 +14,8 @@ CLAUDE.md
 contracts/out/
 contracts/cache/
 contracts/broadcast/
+
+# Go build output
+/bin/
+*.test
+coverage.out

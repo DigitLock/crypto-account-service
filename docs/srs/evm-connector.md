@@ -6,13 +6,13 @@
 
 - **Purpose:** specify the EVM connector of `server`: how a wallet address becomes balances and ledger entries, and how contract events reach reconciliation.
 - **Scope:** address check, finality rule, balance snapshot, event log import, reorg guard, completeness check, test approach.
-- **Milestones:** C1 (address check), S3 (streams, completeness check).
+- **Milestones:** C1 (address check, chain allow-list), S3 (streams, completeness check).
 - **Out of scope:**
   - everything shared by all sources — engine, cursors, ledger schema, consumer API: [SRS — Core](core.md);
   - the authorization flow, the contract and the reconciliation rules: [SRS — Card Spend](card-spend.md);
   - real-time signals: `card-auth` tracks its own transactions (ADR-13). This connector reads logs from final blocks only.
 - **Parents:** [BRD](../brd.md) BR-1, BR-3, BR-4, BR-5, BR-12; [PRD — Card Spend](../prd/card-spend.md) US-13; [ADR](../adr/README.md) 2, 3, 5, 6, 8, 11, 13.
-- **Version:** 1.0, 2026-10-04, approved.
+- **Version:** 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
 - **Network facts:** finality stages and their timing are taken from the Base documentation for Base mainnet, checked on 2026-10-03. Base Sepolia may differ; the values are measured at S3.
 
 | Term | Meaning |
@@ -92,7 +92,7 @@ sequenceDiagram
 
 - **Protocol:** Ethereum JSON-RPC over HTTPS. One primary endpoint and one fallback per network.
 - **Read-only:** the connector holds no key and sends no transaction (ADR-3).
-- **Test networks only:** the chain ID of a source must be in the allow-list `EVM_ALLOWED_CHAIN_IDS`: 31337 (Anvil) and 84532 (Base Sepolia) by default (BRD §9.2).
+- **Test networks only:** the chain ID of a source must be in the allow-list `EVM_ALLOWED_CHAIN_IDS`: 31337 (Anvil) and 84532 (Base Sepolia) by default (BRD §9.2). A source outside the list is not available: it is not offered and no connection is created on it. Checked from C1 (FR-318).
 - **Address:** 20 bytes. Stored and returned in EIP-55 form; compared without regard to case.
 - **Tracked tokens:** only tokens listed in `asset_aliases` are read. MVP: `MockUSDC`. A tracked token must be a plain ERC-20: at most 18 decimals, no fee on transfer, no rebasing, a `Transfer` log for every balance change including mint and burn.
 - **Amounts:** `uint256` base units → decimal amount with the token's `decimals` from `asset_aliases`. No floats.
@@ -106,7 +106,7 @@ sequenceDiagram
   - the chain ID of both endpoints equals `chain_id` of the source and is in the allow-list;
   - `token()` of the controller is a tracked token;
   - the address of the treasury connection equals `treasury()` of the controller.
-- **Until S3** the connector checks the address only and declares no streams: a wallet connection exists for the card registry and has no balances and no history.
+- **Until S3** the connector checks the address only and declares no streams: a wallet connection exists for the card registry and has no balances and no history. When the connector starts to declare streams, existing connections get their cursors at the next start of the engine (SRS — Core FR-122).
 
 ##### Finality rule
 
@@ -169,13 +169,13 @@ N/A — local validation, no call to the network.
 
 | # | Step | On failure |
 |---|---|---|
-| 1 | Check the format: `0x` + 40 hexadecimal characters | `INVALID_ARGUMENT` |
+| 1 | Check the format: lower-case `0x` + 40 hexadecimal characters. The input is not trimmed: surrounding whitespace fails the check | `INVALID_ARGUMENT` |
 | 2 | Mixed-case input: verify the EIP-55 checksum. Single-case input has no checksum and is accepted | `INVALID_ARGUMENT` |
 | 3 | Reject the zero address | `INVALID_ARGUMENT` |
 | 4 | Return the address in EIP-55 form as the account identity; no permissions, no secret | — |
 
 ##### Preconditions
-- The source is an enabled EVM network.
+- The source is an available EVM network: enabled, with a chain ID of the allow-list (SRS — Core §2.1.1, Common rules).
 
 ##### Trigger
 `CreateConnection` with a `wallet` (SRS — Core UC-101, step 5).
@@ -190,6 +190,7 @@ Steps 1–4.
 | EC-301 | Mixed-case address with a wrong checksum | Step 2: rejected. Protects against a mistyped address |
 | EC-302 | Zero address | Step 3: rejected |
 | EC-303 | The same address in another letter case is already connected | Same account identity: `ALREADY_EXISTS` (SRS — Core EC-102) |
+| EC-318 | The chain ID of the source is outside the allow-list | The source is not available: absent from `ListSources`; `CreateConnection` → `FAILED_PRECONDITION / SOURCE_DISABLED` (SRS — Core UC-101, step 2). Logged when `server` starts |
 
 ##### Acceptance Criteria
 
@@ -197,6 +198,7 @@ Steps 1–4.
 |---|---|---|
 | FR-301 | A wallet address must be accepted only when it is well formed and, if written in mixed case, passes the EIP-55 checksum. | BR-1 |
 | FR-302 | The account identity of a wallet connection must be its address in EIP-55 form; two spellings of one address must be one account. | BR-1 |
+| FR-318 | A source whose chain ID is outside the allow-list must not be offered, and no connection must be created on it. | BRD §9.2 Environments |
 
 ##### Postconditions
 - The engine knows the account identity. No key is stored: `credentials_enc` stays empty.
@@ -373,7 +375,7 @@ Steps 1–5 with every gap equal to 0.
 #### 2.4.1 EVM connector
 
 ##### Data model schema
-N/A — the connector adds no tables. It uses `sources`, `connections`, `sync_cursors`, `balance_snapshots`, `ledger_entries` and `asset_aliases` of SRS — Core.
+N/A — the connector adds no tables. It uses `sources`, `connections`, `sync_cursors`, `balance_snapshots`, `snapshot_balances`, `ledger_entries` and `asset_aliases` of SRS — Core.
 
 ##### Seed data
 
@@ -384,7 +386,7 @@ Rows added by the migration that introduces a network, and the connection create
 
 | Table | Row |
 |---|---|
-| `sources` | One row per network: `code = anvil` or `base-sepolia`, `kind = EVM`, `config` with the values of §3.1 |
+| `sources` | One row per network: `code = anvil` or `base-sepolia`, `kind = EVM`, `config` with the values of §3.1. The migrations of C1 add both rows, enabled, with `chain_id` only; the other values are added in S2 and S3 |
 | `asset_aliases` | One row per tracked token: `native_asset` = token address, `asset` = `USDC`, `decimals` = 6 for `MockUSDC` |
 | `connections` | The treasury connection: created through the CLI in the platform's tenant after the contract is deployed. The CLI writes its ID to `treasury_connection` of the source |
 
@@ -489,7 +491,7 @@ FR-316 and FR-317 apply from S3.
 
 | Parameter | Where | Default | Meaning |
 |---|---|---|---|
-| `EVM_ALLOWED_CHAIN_IDS` | Environment | 31337, 84532 | Allow-list of test networks |
+| `EVM_ALLOWED_CHAIN_IDS` | Environment | 31337, 84532 | Allow-list of test networks: chain IDs separated by commas. Read from C1 |
 | `EVM_RPC_URL_<SOURCE>`, `EVM_RPC_FALLBACK_URL_<SOURCE>` | Environment | — | Endpoints; `<SOURCE>` is the source code in upper case with `_` for `-`. Kept out of the database: a provider URL usually contains an API key |
 | `chain_id` | `sources.config` | — | Chain ID of the network |
 | `finality_mode` | `sources.config` | Per network | `tag` or `confirmations` (§2.1.1) |
@@ -520,7 +522,7 @@ FR-316 and FR-317 apply from S3.
 - **Security:**
   - no key, no transaction, read methods only (FR-313);
   - endpoint URLs are read from the environment and logged without path and query;
-  - the chain ID allow-list keeps the connector off any mainnet (FR-314).
+  - the chain ID allow-list keeps the connector off any mainnet (FR-314, FR-318).
 
 ---
 

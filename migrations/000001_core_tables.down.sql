@@ -1,0 +1,10 @@
+DROP TABLE audit_log;
+DROP TABLE ledger_entries;
+DROP TABLE snapshot_balances;
+DROP TABLE balance_snapshots;
+DROP TABLE sync_cursors;
+DROP TABLE asset_aliases;
+DROP TABLE connections;
+DROP TABLE sources;
+DROP TABLE api_credentials;
+DROP TABLE tenants;

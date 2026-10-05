@@ -9,8 +9,8 @@
 | Part | State |
 |---|---|
 | Requirements and design | Written for milestones C1, S1–S3, X1–X2, W1. X3, X4, E1: outlined in the BRD |
-| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI |
-| Milestone | Closed: S1 — Contracts, `v0.1.0`. Next: C1 — Core, `v0.2.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
+| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI. C1 — Core done: `server` with the gRPC API `cas.v1`, `casctl`, encrypted secrets, sync engine and ledger on PostgreSQL, a fake connector, CI |
+| Milestone | Next: S2 — card-auth, `v0.3.0`. Closed: S1 — Contracts, `v0.1.0`; C1 — Core, `v0.2.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
 
 ## Design highlights
 
@@ -39,7 +39,7 @@ Full map, conventions and identifiers: [docs/README.md](docs/README.md). Terms: 
 
 | ID | Content |
 |---|---|
-| C1 | Core: tenants, connections, encrypted secrets, gRPC API, CI |
+| C1 | Core: tenants, connections, encrypted secrets, sync engine, ledger, gRPC API, CI |
 | S1 | Contracts `CardSpendController` and `MockUSDC`, tests on a local chain |
 | S2 | `card-auth`: end-to-end authorization locally, then on Base Sepolia |
 | S3 | Event indexer into the ledger; reconciliation |
@@ -54,17 +54,32 @@ Tracks S and X are independent. Details and dependencies: BRD §7.3.
 
 ## Repository layout
 
-`docs/` and `contracts/` exist today. The rest is the planned structure.
+`testdata/` and `cmd/card-auth` are planned; the rest exists.
 
 ```
 docs/         requirements and design
 contracts/    CardSpendController, MockUSDC, Foundry tests      S1 (done)
-proto/        cas/v1 gRPC contract                              C1
-cmd/          server, card-auth, CLI                            C1, S2
-internal/     connectors, sync engine, ledger, card spend       C1 and later
-migrations/   database schema                                   C1
+proto/        cas/v1 gRPC contract and its frozen image         C1 (done)
+cmd/          server, casctl; card-auth                         C1 (done); S2
+internal/     API, registry, vault, connectors, sync engine,    C1 (done); card spend from S2
+              rate limiter, ledger
+migrations/   database schema                                   C1 (done)
 testdata/     recorded fixtures of source responses             X1
 ```
+
+## Run locally
+
+Needs Go 1.27 and PostgreSQL 16; `buf`, `sqlc`, `migrate` and `gitleaks` on the PATH in the versions of [the test plan](docs/test-plan-c1.md) §1. Connection strings and the master key live in an ignored `.env`; `.env.example` lists the variables.
+
+| Step | Command |
+|---|---|
+| Code generators of the contract, into `./bin` | `make tools` |
+| Database role of `server`, once per database | `CREATE ROLE cas_server LOGIN PASSWORD '…'`, by the owner role |
+| Schema | `make migrate-up` |
+| Tenant and service token | `make casctl ARGS="tenant create demo"`, `make -s casctl ARGS="token issue demo"` |
+| Fake source for a demo, with `ENABLE_FAKE_SOURCE=true` | `make casctl ARGS="source add-fake"` |
+| Server: gRPC 50053, health and metrics 8091 | `make run` |
+| Checks before a commit | `make check`, `make sqlc-check`, `make proto-check`, `make secrets` |
 
 ## Related services
 

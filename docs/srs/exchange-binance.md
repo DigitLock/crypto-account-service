@@ -428,7 +428,7 @@ Steps 1–6, until step 7 restarts the cycle.
 #### 2.4.1 Binance connector
 
 ##### Data model schema
-N/A — the connector adds no tables. It uses `connections`, `sync_cursors`, `balance_snapshots`, `ledger_entries` and `asset_aliases` of SRS — Core.
+N/A — the connector adds no tables. It uses `connections`, `sync_cursors`, `balance_snapshots`, `snapshot_balances`, `ledger_entries` and `asset_aliases` of SRS — Core.
 
 ##### Seed data
 

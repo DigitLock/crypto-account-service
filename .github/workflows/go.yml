@@ -1,0 +1,95 @@
+name: go
+
+on:
+  push:
+    branches:
+      - "feature/**"
+      - main
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - "migrations/**"
+      - "sqlc.yaml"
+      - ".github/workflows/go.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - "migrations/**"
+      - "sqlc.yaml"
+      - ".github/workflows/go.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cas_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/cas_test?sslmode=disable
+      TEST_DATABASE_URL_SERVER: postgres://cas_server:cas_server@localhost:5432/cas_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Go version
+        run: go version
+
+      - name: Format check
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "gofmt needs to run on:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Install sqlc
+        run: |
+          mkdir -p "$RUNNER_TEMP/sqlc"
+          curl -sSfL -o "$RUNNER_TEMP/sqlc/sqlc.tar.gz" \
+            https://github.com/sqlc-dev/sqlc/releases/download/v1.31.1/sqlc_1.31.1_linux_amd64.tar.gz
+          echo "497ae4fcdfa64c5b0c311ffe4c2bd991e43991e82e5367792ed78bc2dca27354  $RUNNER_TEMP/sqlc/sqlc.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/sqlc/sqlc.tar.gz" -C "$RUNNER_TEMP/sqlc" sqlc
+          echo "$RUNNER_TEMP/sqlc" >> "$GITHUB_PATH"
+
+      - name: Generated data access code is current
+        run: make sqlc-check
+
+      - name: Create the role cas_server
+        run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_server LOGIN PASSWORD 'cas_server';"
+
+      - name: Test
+        run: go test -race -count=1 -p 1 ./...

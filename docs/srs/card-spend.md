@@ -814,7 +814,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 | `chain_id`, `rpc_url`, `rpc_fallback_url` | — | Network access |
 | `controller_address`, `token_address`, `token_decimals` | — | Contract and funding token |
 | `OPERATOR_PRIVATE_KEY` | — | Environment only |
-| `DATABASE_URL` | — | PostgreSQL, role `card_auth`; environment |
+| `DATABASE_URL` | — | PostgreSQL, role `cas_card_auth`; environment |
 | `CRS_ADDRESS` | — | gRPC address of CRS; environment |
 | HTTP port | 8092 | Processor API; environment |
 | Health port | 8093 | `/healthz`, `/readyz`; environment |

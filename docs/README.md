@@ -18,6 +18,8 @@ Source of truth for CAS requirements and design. Markdown in the repository.
 | Glossary | `glossary.md` | Card, on-chain, exchange and CAS terms | Approved |
 | Roadmap | `roadmap.md` | Order of the milestones, versions, status, log | Living |
 | Test Plan — S1 | `test-plan-s1.md` | Test matrix of the contracts, run log, sign-off of S1 | Approved |
+| Test Plan — C1 | `test-plan-c1.md` | Test matrix of Core, run log, sign-off of C1 | Approved |
+| Backlog | `backlog.md` | Postponed items | Living |
 
 Status: `Draft` → `Pre-approved` (reviewed by the owner) → `Approved` (merged to `main`). `Living`: updated after each milestone, no approval status.
 

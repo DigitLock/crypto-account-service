@@ -1,0 +1,144 @@
+// Contract of Crypto Account Service: balances and ledger.
+// Specification: docs/srs/core.md §2.1.3, §2.1.4.
+syntax = "proto3";
+
+package cas.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/DigitLock/crypto-account-service/internal/grpc/pb/cas/v1;casv1";
+
+// AccountDataService reads balances and the ledger of the caller's tenant.
+// Reads never call a source. Amounts are decimal strings, never floats.
+service AccountDataService {
+  // GetBalances returns the latest snapshot of each selected connection.
+  rpc GetBalances(GetBalancesRequest) returns (GetBalancesResponse);
+  // ListLedgerEntries returns ledger entries in ascending `seq`, for incremental pull.
+  rpc ListLedgerEntries(ListLedgerEntriesRequest) returns (ListLedgerEntriesResponse);
+}
+
+// Wallet of an account that holds a balance.
+enum AccountType {
+  ACCOUNT_TYPE_UNSPECIFIED = 0;
+  ACCOUNT_TYPE_SPOT = 1;
+  ACCOUNT_TYPE_FUNDING = 2;
+  ACCOUNT_TYPE_EARN_FLEXIBLE = 3;
+  ACCOUNT_TYPE_EARN_LOCKED = 4;
+  ACCOUNT_TYPE_WALLET = 5;
+}
+
+// Type of a ledger entry.
+enum LedgerEntryType {
+  LEDGER_ENTRY_TYPE_UNSPECIFIED = 0;
+  LEDGER_ENTRY_TYPE_DEPOSIT = 1;
+  LEDGER_ENTRY_TYPE_WITHDRAWAL = 2;
+  LEDGER_ENTRY_TYPE_TRADE = 3;
+  LEDGER_ENTRY_TYPE_FEE = 4;
+  LEDGER_ENTRY_TYPE_CONVERT = 5;
+  LEDGER_ENTRY_TYPE_REWARD = 6;
+  LEDGER_ENTRY_TYPE_CARD_DEBIT = 7;
+  LEDGER_ENTRY_TYPE_CARD_REFUND = 8;
+}
+
+// Leg of an operation.
+enum LedgerLeg {
+  LEDGER_LEG_UNSPECIFIED = 0;
+  LEDGER_LEG_SINGLE = 1;
+  LEDGER_LEG_BASE = 2;
+  LEDGER_LEG_QUOTE = 3;
+  LEDGER_LEG_FEE = 4;
+}
+
+// Direction of a movement, from the account's point of view.
+enum LedgerDirection {
+  LEDGER_DIRECTION_UNSPECIFIED = 0;
+  LEDGER_DIRECTION_IN = 1;
+  LEDGER_DIRECTION_OUT = 2;
+}
+
+// Freshness of the balances of one connection.
+message ConnectionSnapshot {
+  string connection_id = 1;
+  // Source code.
+  string source = 2;
+  // Time of the returned snapshot. Absent before the first successful sync.
+  google.protobuf.Timestamp as_of = 3;
+  // True when the last successful run of the balance stream is older than `stale_after`, or when there was none.
+  bool stale = 4;
+}
+
+// Balance of one asset in one account type.
+message Balance {
+  string connection_id = 1;
+  AccountType account_type = 2;
+  // Canonical asset.
+  string asset = 3;
+  // Code or token address at the source.
+  string native_asset = 4;
+  // Decimal string: available amount.
+  string free = 5;
+  // Decimal string: amount in orders or lock-up.
+  string locked = 6;
+}
+
+message GetBalancesRequest {
+  // Required: exactly one.
+  oneof selector {
+    // All connections of the owner.
+    string owner_ref = 1;
+    // One connection.
+    string connection_id = 2;
+  }
+}
+
+message GetBalancesResponse {
+  repeated ConnectionSnapshot connections = 1;
+  repeated Balance balances = 2;
+}
+
+// One immutable movement of one asset.
+message LedgerEntry {
+  // Position in the order of arrival. Grows only.
+  int64 seq = 1;
+  string connection_id = 2;
+  LedgerEntryType type = 3;
+  LedgerLeg leg = 4;
+  LedgerDirection direction = 5;
+  // Canonical asset.
+  string asset = 6;
+  // Code or token address at the source.
+  string native_asset = 7;
+  // Decimal string, always positive.
+  string amount = 8;
+  // Same for all legs of one operation.
+  string group_id = 9;
+  // ID at the source.
+  string external_id = 10;
+  // Time at the source.
+  google.protobuf.Timestamp occurred_at = 11;
+}
+
+message ListLedgerEntriesRequest {
+  // Optional filter.
+  string owner_ref = 1;
+  // Optional filter. Unknown in the tenant: NOT_FOUND.
+  string connection_id = 2;
+  // Entries with `seq` above this value are returned.
+  int64 after_seq = 3;
+  // Optional filter.
+  repeated LedgerEntryType types = 4;
+  // Optional filter, inclusive.
+  google.protobuf.Timestamp occurred_from = 5;
+  // Optional filter, exclusive.
+  google.protobuf.Timestamp occurred_to = 6;
+  // 100 when 0; at most 500.
+  int32 page_size = 7;
+}
+
+message ListLedgerEntriesResponse {
+  repeated LedgerEntry entries = 1;
+  // Highest `seq` of the response; the next `after_seq`. An empty response returns the `after_seq` of the request.
+  int64 last_seq = 2;
+  // More entries exist after `last_seq`.
+  bool has_more = 3;
+}

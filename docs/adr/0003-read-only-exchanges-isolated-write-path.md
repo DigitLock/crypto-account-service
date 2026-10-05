@@ -25,7 +25,7 @@ Option 3.
 - `server`: exchange adapters contain no trade, withdrawal or transfer calls. A key with trade, withdrawal or transfer permission is rejected when the connection is created.
 - `card-auth`: the only service that signs transactions. The operator key exists only in its environment.
 - Admin transactions (limits, pause) are signed outside the services: by the CLI with the separate `ADMIN` key (ADR-9).
-- Database roles: `card_auth` cannot read exchange secrets; `server` has no signing key.
+- Database roles: `cas_card_auth` of `card-auth` cannot read exchange secrets; `server`, with its role `cas_server`, has no signing key.
 - CI rule: packages of `server` must not import the signer package.
 
 ## Trade-offs
