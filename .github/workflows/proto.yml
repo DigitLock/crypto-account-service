@@ -10,6 +10,7 @@ on:
       - "buf.yaml"
       - "buf.gen.yaml"
       - "internal/grpc/pb/**"
+      - "api/**"
       - "Makefile"
       - ".github/workflows/proto.yml"
   pull_request:
@@ -20,6 +21,7 @@ on:
       - "buf.yaml"
       - "buf.gen.yaml"
       - "internal/grpc/pb/**"
+      - "api/**"
       - "Makefile"
       - ".github/workflows/proto.yml"
 
@@ -54,3 +56,6 @@ jobs:
 
       - name: Contract check
         run: make proto-check
+
+      - name: OpenAPI contract check
+        run: make openapi-check

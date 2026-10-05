@@ -105,7 +105,7 @@ sequenceDiagram
 
 ##### Common rules
 
-- **Protocol:** gRPC, package `cas.v1`. The `.proto` files in `proto/cas/v1/` are the contract; `buf lint` and `buf breaking` run in CI. The contract is frozen as the image `proto/frozen/cas_v1.json`: CI compares every build with it, and a change of the contract updates the image by the owner's decision.
+- **Protocol:** gRPC, package `cas.v1`. The `.proto` files in `proto/cas/v1/` are the contract: `connection_service.proto`, `account_data_service.proto` and, from S2, `card_service.proto`; `buf lint` and `buf breaking` run in CI. The contract is frozen as the image `proto/frozen/cas_v1.json`: CI compares every build with it, and a change of the contract updates the image by the owner's decision.
 - **Transport:** plain gRPC inside the internal network, no TLS (ADR-7). Server reflection is on and needs no token.
 - **Authorization:** metadata `authorization: Bearer <service token>`. The token resolves to one tenant. Format and handling of the token: UC-105.
 - **Tenant scope:** every request reads and writes only the caller's tenant. A resource of another tenant is reported as `NOT_FOUND`.
@@ -170,7 +170,7 @@ Methods with non-obvious rules are specified below. The others follow the common
 | `UpdateCard` | `card_ref`; optional `daily_limit`; optional `status` | The card of §2.1.5 | S2. At least one of the two optional fields; otherwise `INVALID_ARGUMENT`. `daily_limit`: a base-unit integer string ≥ 0. `status`: `ACTIVE` or `FROZEN`. A value equal to the stored one changes nothing and writes no audit row; a change sets `updated_at` and writes `CARD_UPDATED` with the changed fields. The change applies to the next authorization (EC-115) |
 | `GetCard` | `card_ref` | The card of §2.1.5 | S2. Unknown in the tenant: `NOT_FOUND` |
 | `ListCards` | `owner_ref`, optional, ≤ 128; `page_size`, `page_token` | `cards[]`: the card of §2.1.5; `next_page_token` | S2. Order: `created_at`, `card_ref`. Pagination as `ListConnections` |
-| `GetAuthorization` | `auth_id` | The authorization of SRS — Card Spend §2.1.4: the same fields, `returns` and `history` included; timestamps as `Timestamp` | S2. Unknown in the tenant: `NOT_FOUND`. A tombstone is returned as in SRS — Card Spend §2.1.4 |
+| `GetAuthorization` | `auth_id` | The authorization of SRS — Card Spend §2.1.4: the same fields, `returns` and `history` included, plus `card_ref`, `received_at`, `decided_at`; timestamps as `Timestamp` | S2. Unknown in the tenant: `NOT_FOUND`. A tombstone is returned as in SRS — Card Spend §2.1.4 |
 | `ListAuthorizations` | optional `card_ref`, `owner_ref`, `status`, `received_from`, `received_to`; `page_size`, `page_token` | `authorizations[]`: the authorization without `returns` and `history`; `next_page_token` | S2. Filters combine with AND; `received_from` inclusive, `received_to` exclusive; an unknown `status` is `INVALID_ARGUMENT`. Order: `received_at` descending, `auth_id`. Tombstones are included |
 
 ##### Connector contract

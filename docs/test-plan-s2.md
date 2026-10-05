@@ -34,7 +34,7 @@
 | Phase | Scope | Stage | Rows |
 |---|---|---|---|
 | 1 | Configuration, health, start checks | st2 | 7 |
-| 2 | Contracts of the APIs | st3 | 7 |
+| 2 | Contracts of the APIs | st3 | 8 |
 | 3 | Schema, roles, card registry | st4 | 19 |
 | 4 | Decision on Anvil | st5 | 26 |
 | 5 | Returns and tracker | st6 | 22 |
@@ -61,13 +61,14 @@
 
 | ID | Description | Preconditions | Steps | Expected | Req | Status |
 |---|---|---|---|---|---|---|
-| S2-T201 | OpenAPI valid | `api/openapi/card-auth.yaml` (path fixed in st3) | Validate with the linter chosen in st2 | Valid OpenAPI 3.1; no warning of the ruleset | ADR-7, §2.1 | — |
+| S2-T201 | OpenAPI valid | `api/openapi/card-auth.yaml` | Load through the loader of the package `api/openapi`; validate | Valid OpenAPI 3.0.3, loaded and validated by kin-openapi | ADR-7, §2.1 | — |
 | S2-T202 | OpenAPI against the SRS | Contract | Compare paths, bodies, codes with §2.1.1 – §2.1.4, the error body and its codes included | Three operations; every field with the stated type and requiredness; codes 200, 401, 404, 409, 422; amounts are strings; `securitySchemes` Basic | §2.1.1 – §2.1.4 | — |
 | S2-T203 | Responses match the schema | `card-auth` running | Every response of phases 4 and 5 is validated against the OpenAPI in the test harness | No schema violation | §2.1 | — |
 | S2-T204 | `CardService` in the proto | `proto/cas/v1/card_service.proto` | `buf lint`; read the descriptors | Six methods: `RegisterCard`, `UpdateCard`, `GetCard`, `ListCards`, `GetAuthorization`, `ListAuthorizations`; `STANDARD` rules pass; no `GetReconciliationReport` | SRS — Core §2.1.1, §2.1.5 | — |
 | S2-T205 | Additive change only | Image of C1 | `buf breaking --against` the image of `v0.2.0` | Passes: nothing of C1 changed | C1 summary §4 | — |
 | S2-T206 | New frozen image | st3 commit | `make proto-freeze`; after the commit `make proto-check` | New `proto/frozen/cas_v1.json`; `proto-check` green; the old image is in git history | QA gate st3 | — |
 | S2-T207 | Freeze guard still works | New image | On a throw-away copy remove a field of `CardService`; add one | `buf breaking` fails; the image comparison fails | C1-T205 | — |
+| S2-T208 | OpenAPI freeze guard | `api/openapi/frozen/card-auth.yaml` | On a throw-away copy: remove a field of a response; remove an operation; add an optional request field. Run `make openapi-check` | Fails in all three cases: `oasdiff breaking` for the removals, the byte comparison with the frozen copy for the addition | Owner's decision D-6 | — |
 
 ### Phase 3 — Schema, roles, card registry (st4)
 

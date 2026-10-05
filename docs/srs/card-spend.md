@@ -116,11 +116,12 @@ sequenceDiagram
 
 ##### Common rules
 
+- **Contract:** `api/openapi/card-auth.yaml`, OpenAPI 3.0.3. Frozen copy: `api/openapi/frozen/card-auth.yaml`; `make openapi-check` compares the two and runs `oasdiff breaking`. A change of the contract needs the owner's decision and an update of this SRS first.
 - **Base path:** `/v1`. Media type: `application/json`. A request body above 16 KiB is `422`.
 - **Authorization:** HTTP Basic. One credential pair maps to one tenant. The pair is issued by `casctl processor issue <tenant>` and printed once: username = `key_id`, 12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters. Stored in `api_credentials` with `kind = PROCESSOR_BASIC` and the SHA-256 hash of the password bytes; verified in constant time (SRS — Core UC-105). `casctl processor list` and `revoke` as for service tokens. mTLS and request signing are out of MVP.
 - **TLS:** terminated in front of the service by the deployment (Deployment Guide). `card-auth` itself listens on plain HTTP; S2 runs it locally that way.
 - **Amounts:** fiat amounts are decimal strings; token amounts are base-unit integer strings.
-- **Validation, every endpoint:** `auth_id` and `return_id` are 1 to 64 printable characters; `amount` is a decimal string greater than 0 with at most 4 decimal places and no exponent; `currency` is three upper-case letters; unknown fields are ignored.
+- **Validation, every endpoint:** `auth_id` and `return_id` are 1 to 64 printable ASCII characters (0x20–0x7E); `amount` is a decimal string greater than 0 with at most 4 decimal places and no exponent; `currency` is three upper-case letters; unknown fields are ignored.
 - **Normalized request:** the body compared for idempotency is the canonical form of the request: keys sorted, no whitespace, `amount` as a decimal without trailing zeros, `currency` upper case, `merchant` canonicalized the same way. `request_hash` is the SHA-256 of that form, so `"25.40"` and `"25.4"` and a different key order are the same request.
 - **HTTP status codes:**
 
@@ -195,7 +196,7 @@ See Common rules.
   "auth_id": "9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11",
   "decision": "DECLINED",
   "status": "DECLINED",
-  "reason": "INSUFFICIENT_ALLOWANCE"
+  "decline_reason": "INSUFFICIENT_ALLOWANCE"
 }
 ```
 
@@ -204,7 +205,7 @@ See Common rules.
 | auth_id | String | Yes | Echo of the request. | — |
 | decision | Enum | Yes | `APPROVED` or `DECLINED`. | `APPROVED` |
 | status | Enum | Yes | Authorization state, §2.3.1. | `APPROVED` |
-| reason | Enum | If declined | Decline reason, table below. | `TIMEOUT` |
+| decline_reason | Enum | If declined | Decline reason, table below. The same name in the status query, the gRPC API and the database. | `TIMEOUT` |
 | token | String | If approved | Funding token symbol. | `USDC` |
 | token_amount | String, integer | If approved | Debited amount in base units. | `29866387` |
 | quote | Object | If approved | Rate and buffer used. `rate` = USD per one unit of `currency`; absent for USD. | — |
@@ -333,7 +334,8 @@ See Common rules.
 
 - `amount`, `currency`, `token_amount`, `tx_hash` and `quote` are absent when the authorization has none: a tombstone (UC-2, step 3) answers `200` with `status: DECLINED`, `decline_reason: REVERSED_BEFORE_AUTH`, `debited_amount: "0"`, the return that created it in `returns` with status `NOTHING_TO_RETURN`, and a history of one record.
 - `decline_reason` is returned for `DECLINED` and `TIMED_OUT`.
-- Another tenant's `auth_id` is `404`.
+- Another tenant's `auth_id` is `404`; so is an `auth_id` in the path that breaks the validation rules: no such authorization can exist.
+- `token` is returned with `token_amount`, as in the authorization response.
 
 #### 2.1.5 Contract interface
 

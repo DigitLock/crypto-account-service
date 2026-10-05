@@ -9,10 +9,13 @@ FROZEN_IMAGE := proto/frozen/cas_v1.json
 MIGRATE_VERSION := 4.20.1
 SQLC_VERSION := 1.31.1
 GETH_VERSION := v1.17.7
+OASDIFF_VERSION := v1.33.0
+OPENAPI := api/openapi/card-auth.yaml
+FROZEN_OPENAPI := api/openapi/frozen/card-auth.yaml
 
 .PHONY: build run casctl fmt vet test check secrets tools proto proto-check proto-freeze buf-version plugins \
 	migrate-tool migrate-url migrate-up migrate-down migrate-version sqlc-tool sqlc-generate sqlc-check \
-	bindings bindings-check
+	bindings bindings-check openapi-check openapi-freeze
 
 build:
 	go build -o bin/ ./cmd/...
@@ -76,6 +79,19 @@ proto-check: buf-version plugins
 proto-freeze: buf-version
 	@mkdir -p $(dir $(FROZEN_IMAGE))
 	buf build --exclude-source-info -o $(FROZEN_IMAGE)
+
+# Contract of the processor API of card-auth. It is frozen like the proto: the source must equal the frozen copy,
+# and oasdiff of OASDIFF_VERSION reports any breaking change of the source against the frozen copy.
+
+openapi-check:
+	go run github.com/oasdiff/oasdiff@$(OASDIFF_VERSION) breaking --fail-on WARN $(FROZEN_OPENAPI) $(OPENAPI)
+	@cmp -s $(OPENAPI) $(FROZEN_OPENAPI) || \
+		{ echo "The OpenAPI contract differs from $(FROZEN_OPENAPI). It is frozen: a change needs the owner's decision (make openapi-freeze)."; exit 1; }
+
+# Writes the frozen OpenAPI copy. Run only by the owner's decision: it accepts the current contract.
+openapi-freeze:
+	@mkdir -p $(dir $(FROZEN_OPENAPI))
+	cp $(OPENAPI) $(FROZEN_OPENAPI)
 
 # Database migrations with the migrate CLI on MIGRATE_DATABASE_URL (owner role). The URL is never printed:
 # the commands are not echoed, and the output is filtered because migrate quotes a malformed URL.

@@ -1,0 +1,300 @@
+// Contract of Crypto Account Service: cards and authorizations.
+// Specification: docs/srs/core.md §2.1.1, §2.1.5; docs/srs/card-spend.md §2.1.4.
+syntax = "proto3";
+
+package cas.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/DigitLock/crypto-account-service/internal/grpc/pb/cas/v1;casv1";
+
+// CardService manages the card registry of the caller's tenant and reads its authorizations.
+// Every method needs the metadata `authorization: Bearer <service token>`.
+service CardService {
+  // RegisterCard binds a card_ref to a wallet connection. The same request repeated returns the existing card.
+  // ALREADY_EXISTS for a known card_ref with a different body.
+  // FAILED_PRECONDITION reason: CONNECTION_NOT_USABLE.
+  rpc RegisterCard(RegisterCardRequest) returns (RegisterCardResponse);
+  // UpdateCard changes the daily limit, or freezes or unfreezes a card. At least one optional field is required.
+  rpc UpdateCard(UpdateCardRequest) returns (UpdateCardResponse);
+  // GetCard returns one card.
+  rpc GetCard(GetCardRequest) returns (GetCardResponse);
+  // ListCards returns the cards of the tenant, ordered by creation time and card_ref.
+  rpc ListCards(ListCardsRequest) returns (ListCardsResponse);
+  // GetAuthorization returns one authorization with its returns and status history. A tombstone is returned too.
+  rpc GetAuthorization(GetAuthorizationRequest) returns (GetAuthorizationResponse);
+  // ListAuthorizations returns authorizations without returns and history, newest first.
+  rpc ListAuthorizations(ListAuthorizationsRequest) returns (ListAuthorizationsResponse);
+}
+
+// State of a card.
+enum CardStatus {
+  CARD_STATUS_UNSPECIFIED = 0;
+  // Authorizations are decided.
+  CARD_STATUS_ACTIVE = 1;
+  // Authorizations are declined with CARD_FROZEN.
+  CARD_STATUS_FROZEN = 2;
+}
+
+// State of an authorization (SRS — Card Spend §2.3.1).
+enum AuthorizationStatus {
+  AUTHORIZATION_STATUS_UNSPECIFIED = 0;
+  // Stored, checks running.
+  AUTHORIZATION_STATUS_RECEIVED = 1;
+  // Debit sent, decision pending.
+  AUTHORIZATION_STATUS_DEBIT_SUBMITTED = 2;
+  // Debit included or preconfirmed. The processor was told: approved.
+  AUTHORIZATION_STATUS_APPROVED = 3;
+  // Debit is final by the finality rule of the network.
+  AUTHORIZATION_STATUS_DEBIT_CONFIRMED = 4;
+  // No tokens moved. The processor was told: declined.
+  AUTHORIZATION_STATUS_DECLINED = 5;
+  // Decline sent at the deadline; debit outcome not known yet.
+  AUTHORIZATION_STATUS_TIMED_OUT = 6;
+  // Debit landed after the decline; automatic return in progress.
+  AUTHORIZATION_STATUS_LATE_DEBIT = 7;
+  // Late debit fully returned.
+  AUTHORIZATION_STATUS_LATE_DEBIT_REFUNDED = 8;
+  // Approved debit dropped and could not be repeated.
+  AUTHORIZATION_STATUS_DEBIT_LOST = 9;
+}
+
+// Reason of a decline (SRS — Card Spend §2.1.2).
+enum DeclineReason {
+  DECLINE_REASON_UNSPECIFIED = 0;
+  // card_ref is unknown for the tenant.
+  DECLINE_REASON_CARD_NOT_FOUND = 1;
+  // Card status is FROZEN.
+  DECLINE_REASON_CARD_FROZEN = 2;
+  // The contract is paused.
+  DECLINE_REASON_PROGRAM_PAUSED = 3;
+  // No rate pair for the currency.
+  DECLINE_REASON_CURRENCY_NOT_SUPPORTED = 4;
+  // CRS is unavailable, answers after the rate budget, or marks the rate outdated.
+  DECLINE_REASON_RATE_UNAVAILABLE = 5;
+  // Card daily limit or wallet daily limit would be exceeded.
+  DECLINE_REASON_LIMIT_EXCEEDED = 6;
+  // Wallet balance below the token amount.
+  DECLINE_REASON_INSUFFICIENT_FUNDS = 7;
+  // Allowance below the token amount.
+  DECLINE_REASON_INSUFFICIENT_ALLOWANCE = 8;
+  // RPC error or read timeout.
+  DECLINE_REASON_CHAIN_UNAVAILABLE = 9;
+  // The debit transaction reverted.
+  DECLINE_REASON_DEBIT_REVERTED = 10;
+  // No decision by the deadline.
+  DECLINE_REASON_TIMEOUT = 11;
+  // A reversal for this auth_id arrived first.
+  DECLINE_REASON_REVERSED_BEFORE_AUTH = 12;
+  // Unexpected failure.
+  DECLINE_REASON_INTERNAL_ERROR = 13;
+}
+
+// Type of a return (SRS — Card Spend §2.4 returns).
+enum ReturnType {
+  RETURN_TYPE_UNSPECIFIED = 0;
+  // Reversal requested by the processor.
+  RETURN_TYPE_REVERSAL = 1;
+  // Refund requested by the processor.
+  RETURN_TYPE_REFUND = 2;
+  // Automatic return of a debit that landed after the decline.
+  RETURN_TYPE_LATE_DEBIT = 3;
+}
+
+// State of a return (SRS — Card Spend §2.3.2).
+enum ReturnStatus {
+  RETURN_STATUS_UNSPECIFIED = 0;
+  // Stored; waiting for the tracker.
+  RETURN_STATUS_ACCEPTED = 1;
+  // Refund transaction sent.
+  RETURN_STATUS_SUBMITTED = 2;
+  // Refund included or preconfirmed.
+  RETURN_STATUS_INCLUDED = 3;
+  // Refund is final.
+  RETURN_STATUS_CONFIRMED = 4;
+  // Last attempt failed; will be repeated.
+  RETURN_STATUS_RETRYING = 5;
+  // Nothing to return.
+  RETURN_STATUS_NOTHING_TO_RETURN = 6;
+}
+
+// A processor card reference bound to a wallet connection (SRS — Core §2.1.5).
+message Card {
+  // Opaque card reference from the processor, 1 to 64 characters. No card number.
+  string card_ref = 1;
+  // Owner of the bound connection.
+  string owner_ref = 2;
+  // UUID of the bound wallet connection.
+  string connection_id = 3;
+  // Address of the bound wallet in EIP-55 form.
+  string wallet_address = 4;
+  // ACTIVE or FROZEN.
+  CardStatus status = 5;
+  // Card daily limit in base units of the funding token: an integer string.
+  string daily_limit = 6;
+  // When the card was registered.
+  google.protobuf.Timestamp created_at = 7;
+  // When the card was last changed.
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// Rate and buffer of a quote.
+message Quote {
+  // USD per one unit of the authorization currency, a decimal string. Empty for USD.
+  string rate = 1;
+  // Buffer in basis points.
+  int32 buffer_bps = 2;
+}
+
+// One reversal, refund or automatic return of an authorization.
+message Return {
+  // Processor's ID, or a generated ID for LATE_DEBIT.
+  string return_id = 1;
+  // REVERSAL, REFUND or LATE_DEBIT.
+  ReturnType type = 2;
+  // State of the return.
+  ReturnStatus status = 3;
+  // Tokens to return, base units: an integer string.
+  string token_amount = 4;
+  // Refund transaction hash. Empty before the first send and for NOTHING_TO_RETURN.
+  string tx_hash = 5;
+  // When the return was accepted.
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// One status change of an authorization.
+message StatusChange {
+  // The new status.
+  AuthorizationStatus status = 1;
+  // Decline reason or cause. Empty when none.
+  string reason = 2;
+  // When the status changed.
+  google.protobuf.Timestamp at = 3;
+}
+
+// A card authorization (SRS — Card Spend §2.1.4). amount, currency, token, token_amount, quote and tx_hash are
+// empty when the authorization has none, as in a tombstone.
+message Authorization {
+  // Processor's authorization ID.
+  string auth_id = 1;
+  // State of the authorization.
+  AuthorizationStatus status = 2;
+  // Set for DECLINED and TIMED_OUT.
+  DeclineReason decline_reason = 3;
+  // Amount in currency, a decimal string.
+  string amount = 4;
+  // ISO 4217 code of the authorization currency.
+  string currency = 5;
+  // Funding token symbol.
+  string token = 6;
+  // Quoted amount, base units: an integer string.
+  string token_amount = 7;
+  // Rate and buffer used. Absent when there was no quote.
+  Quote quote = 8;
+  // Tokens debited, base units: an integer string. `0` if none.
+  string debited_amount = 9;
+  // Sum of accepted returns, base units: an integer string.
+  string returned_amount = 10;
+  // Debit transaction hash.
+  string tx_hash = 11;
+  // Returns of this authorization. Empty in ListAuthorizations.
+  repeated Return returns = 12;
+  // Status changes in order. Empty in ListAuthorizations.
+  repeated StatusChange history = 13;
+  // Card reference of the request. Empty for a tombstone.
+  string card_ref = 14;
+  // When the request was received.
+  google.protobuf.Timestamp received_at = 15;
+  // When the decision was sent. Absent before the decision and for a tombstone.
+  google.protobuf.Timestamp decided_at = 16;
+}
+
+message RegisterCardRequest {
+  // Required, 1 to 64 characters. Unique per tenant.
+  string card_ref = 1;
+  // Required. Must equal the owner of the connection.
+  string owner_ref = 2;
+  // Required. UUID of an ACTIVE connection of kind EVM_WALLET.
+  string connection_id = 3;
+  // Required. Base-unit integer string ≥ 0, at most 78 digits.
+  string daily_limit = 4;
+}
+
+message RegisterCardResponse {
+  // The registered card.
+  Card card = 1;
+}
+
+message UpdateCardRequest {
+  // Required. The card to change.
+  string card_ref = 1;
+  // Optional. New daily limit: a base-unit integer string ≥ 0.
+  optional string daily_limit = 2;
+  // Optional. ACTIVE or FROZEN.
+  optional CardStatus status = 3;
+}
+
+message UpdateCardResponse {
+  // The card after the change.
+  Card card = 1;
+}
+
+message GetCardRequest {
+  // The card to read.
+  string card_ref = 1;
+}
+
+message GetCardResponse {
+  // The card.
+  Card card = 1;
+}
+
+message ListCardsRequest {
+  // Optional filter, at most 128 characters.
+  string owner_ref = 1;
+  // 100 when 0; at most 500.
+  int32 page_size = 2;
+  // `next_page_token` of the previous response.
+  string page_token = 3;
+}
+
+message ListCardsResponse {
+  // Cards of the page.
+  repeated Card cards = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+message GetAuthorizationRequest {
+  // The authorization to read.
+  string auth_id = 1;
+}
+
+message GetAuthorizationResponse {
+  // The authorization with its returns and history.
+  Authorization authorization = 1;
+}
+
+message ListAuthorizationsRequest {
+  // Optional filter.
+  string card_ref = 1;
+  // Optional filter: the owner of the card.
+  string owner_ref = 2;
+  // Optional filter. AUTHORIZATION_STATUS_UNSPECIFIED: no filter.
+  AuthorizationStatus status = 3;
+  // Optional, inclusive.
+  google.protobuf.Timestamp received_from = 4;
+  // Optional, exclusive.
+  google.protobuf.Timestamp received_to = 5;
+  // 100 when 0; at most 500.
+  int32 page_size = 6;
+  // `next_page_token` of the previous response.
+  string page_token = 7;
+}
+
+message ListAuthorizationsResponse {
+  // Authorizations of the page, without returns and history.
+  repeated Authorization authorizations = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}

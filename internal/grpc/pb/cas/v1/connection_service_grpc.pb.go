@@ -47,6 +47,7 @@ type ConnectionServiceClient interface {
 	// GetConnection returns one connection with the health of its streams.
 	GetConnection(ctx context.Context, in *GetConnectionRequest, opts ...grpc.CallOption) (*GetConnectionResponse, error)
 	// DeleteConnection removes a connection with its secret, cursors, snapshots and ledger entries.
+	// FAILED_PRECONDITION reason: CONNECTION_HAS_CARDS.
 	DeleteConnection(ctx context.Context, in *DeleteConnectionRequest, opts ...grpc.CallOption) (*DeleteConnectionResponse, error)
 	// TriggerSync makes every stream of a connection due now.
 	// RESOURCE_EXHAUSTED inside the cooldown. FAILED_PRECONDITION reason: CREDENTIALS_INVALID.
@@ -138,6 +139,7 @@ type ConnectionServiceServer interface {
 	// GetConnection returns one connection with the health of its streams.
 	GetConnection(context.Context, *GetConnectionRequest) (*GetConnectionResponse, error)
 	// DeleteConnection removes a connection with its secret, cursors, snapshots and ledger entries.
+	// FAILED_PRECONDITION reason: CONNECTION_HAS_CARDS.
 	DeleteConnection(context.Context, *DeleteConnectionRequest) (*DeleteConnectionResponse, error)
 	// TriggerSync makes every stream of a connection due now.
 	// RESOURCE_EXHAUSTED inside the cooldown. FAILED_PRECONDITION reason: CREDENTIALS_INVALID.

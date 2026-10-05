@@ -393,8 +393,9 @@ func tenantRows(t *testing.T, pool *pgxpool.Pool) string {
 	return s
 }
 
-// C1-T407 — Req: FR-105. Every method of every service of cas.v1, read from the descriptors, so that a
+// C1-T407 — Req: FR-105. Every method of the services of C1, read from the descriptors, so that a
 // method added later is covered. With a valid token a method must not answer UNAUTHENTICATED.
+// CardService of S2 (card_service.proto) is registered in st4 and covered there.
 func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 	e := setup(t)
 	e.tenant(t, "tenant-a")
@@ -404,6 +405,9 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 	_ = casv1.File_cas_v1_connection_service_proto
 	var methods []protoreflect.MethodDescriptor
 	protoregistry.GlobalFiles.RangeFilesByPackage("cas.v1", func(fd protoreflect.FileDescriptor) bool {
+		if fd.Path() == "cas/v1/card_service.proto" {
+			return true
+		}
 		for i := range fd.Services().Len() {
 			sd := fd.Services().Get(i)
 			for j := range sd.Methods().Len() {
