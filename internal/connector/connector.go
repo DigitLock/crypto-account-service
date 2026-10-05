@@ -80,8 +80,9 @@ type Stream struct {
 // Connector is a source adapter.
 type Connector interface {
 	Capabilities() Capabilities
-	// CheckAccount checks an exchange key or a wallet address on a source and returns the account.
-	CheckAccount(ctx context.Context, src Source, cred Credentials) (AccountInfo, error)
+	// CheckAccount checks an exchange key or a wallet address on a source and returns the account. A request
+	// to the source reserves its cost in lim first (FR-110). Used by CreateConnection and the periodic key check.
+	CheckAccount(ctx context.Context, src Source, cred Credentials, lim Limiter) (AccountInfo, error)
 	// Streams declares the streams of a connection of the account.
 	Streams(ctx context.Context, src Source, account AccountInfo) ([]Stream, error)
 	// Budgets declares the budgets of the rate limiter of a source. The engine builds one limiter per source.

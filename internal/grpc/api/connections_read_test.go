@@ -3,9 +3,11 @@
 package api_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -156,24 +158,23 @@ func TestT409_IsolationOfWrites(t *testing.T) {
 	}
 }
 
-// C1-T519 — Req: §2.1.1, FR-101. The stream health is set through the owner pool. Missing until st7: the
-// health written by a real sync.
+// C1-T519 — Req: §2.1.1, FR-101. The stream health is written by a real run of the engine: a success of
+// balances and a failure of ops.
 func TestT519_GetConnection(t *testing.T) {
 	e := setup(t)
 	a := e.caller(t, "tenant-a")
 	c := client(e.realServer(t))
 	id, k := createExchange(t, c, a, "owner-1")
 
-	lastSuccess := testNow.Add(-time.Minute)
 	// A marker that cannot occur by chance in the response: not hexadecimal, 32 random characters inside.
+	// A snapshot run does not move the cursor of balances.
 	marker := "cursor-marker-" + randomHex(t, 32) + "-end"
-	if _, err := e.owner.Exec(ctx, `UPDATE sync_cursors SET last_success_at = $2, consecutive_failures = 0,
-		cursor = jsonb_build_object('last_id', $3::text) WHERE connection_id = $1 AND stream = 'balances'`,
-		id, lastSuccess, marker); err != nil {
+	if _, err := e.owner.Exec(ctx, `UPDATE sync_cursors SET cursor = jsonb_build_object('last_id', $2::text)
+		WHERE connection_id = $1 AND stream = 'balances'`, id, marker); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.owner.Exec(ctx, `UPDATE sync_cursors SET last_error = 'rate limit of the source',
-		consecutive_failures = 2 WHERE connection_id = $1 AND stream = 'ops'`, id); err != nil {
+	e.fake.FailNext("ops", errors.New("fake: ops failed"))
+	if err := e.engine().RunPass(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,14 +197,15 @@ func TestT519_GetConnection(t *testing.T) {
 	}
 	balances, ops := streams[0], streams[1]
 	if balances.GetStream() != "balances" || balances.GetMode() != casv1.StreamMode_STREAM_MODE_INCREMENTAL ||
-		!balances.GetNextRunAt().AsTime().Equal(testNow) || !balances.GetLastSuccessAt().AsTime().Equal(lastSuccess) ||
-		balances.GetLastError() != "" || balances.GetConsecutiveFailures() != 0 {
-		t.Errorf("balances = %v", balances)
+		!balances.GetNextRunAt().AsTime().Equal(testNow.Add(15*time.Minute)) ||
+		!balances.GetLastSuccessAt().AsTime().Equal(testNow) || balances.GetLastError() != "" ||
+		balances.GetConsecutiveFailures() != 0 {
+		t.Errorf("balances = %v; want the success of the run", balances)
 	}
 	if ops.GetStream() != "ops" || ops.GetMode() != casv1.StreamMode_STREAM_MODE_BACKFILL ||
-		ops.GetLastSuccessAt() != nil || ops.GetLastError() != "rate limit of the source" ||
-		ops.GetConsecutiveFailures() != 2 {
-		t.Errorf("ops = %v", ops)
+		!ops.GetNextRunAt().AsTime().Equal(testNow.Add(30*time.Second)) || ops.GetLastSuccessAt() != nil ||
+		ops.GetLastError() != "fake: ops failed" || ops.GetConsecutiveFailures() != 1 {
+		t.Errorf("ops = %v; want the failure of the run", ops)
 	}
 	if text := resp.String(); strings.Contains(text, marker) || strings.Contains(text, "last_id") {
 		t.Error("the response contains the cursor")
@@ -497,5 +499,44 @@ func TestT526_ConnectAgainAfterDeletion(t *testing.T) {
 	}
 	if account != fake.AccountOf(k.apiKey) {
 		t.Errorf("account = %s", account)
+	}
+}
+
+// C1-T523 — Req: UC-104 step 3
+func TestT523_DeleteDuringASync(t *testing.T) {
+	e := setup(t)
+	a := e.caller(t, "tenant-a")
+	c := client(e.realServer(t))
+	id, _ := createExchange(t, c, a, "owner-1")
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	e.fake.SetBefore(func(ctx context.Context, call fake.Call) error {
+		if call.Kind == "page" {
+			close(entered)
+			<-release
+		}
+		return nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- e.engine().RunPass(ctx) }()
+	<-entered // the run is inside a page; its snapshot is stored already
+	if _, err := c.DeleteConnection(a.ctx, &casv1.DeleteConnectionRequest{ConnectionId: id}); err != nil {
+		t.Fatalf("delete during the sync: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	for table, n := range rowsOf(t, e, id) {
+		if n != 0 {
+			t.Errorf("%s holds %d rows of the deleted connection after the run", table, n)
+		}
+	}
+	if n := count(t, e, `SELECT count(*) FROM audit_log WHERE object_id = $1`, id); n != 2 {
+		t.Errorf("audit rows of the connection = %d, want CONNECTION_CREATED and CONNECTION_DELETED only", n)
+	}
+	if strings.Contains(e.log.String(), "cannot store") {
+		t.Errorf("the run logged a failure after the deletion:\n%s", e.log.String())
 	}
 }

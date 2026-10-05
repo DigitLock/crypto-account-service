@@ -112,7 +112,7 @@
 | C1-T505 | Source unknown or disabled | Common; one disabled source | Create on an unknown code; on the disabled source | `NOT_FOUND`; `FAILED_PRECONDITION` with `ErrorInfo` reason `SOURCE_DISABLED`, domain `cas` | UC-101 step 2, §2.1.1 | — |
 | C1-T506 | Key not read-only | Common; the fake reports a trade permission | `CreateConnection` | `FAILED_PRECONDITION / KEY_NOT_READ_ONLY`; no connection, no ciphertext | EC-101, FR-102 | — |
 | C1-T507 | Key rejected by the source | Common; the fake rejects the key | `CreateConnection` | `FAILED_PRECONDITION / KEY_INVALID`; nothing stored | UC-101 step 3 | — |
-| C1-T508 | Source unreachable at the key check | Common; the fake is unreachable; then it answers with a rate limit; then it fails in another way | `CreateConnection` | `UNAVAILABLE`; `UNAVAILABLE`; `INTERNAL`. Nothing stored | EC-104, UC-101 step 3 | — |
+| C1-T508 | Source unreachable at the key check | Common; the fake is unreachable; then it answers with a rate limit; then its budget is paused longer than the wait; then it fails in another way | `CreateConnection` | `UNAVAILABLE`; `UNAVAILABLE`; `UNAVAILABLE`; `INTERNAL`. Nothing stored | EC-104, UC-101 step 3, FR-110 | — |
 | C1-T509 | Permissions not reported | Common; the fake declares that it cannot read permissions | `CreateConnection` | Created with `["UNVERIFIED"]`; the audit record says so | EC-103, FR-117 | — |
 | C1-T510 | Same account again | Exchange connection | Create with another key of the same account | `ALREADY_EXISTS` | EC-102, FR-104 | — |
 | C1-T511 | Same account, concurrent requests | Common | Send the same `CreateConnection` from several goroutines | Exactly one succeeds; the others get `ALREADY_EXISTS` | FR-104 | — |

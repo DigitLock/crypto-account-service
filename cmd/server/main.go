@@ -22,8 +22,10 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/connector"
 	"github.com/DigitLock/crypto-account-service/internal/connector/evm"
 	"github.com/DigitLock/crypto-account-service/internal/connector/fake"
+	"github.com/DigitLock/crypto-account-service/internal/engine"
 	"github.com/DigitLock/crypto-account-service/internal/grpc/api"
 	"github.com/DigitLock/crypto-account-service/internal/health"
+	"github.com/DigitLock/crypto-account-service/internal/limiter"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
@@ -67,8 +69,10 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		return fmt.Errorf("listen on GRPC_PORT: %w", err)
 	}
 
+	// One registry for the metrics of the health port, the engine and the API.
+	metrics := health.NewRegistry()
 	healthSrv := &http.Server{
-		Handler: health.NewHandler(logger, health.NewRegistry(),
+		Handler: health.NewHandler(logger, metrics,
 			health.DatabasePing{DB: pool},
 			health.SchemaVersion{DB: pool, Want: migrations.Latest()},
 		),
@@ -81,14 +85,40 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		return err
 	}
 	connectors := newConnectors(cfg)
+	reporter := engine.NewPromReporter(metrics)
+	// One limiter per source for the whole process (FR-110): the engine and CreateConnection share it.
+	limiters := limiter.NewSet(limiter.SystemClock{}, reporter.BudgetWaited)
 	grpcSrv := api.NewServer(api.Deps{
 		Credentials: repository.New(pool),
-		Connections: registry.NewConnections(pool, v, connectors, time.Now),
+		Connections: registry.NewConnections(pool, v, connectors, limiters, time.Now, keyCheckWait),
 		Logger:      logger,
+		Metrics:     metrics,
+	})
+	eng := engine.New(engine.Config{
+		MaxPagesPerRun:   cfg.SyncMaxPagesPerRun,
+		FailureThreshold: cfg.SyncFailureThreshold,
+		BackoffInitial:   cfg.SyncBackoffInitial,
+		BackoffMax:       cfg.SyncBackoffMax,
+		Workers:          cfg.SyncWorkers,
+		Tick:             cfg.SyncTick,
+		LockRetry:        cfg.SyncLockRetry,
+		KeyCheckInterval: cfg.KeyCheckInterval,
+	}, engine.Deps{
+		DB: pool, Vault: v, Connectors: connectors, Limiters: limiters, Locker: engine.PGLocker{Pool: pool},
+		Clock: limiter.SystemClock{}, Reporter: reporter, Logger: logger,
 	})
 
 	logger.Info("server starting", "config", cfg)
 	warnUnavailableSources(ctx, logger, pool, connectors)
+
+	// The engine runs next to the servers; its state is not part of /readyz.
+	engineCtx, stopEngine := context.WithCancel(context.Background())
+	defer stopEngine()
+	engineDone := make(chan struct{})
+	go func() {
+		defer close(engineDone)
+		_ = eng.Run(engineCtx)
+	}()
 
 	errc := make(chan error, 2)
 	go func() {
@@ -114,7 +144,8 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		logger.Error("server failed", "error", serveErr)
 	}
 
-	shutdownErr := shutdown(cfg.ShutdownTimeout, healthSrv, grpcSrv)
+	stopEngine()
+	shutdownErr := shutdown(cfg.ShutdownTimeout, healthSrv, grpcSrv, engineDone)
 	logger.Info("server stopped")
 	return errors.Join(serveErr, shutdownErr)
 }
@@ -155,8 +186,11 @@ func warnUnavailableSources(ctx context.Context, logger *slog.Logger, db reposit
 	}
 }
 
-// shutdown stops both servers within timeout: graceful first, then forced.
-func shutdown(timeout time.Duration, healthSrv *http.Server, grpcSrv *grpc.Server) error {
+// keyCheckWait bounds the wait of the key check of CreateConnection for the rate limiter (UC-101 step 3).
+const keyCheckWait = 10 * time.Second
+
+// shutdown stops both servers and waits for the engine, all within timeout: graceful first, then forced.
+func shutdown(timeout time.Duration, healthSrv *http.Server, grpcSrv *grpc.Server, engineDone <-chan struct{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -177,6 +211,11 @@ func shutdown(timeout time.Duration, healthSrv *http.Server, grpcSrv *grpc.Serve
 		grpcSrv.Stop()
 		<-grpcDone
 		err = errors.Join(err, errors.New("gRPC server: forced stop after SHUTDOWN_TIMEOUT"))
+	}
+	select {
+	case <-engineDone:
+	case <-ctx.Done():
+		err = errors.Join(err, errors.New("engine: its runs did not stop within SHUTDOWN_TIMEOUT"))
 	}
 	return err
 }

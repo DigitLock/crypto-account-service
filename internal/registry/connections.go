@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/DigitLock/crypto-account-service/internal/connector"
+	"github.com/DigitLock/crypto-account-service/internal/limiter"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
 )
@@ -88,12 +89,16 @@ type Connections struct {
 	db         DB
 	vault      vault.Vault
 	connectors *connector.Set
+	limiters   *limiter.Set
 	now        func() time.Time
+	checkWait  time.Duration
 }
 
-// NewConnections returns Connections. now is the clock; the logic never calls time.Now itself.
-func NewConnections(db DB, v vault.Vault, connectors *connector.Set, now func() time.Time) *Connections {
-	return &Connections{db: db, vault: v, connectors: connectors, now: now}
+// NewConnections returns Connections. limiters is the set of the process, shared with the engine; the key
+// check of Create waits for the limiter of its source at most checkWait. now is the clock; the logic never
+// calls time.Now itself.
+func NewConnections(db DB, v vault.Vault, connectors *connector.Set, limiters *limiter.Set, now func() time.Time, checkWait time.Duration) *Connections {
+	return &Connections{db: db, vault: v, connectors: connectors, limiters: limiters, now: now, checkWait: checkWait}
 }
 
 // Sources returns the available sources, ordered by code.
@@ -137,8 +142,12 @@ func (c *Connections) Create(ctx context.Context, in CreateInput) (Connection, e
 		return Connection{}, &InvalidArgumentError{Message: "source " + src.Code + " is an exchange: send exchange_key, not wallet"}
 	}
 
-	// Steps 3 and 5: the account check.
-	info, err := conn.CheckAccount(ctx, src, in.Credentials)
+	// Steps 3 and 5: the account check, through the limiter of the source with a bounded wait.
+	lim, err := c.limiters.For(src, conn)
+	if err != nil {
+		return Connection{}, fmt.Errorf("the limiter of the source: %w", err)
+	}
+	info, err := conn.CheckAccount(ctx, src, in.Credentials, lim.WithMaxWait(c.checkWait))
 	if err != nil {
 		return Connection{}, checkError(err)
 	}
@@ -251,7 +260,7 @@ func checkError(err error) error {
 		return ErrKeyInvalid
 	case errors.As(err, &notReadOnly):
 		return &KeyNotReadOnlyError{Permissions: notReadOnly.Permissions}
-	case errors.Is(err, connector.ErrUnreachable), errors.As(err, &rateLimit):
+	case errors.Is(err, connector.ErrUnreachable), errors.As(err, &rateLimit), errors.Is(err, limiter.ErrNoBudget):
 		return ErrUnavailable
 	case errors.As(err, &invalid):
 		return &InvalidArgumentError{Message: invalid.Message}

@@ -49,7 +49,9 @@ type Call struct {
 	// Kind is check, page or snapshot.
 	Kind       string
 	Connection string
-	Stream     string
+	// Account is the account of the key of a check call: AccountOf of the API key.
+	Account string
+	Stream  string
 	// Page is the index of the page the cursor pointed at.
 	Page int
 	// Reserved: the cost was reserved in the limiter before the request.
@@ -57,8 +59,9 @@ type Call struct {
 	Limiter  connector.Limiter
 }
 
-// BeforeFunc runs inside a page or snapshot call after its reservation; an error is the result of the call.
-type BeforeFunc func(ctx context.Context, kind, stream string, page int) error
+// BeforeFunc runs inside a check, page or snapshot call after its reservation; an error is the result of
+// the call.
+type BeforeFunc func(ctx context.Context, call Call) error
 
 // Default budget of the fake: requests per minute; each call costs 1.
 const DefaultBudget = "requests"
@@ -127,13 +130,21 @@ func (c *Connector) Capabilities() connector.Capabilities {
 	return c.caps
 }
 
-// CheckAccount implements connector.Connector.
-func (c *Connector) CheckAccount(ctx context.Context, src connector.Source, cred connector.Credentials) (connector.AccountInfo, error) {
+// CheckAccount implements connector.Connector: it reserves the cost of the stream name "check" in lim, records
+// the call and runs the scripted check.
+func (c *Connector) CheckAccount(ctx context.Context, src connector.Source, cred connector.Credentials, lim connector.Limiter) (connector.AccountInfo, error) {
+	conn := connector.Connection{Source: src, Key: cred.ExchangeKey, Limiter: lim}
+	if err := c.request(ctx, conn, "check", CheckStream, 0); err != nil {
+		return connector.AccountInfo{}, err
+	}
 	c.mu.Lock()
 	check := c.check
 	c.mu.Unlock()
 	return check(ctx, src, cred)
 }
+
+// CheckStream is the name under which the costs, failures and calls of the account check are kept.
+const CheckStream = "check"
 
 // Streams implements connector.Connector.
 func (c *Connector) Streams(context.Context, connector.Source, connector.AccountInfo) ([]connector.Stream, error) {
@@ -212,7 +223,7 @@ func (c *Connector) FailNext(stream string, errs ...error) {
 	c.failures[stream] = append(c.failures[stream], errs...)
 }
 
-// SetBefore scripts a hook that runs in every page and snapshot call.
+// SetBefore scripts a hook that runs in every check, page and snapshot call.
 func (c *Connector) SetBefore(fn BeforeFunc) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -305,7 +316,11 @@ func (c *Connector) request(ctx context.Context, conn connector.Connection, kind
 	}
 
 	c.mu.Lock()
-	c.calls = append(c.calls, Call{Kind: kind, Connection: conn.ID, Stream: stream, Page: page, Reserved: reserved, Limiter: conn.Limiter})
+	call := Call{Kind: kind, Connection: conn.ID, Stream: stream, Page: page, Reserved: reserved, Limiter: conn.Limiter}
+	if conn.Key != nil {
+		call.Account = AccountOf(conn.Key.APIKey.Value())
+	}
+	c.calls = append(c.calls, call)
 	before := c.before
 	var fail error
 	if q := c.failures[stream]; len(q) > 0 {
@@ -314,7 +329,7 @@ func (c *Connector) request(ctx context.Context, conn connector.Connection, kind
 	c.mu.Unlock()
 
 	if before != nil {
-		if err := before(ctx, kind, stream, page); err != nil {
+		if err := before(ctx, call); err != nil {
 			return err
 		}
 	}
@@ -342,13 +357,15 @@ func NewEntry(externalID, leg, typ, direction, asset, amount string, at time.Tim
 	}
 }
 
-// DefaultHistory is the fixed fictitious history of the stream ops: a deposit and a trade with base, quote
-// and fee legs, then a withdrawal.
+// DefaultHistory is the fixed fictitious history of the stream ops: a BTC and a USDT deposit and a trade with
+// base, quote and fee legs, then a withdrawal. It adds up to DefaultSnapshot: BTC 0.5 + 0.0125 = 0.5125;
+// USDT 2494 - 1493.75 - 1.49375 - 100 = 898.75625.
 func DefaultHistory() [][]connector.Entry {
 	t := DefaultTime
 	return [][]connector.Entry{
 		{
 			NewEntry("dep-1", "SINGLE", "DEPOSIT", "IN", "BTC", "0.5", t),
+			NewEntry("dep-2", "SINGLE", "DEPOSIT", "IN", "USDT", "2494", t.Add(30*time.Minute)),
 			NewEntry("trade-1", "BASE", "TRADE", "IN", "BTC", "0.0125", t.Add(time.Hour)),
 			NewEntry("trade-1", "QUOTE", "TRADE", "OUT", "USDT", "1493.75", t.Add(time.Hour)),
 			NewEntry("trade-1", "FEE", "FEE", "OUT", "USDT", "1.49375", t.Add(time.Hour)),

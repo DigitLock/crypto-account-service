@@ -26,7 +26,7 @@ var eip55Vectors = []string{
 func TestT529_ValidChecksum(t *testing.T) {
 	c := New([]uint64{31337})
 	for _, v := range eip55Vectors {
-		info, err := c.CheckAccount(context.Background(), connector.Source{}, connector.Credentials{WalletAddress: v})
+		info, err := c.CheckAccount(context.Background(), connector.Source{}, connector.Credentials{WalletAddress: v}, nil)
 		if err != nil {
 			t.Errorf("%s: %v", v, err)
 			continue
@@ -57,7 +57,7 @@ func TestT534_NoNetworkCall(t *testing.T) {
 	}
 
 	if _, err := New(nil).CheckAccount(context.Background(), connector.Source{},
-		connector.Credentials{WalletAddress: eip55Vectors[4]}); err != nil {
+		connector.Credentials{WalletAddress: eip55Vectors[4]}, nil); err != nil {
 		t.Errorf("address check: %v", err)
 	}
 }

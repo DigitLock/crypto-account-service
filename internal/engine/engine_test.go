@@ -181,8 +181,8 @@ func TestT606_ResumeAfterAStop(t *testing.T) {
 	id, _ := h.create(t)
 
 	runCtx, cancel := context.WithCancel(ctx)
-	h.fake.SetBefore(func(ctx context.Context, kind, stream string, page int) error {
-		if stream == "ops" && page == 2 {
+	h.fake.SetBefore(func(ctx context.Context, call fake.Call) error {
+		if call.Stream == "ops" && call.Page == 2 {
 			cancel()
 			return ctx.Err()
 		}
@@ -591,10 +591,14 @@ func TestT618_DegradedAndRecovered(t *testing.T) {
 
 // C1-T619 — Req: EC-108, FR-117
 func TestT619_KeyRejectedDuringASync(t *testing.T) {
-	for name, keyErr := range map[string]error{
-		"key rejected":      fmt.Errorf("fake: %w", connector.ErrKeyRejected),
-		"key not read-only": &connector.KeyNotReadOnlyError{Permissions: []string{"TRADE"}},
+	for name, c := range map[string]struct {
+		err    error
+		reason string
+	}{
+		"key rejected":      {fmt.Errorf("fake: %w", connector.ErrKeyRejected), "key_rejected"},
+		"key not read-only": {&connector.KeyNotReadOnlyError{Permissions: []string{"TRADE"}}, "key_not_read_only"},
 	} {
+		keyErr, reason := c.err, c.reason
 		t.Run(name, func(t *testing.T) {
 			h := setup(t)
 			id, _ := h.create(t)
@@ -609,8 +613,9 @@ func TestT619_KeyRejectedDuringASync(t *testing.T) {
 				t.Errorf("ops = %+v, want the failure stored", c)
 			}
 			if n := h.count(t, `SELECT count(*) FROM audit_log WHERE object_id = $1 AND action = 'CREDENTIALS_INVALID'
-				AND credential_id IS NULL`, id.String()); n != 1 {
-				t.Errorf("CREDENTIALS_INVALID audit rows = %d, want 1", n)
+				AND credential_id IS NULL AND details->>'reason' = $2 AND details->>'stream' = 'ops'`,
+				id.String(), reason); n != 1 {
+				t.Errorf("CREDENTIALS_INVALID audit rows with reason %s = %d, want 1", reason, n)
 			}
 			calls := len(h.fakeCalls(id))
 			h.clock.Advance(3 * time.Hour)
@@ -629,16 +634,21 @@ func TestT622_OneLimiterPerSource(t *testing.T) {
 	h.create(t)
 	h.pass(t, h.engine(h.server))
 
-	calls := h.fake.Calls()
+	var calls []fake.Call
+	for _, c := range h.fake.Calls() {
+		if !c.Reserved {
+			t.Errorf("a %s call of %s carried no reservation", c.Kind, c.Stream)
+		}
+		if c.Kind != "check" { // the key check of CreateConnection passes a bounded view of the same limiter
+			calls = append(calls, c)
+		}
+	}
 	if len(calls) != 6 {
-		t.Fatalf("calls = %d, want 3 per connection", len(calls))
+		t.Fatalf("page and snapshot calls = %d, want 3 per connection", len(calls))
 	}
 	connections := map[string]bool{}
 	for _, c := range calls {
 		connections[c.Connection] = true
-		if !c.Reserved {
-			t.Errorf("a %s call of %s carried no reservation", c.Kind, c.Stream)
-		}
 		if c.Limiter != calls[0].Limiter {
 			t.Error("the two connections of one source draw on different limiters")
 		}
@@ -680,6 +690,7 @@ func TestT624_RateLimitExceeded(t *testing.T) {
 	})
 	h.fake.SetCost("balances", fake.Cost{Budget: "balances-budget", Units: 1})
 	h.fake.SetCost("ops", fake.Cost{Budget: "ops-budget", Units: 1})
+	h.fake.SetCost(fake.CheckStream, fake.Cost{Budget: "balances-budget", Units: 1})
 	h.fake.FailNext("ops", &connector.RateLimitError{Budget: "ops-budget", Pause: 60 * time.Second})
 	id, _ := h.create(t)
 	e := h.engine(h.server)

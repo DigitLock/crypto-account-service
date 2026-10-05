@@ -6,9 +6,11 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -41,17 +43,51 @@ type Deps struct {
 	// Connections manages the connections of a tenant.
 	Connections *registry.Connections
 	Logger      *slog.Logger
+	// Metrics receives grpc_request_seconds (SRS — Core §2.5.1); nil keeps it unregistered.
+	Metrics prometheus.Registerer
 }
 
 // NewServer returns the gRPC server of cas.v1: authentication on every unary call, the services, and
 // server reflection, which needs no token. cmd/server and the tests use it.
 func NewServer(deps Deps, opts ...grpc.ServerOption) *grpc.Server {
-	opts = append([]grpc.ServerOption{grpc.ChainUnaryInterceptor(UnaryAuth(deps.Credentials, deps.Logger))}, opts...)
+	latency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "grpc_request_seconds", Help: "API latency by method: the service and the method.",
+		Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.3, 0.5, 1, 2.5, 5},
+	}, []string{"method"})
+	if deps.Metrics != nil {
+		deps.Metrics.MustRegister(latency)
+	}
+	// The latency interceptor runs first, so requests refused by authentication are measured too.
+	opts = append([]grpc.ServerOption{grpc.ChainUnaryInterceptor(
+		UnaryLatency(latency), UnaryAuth(deps.Credentials, deps.Logger),
+	)}, opts...)
 	srv := grpc.NewServer(opts...)
 	casv1.RegisterConnectionServiceServer(srv, &connectionService{conns: deps.Connections, logger: deps.Logger})
 	casv1.RegisterAccountDataServiceServer(srv, casv1.UnimplementedAccountDataServiceServer{})
 	reflection.Register(srv)
 	return srv
+}
+
+// UnaryLatency observes the duration of every unary call in grpc_request_seconds{method}.
+func UnaryLatency(latency *prometheus.HistogramVec) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		start := time.Now()
+		resp, err := handler(ctx, req)
+		latency.WithLabelValues(MethodLabel(info.FullMethod)).Observe(time.Since(start).Seconds())
+		return resp, err
+	}
+}
+
+// MethodLabel turns "/cas.v1.ConnectionService/ListSources" into "ConnectionService/ListSources".
+func MethodLabel(fullMethod string) string {
+	service, method, ok := strings.Cut(strings.TrimPrefix(fullMethod, "/"), "/")
+	if !ok {
+		return fullMethod
+	}
+	if i := strings.LastIndex(service, "."); i >= 0 {
+		service = service[i+1:]
+	}
+	return service + "/" + method
 }
 
 type ctxKey int

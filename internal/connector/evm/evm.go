@@ -35,8 +35,9 @@ func (c *Connector) AllowsChain(chainID uint64) bool { return c.allowed[chainID]
 // Capabilities: a wallet has no key and no permissions.
 func (c *Connector) Capabilities() connector.Capabilities { return connector.Capabilities{} }
 
-// CheckAccount checks a wallet address (UC-301) and returns it in EIP-55 form, without permissions.
-func (c *Connector) CheckAccount(_ context.Context, _ connector.Source, cred connector.Credentials) (connector.AccountInfo, error) {
+// CheckAccount checks a wallet address (UC-301) and returns it in EIP-55 form, without permissions. The check
+// is local: no request, so no reservation in the limiter.
+func (c *Connector) CheckAccount(_ context.Context, _ connector.Source, cred connector.Credentials, _ connector.Limiter) (connector.AccountInfo, error) {
 	if cred.ExchangeKey != nil {
 		return connector.AccountInfo{}, &connector.InvalidInputError{Message: "an EVM network takes a wallet, not an exchange key"}
 	}

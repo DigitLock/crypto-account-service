@@ -168,17 +168,38 @@ Methods with non-obvious rules are specified below. The others follow the common
 
 ##### Connector contract
 
-What the engine expects from every connector (ADR-2). The Go types are fixed in the engine stage of C1 and recorded here as built.
+What the engine expects from every connector (ADR-2). The Go interface below is as built in C1, package `internal/connector`; the table gives the rules.
+
+```go
+type Connector interface {
+    Capabilities() Capabilities
+    CheckAccount(ctx context.Context, src Source, cred Credentials, lim Limiter) (AccountInfo, error)
+    Streams(ctx context.Context, src Source, account AccountInfo) ([]Stream, error)
+    Budgets(src Source) []Budget
+    FetchPage(ctx context.Context, conn Connection, stream string, mode Mode, cursor json.RawMessage) (Page, error)
+    FetchSnapshot(ctx context.Context, conn Connection) (Snapshot, error)
+}
+
+type Limiter interface {
+    Reserve(ctx context.Context, budget string, cost int) error
+    Pause(budget string, d time.Duration)
+}
+```
+
+- `Connection` carries the connection ID, the source, the account identity, the decrypted key when there is one and the limiter of the source.
+- `Page`: entries, next cursor, next mode, more pages. `Entry`: `external_id`, leg, type, direction, native asset, amount, `occurred_at`, raw record. `Snapshot`: time and balances. `Balance`: account type, native asset, free, locked.
+- Typed errors: `ErrKeyRejected`, `ErrUnreachable`, `KeyNotReadOnlyError`, `RateLimitError`, `InvalidInputError`.
+- ADR-2 shows the first sketch of this interface; the names differ, the decision does not.
 
 | Topic | Rule |
 |---|---|
 | Registration | A connector is registered under the code of its source. The EVM connector is one for every source of kind `EVM`. A source without a connector is not available |
 | Capabilities | Flags declared by the connector. C1 reads one: key permissions readable (EC-103). A flag is added when the engine starts to use it |
-| Account check | Returns the account identity and, for a key, its permissions. Used by `CreateConnection` and by the periodic key check |
+| Account check | Returns the account identity and, for a key, its permissions. Used by `CreateConnection` and by the periodic key check; both pass the limiter of the source (FR-110) |
 | Streams | The connector declares the streams of a connection: name, family, interval, first mode, first cursor. It reads the interval from `sources.config` |
 | Page | One call returns entries, the next cursor, the mode and whether more pages follow. Only final records are returned |
 | Snapshot | One call returns all balances of the connection and their time, or fails as a whole. A balance has `free` and `locked` not negative, with at most 18 decimal places and 20 integer digits, a known account type, and appears once per account type and native asset. A snapshot that breaks this is refused as a whole (EC-117) |
-| Rate limiter | The engine creates one limiter per source from the budgets the connector declares and hands it to the connector. The connector reserves the cost before every request and reports the limit answers of the source. A budget is a number of cost units per time window: a reservation waits until the window allows it. A pause demanded by the source blocks its budget until the pause ends |
+| Rate limiter | The engine creates one limiter per source from the budgets the connector declares and hands it to the connector. The connector reserves the cost before every request and reports the limit answers of the source. A budget is a number of cost units per time window: a reservation waits until the window allows it. A window starts with the first reservation after the previous window ended. A pause demanded by the source blocks its budget until the pause ends |
 | Errors | Typed: key rejected, key not read-only, rate limit with the pause the source demands, source unreachable. Anything else is a plain failure of the run |
 | Entry | Positive amount with at most 18 decimal places and 20 integer digits; `external_id` not empty; a known type, leg and direction. An entry that breaks this fails its page (EC-117). Amounts travel as decimal strings and are stored as `NUMERIC`: no float and no exponent on the path |
 | Secrets | A connector gets the decrypted key only for the call and never puts it into an error or a log line. The engine removes the key and the secret from `last_error` and from its own log lines |
@@ -463,7 +484,7 @@ N/A — one request, one optional call to the source; the steps are in the algor
 |---|---|---|
 | 1 | Authenticate, resolve the tenant, validate | `UNAUTHENTICATED`, `INVALID_ARGUMENT` |
 | 2 | Check that the source exists and is available (Common rules) | `NOT_FOUND`, `FAILED_PRECONDITION / SOURCE_DISABLED` |
-| 3 | Exchange: call the connector's key check. It returns the account ID and the permissions. | Key rejected: `KEY_INVALID`. Source unreachable or rate limit: `UNAVAILABLE`. Another failure: `INTERNAL` |
+| 3 | Exchange: call the connector's key check. It returns the account ID and the permissions. The call waits for the rate limiter of the source at most 10 s | Key rejected: `KEY_INVALID`. Source unreachable, rate limit, or no budget within the wait: `UNAVAILABLE`. Another failure: `INTERNAL` |
 | 4 | Exchange: reject a key with any permission beyond reading | `KEY_NOT_READ_ONLY` |
 | 5 | Wallet: validate the address format and checksum | `INVALID_ARGUMENT` |
 | 6 | Check uniqueness of `(tenant, source, account)`: exchange account ID or wallet address | `ALREADY_EXISTS` |
@@ -949,14 +970,14 @@ One row per reconciliation run (SRS — Card Spend UC-4). Milestone S3.
 | Service | Metric name | Value | Alert | Description | Requestor |
 |---|---|---|---|---|---|
 | server | `sync_runs_total{source,stream,result}` | — | Failure share > 20% for 15 min | Sync runs by outcome: `success` or `failure`. `stream` is the stream family | BR-3 |
-| server | `sync_staleness_seconds{source}` | < `stale_after` | Above `stale_after` | Now minus the oldest `last_success_at` | BR-3 |
+| server | `sync_staleness_seconds{source}` | < `stale_after` | Above `stale_after` | Now minus the oldest `last_success_at` among the streams the engine runs. A stream that never succeeded is not counted; 0 without streams | BR-3 |
 | server | `connections{status}` | — | Any `CREDENTIALS_INVALID` | Connections by state | BR-1 |
 | server | `ledger_entries_inserted_total{source}` | — | — | New entries | BR-4 |
 | server | `ledger_duplicates_skipped_total{source}` | — | — | Records skipped by the idempotency key | BR-4 |
 | server | `unmapped_assets_total{source}` | 0 | Any | Native codes without an alias | BR-4 |
 | server | `rate_limit_wait_seconds{source}` | — | p95 > 30 s | Time spent waiting for the budget | BRD §9.2 |
 | server | `rate_limit_rejections_total{source}` | 0 | Any | "Rate limit exceeded" answers from the source | BRD §9.2 |
-| server | `grpc_request_seconds{method}` | Reads p95 ≤ 100 ms | p95 > 300 ms for 5 min | API latency | BR-3 |
+| server | `grpc_request_seconds{method}` | Reads p95 ≤ 100 ms | p95 > 300 ms for 5 min | API latency. `method` is the service and the method: `ConnectionService/ListSources` | BR-3 |
 
 #### 2.5.2 Alerts
 Conditions are in the Alert column above. Delivery channel: N/A — defined with the deployment.
@@ -997,7 +1018,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 ### 3.2 General Non-functional Requirements
 
 - **Parallel work:**
-  - the sync engine runs in one `server` instance at a time, guarded by a database advisory lock: one process owns the rate budgets of each source. An instance without the lock serves the API and tries to take the lock every `SYNC_LOCK_RETRY`;
+  - the sync engine runs in one `server` instance at a time, guarded by a database advisory lock: one process owns the rate budgets of each source. An instance without the lock serves the API and tries to take the lock every `SYNC_LOCK_RETRY`. An instance that loses the lock stops its runs and tries again;
   - API instances are stateless and can be many. C1 runs one instance: §4, issue 5;
   - the ledger has one writer, so `seq` order equals commit order (FR-114): every transaction that writes ledger entries first takes one database lock, so the entries of different connections are committed one after another;
   - connections sync concurrently, at most `SYNC_WORKERS` at a time; the streams of one connection run one after another; a stream never runs twice at once.

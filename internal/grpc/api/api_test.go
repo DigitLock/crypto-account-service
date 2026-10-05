@@ -32,8 +32,10 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/connector"
 	"github.com/DigitLock/crypto-account-service/internal/connector/evm"
 	"github.com/DigitLock/crypto-account-service/internal/connector/fake"
+	"github.com/DigitLock/crypto-account-service/internal/engine"
 	"github.com/DigitLock/crypto-account-service/internal/grpc/api"
 	casv1 "github.com/DigitLock/crypto-account-service/internal/grpc/pb/cas/v1"
+	"github.com/DigitLock/crypto-account-service/internal/limiter"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 	"github.com/DigitLock/crypto-account-service/internal/testdb"
@@ -71,6 +73,47 @@ type env struct {
 	vault     *vault.Envelope
 	masterKey []byte
 	now       time.Time
+	limiters  *limiter.Set
+}
+
+// nopReporter discards what the engine reports.
+type nopReporter struct{}
+
+func (nopReporter) RunFinished(string, string, bool)   {}
+func (nopReporter) EntriesInserted(string, int)        {}
+func (nopReporter) DuplicatesSkipped(string, int)      {}
+func (nopReporter) UnmappedAsset(string, string)       {}
+func (nopReporter) BudgetWaited(string, time.Duration) {}
+func (nopReporter) RateLimited(string)                 {}
+func (nopReporter) Connections(map[string]int)         {}
+func (nopReporter) Staleness(map[string]time.Duration) {}
+
+// engine is an engine on the pool of cas_server with the clock, connectors and limiters of the tests.
+func (e *env) engine() *engine.Engine {
+	return engine.New(engine.Config{
+		MaxPagesPerRun: 20, FailureThreshold: 5, BackoffInitial: 30 * time.Second, BackoffMax: time.Hour,
+		Workers: 4, Tick: time.Second, LockRetry: 10 * time.Second, KeyCheckInterval: 24 * time.Hour,
+	}, engine.Deps{
+		DB: e.server, Vault: e.vault, Connectors: e.connectors(), Limiters: e.limiters,
+		Clock: testClock{e}, Reporter: nopReporter{}, Logger: e.logger,
+	})
+}
+
+// keyCheckWait is the bounded wait of the key check for the limiter in these tests.
+const keyCheckWait = 50 * time.Millisecond
+
+// testClock is the clock of the limiters and the engine in these tests: it shows e.now and moves only when
+// a test sets e.now, so a reservation that must wait ends with its context.
+type testClock struct{ e *env }
+
+func (c testClock) Now() time.Time { return c.e.now }
+
+func (c testClock) Wait(ctx context.Context, until time.Time) error {
+	if !c.Now().Before(until) {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // testNow is the fake clock of the tests.
@@ -85,6 +128,7 @@ func setup(t *testing.T) *env {
 	e.logger = slog.New(slog.NewJSONHandler(e.log, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	e.fake = fake.New()
 	e.now = testNow
+	e.limiters = limiter.NewSet(testClock{e}, nil)
 	e.masterKey = randomBytes(t, 32)
 	var err error
 	if e.vault, err = vault.New(e.masterKey, 1); err != nil {
@@ -161,7 +205,7 @@ func (e *env) connectors() *connector.Set {
 func (e *env) deps(db registry.DB) api.Deps {
 	return api.Deps{
 		Credentials: repository.New(e.server),
-		Connections: registry.NewConnections(db, e.vault, e.connectors(), func() time.Time { return e.now }),
+		Connections: registry.NewConnections(db, e.vault, e.connectors(), e.limiters, func() time.Time { return e.now }, keyCheckWait),
 		Logger:      e.logger,
 	}
 }

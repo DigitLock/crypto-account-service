@@ -7,6 +7,7 @@ package limiter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -134,4 +135,64 @@ func (l *Limiter) Pause(name string, d time.Duration) {
 	if until := l.clock.Now().Add(d); until.After(b.pausedUntil) {
 		b.pausedUntil = until
 	}
+}
+
+// ErrNoBudget: a bounded reservation found no budget within its wait.
+var ErrNoBudget = errors.New("limiter: no budget within the wait")
+
+// WithMaxWait returns the limiter with every reservation bounded to d of waiting (UC-101 step 3).
+func (l *Limiter) WithMaxWait(d time.Duration) connector.Limiter {
+	return boundedLimiter{l: l, max: d}
+}
+
+type boundedLimiter struct {
+	l   *Limiter
+	max time.Duration
+}
+
+func (b boundedLimiter) Reserve(ctx context.Context, budget string, cost int) error {
+	waitCtx, cancel := context.WithTimeout(ctx, b.max)
+	defer cancel()
+	err := b.l.Reserve(waitCtx, budget, cost)
+	if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+		return ErrNoBudget
+	}
+	return err
+}
+
+func (b boundedLimiter) Pause(budget string, d time.Duration) { b.l.Pause(budget, d) }
+
+// Set holds one limiter per source for the whole process (FR-110). The engine and the account check of
+// CreateConnection draw on the same limiters.
+type Set struct {
+	clock  Clock
+	onWait func(source string, d time.Duration)
+
+	mu       sync.Mutex
+	limiters map[string]*Limiter
+}
+
+// NewSet returns an empty set. onWait, when not nil, is told how long a reservation of a source waited.
+func NewSet(clock Clock, onWait func(source string, d time.Duration)) *Set {
+	return &Set{clock: clock, onWait: onWait, limiters: map[string]*Limiter{}}
+}
+
+// For returns the limiter of a source, built on first use from the budgets its connector declares.
+func (s *Set) For(src connector.Source, conn connector.Connector) (*Limiter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if l, ok := s.limiters[src.Code]; ok {
+		return l, nil
+	}
+	var onWait func(time.Duration)
+	if s.onWait != nil {
+		code := src.Code
+		onWait = func(d time.Duration) { s.onWait(code, d) }
+	}
+	l, err := New(conn.Budgets(src), s.clock, onWait)
+	if err != nil {
+		return nil, err
+	}
+	s.limiters[src.Code] = l
+	return l, nil
 }

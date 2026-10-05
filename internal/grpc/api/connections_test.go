@@ -418,17 +418,36 @@ func TestT508_SourceUnreachable(t *testing.T) {
 	a := e.caller(t, "tenant-a")
 	c := client(e.realServer(t))
 
+	pauseBudget := func() {
+		// The budget of the source is paused longer than the bounded wait of the key check.
+		e.fake.Reset()
+		lim, err := e.limiters.For(connector.Source{Code: fake.Code}, e.fake)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lim.Pause(fake.DefaultBudget, time.Hour)
+	}
+	endPause := func(err error) func() {
+		return func() {
+			e.now = e.now.Add(2 * time.Hour)
+			e.fake.SetCheckResult(connector.AccountInfo{}, err)
+		}
+	}
+	script := func(err error) func() {
+		return func() { e.fake.SetCheckResult(connector.AccountInfo{}, err) }
+	}
 	for _, step := range []struct {
-		name string
-		err  error
-		want codes.Code
+		name    string
+		prepare func()
+		want    codes.Code
 	}{
-		{"unreachable", fmt.Errorf("dial: %w", connector.ErrUnreachable), codes.Unavailable},
-		{"rate limit", &connector.RateLimitError{Pause: time.Minute}, codes.Unavailable},
-		{"other failure", errors.New("fake: unexpected answer"), codes.Internal},
-		{"invalid input", &connector.InvalidInputError{Message: "the key does not suit the source"}, codes.InvalidArgument},
+		{"unreachable", script(fmt.Errorf("dial: %w", connector.ErrUnreachable)), codes.Unavailable},
+		{"rate limit", script(&connector.RateLimitError{Pause: time.Minute}), codes.Unavailable},
+		{"budget paused longer than the wait", pauseBudget, codes.Unavailable},
+		{"other failure", endPause(errors.New("fake: unexpected answer")), codes.Internal},
+		{"invalid input", script(&connector.InvalidInputError{Message: "the key does not suit the source"}), codes.InvalidArgument},
 	} {
-		e.fake.SetCheckResult(connector.AccountInfo{}, step.err)
+		step.prepare()
 		_, err := c.CreateConnection(a.ctx, exchangeRequest("owner-1", newKey(t)))
 		assertCode(t, step.name, err, step.want)
 	}
@@ -659,7 +678,7 @@ func TestT517_FingerprintOnlyInTheAPI(t *testing.T) {
 	}
 }
 
-// C1-T518 — Req: FR-103, handoff §4. Creation and its failures. Missing until st7: a sync and a key check.
+// C1-T518 — Req: FR-103, handoff §4. Creation, a sync, a key check and their failures.
 func TestT518_NothingSecretInTheLogs(t *testing.T) {
 	e := setup(t)
 	a := e.caller(t, "tenant-a")
@@ -683,9 +702,33 @@ func TestT518_NothingSecretInTheLogs(t *testing.T) {
 	run(failing, e.fake.Reset)
 	run(c, func() { e.fake.SetCheckResult(connector.AccountInfo{}, &connector.RateLimitError{Pause: time.Second}) })
 
+	// A sync and a key check of the connection created first; the failures quote its key and secret.
+	created := keys[0]
+	e.fake.Reset()
+	eng := e.engine()
+	pass := func() {
+		t.Helper()
+		if err := eng.RunPass(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pass()
+	e.fake.FailNext("ops", fmt.Errorf("fake: refused key %s with secret %s", created.apiKey, created.apiSecret))
+	if _, err := e.owner.Exec(ctx, `UPDATE sync_cursors SET next_run_at = $1`, e.now); err != nil {
+		t.Fatal(err)
+	}
+	pass()
+	e.now = e.now.Add(24 * time.Hour)
+	e.fake.FailNext(fake.CheckStream, fmt.Errorf("fake: check of key %s with secret %s failed", created.apiKey, created.apiSecret))
+	pass()
+	e.now = e.now.Add(time.Hour)
+	pass()
+
 	out := e.log.String()
-	if !strings.Contains(out, "create connection failed") {
-		t.Fatal("no failure was logged: the test does not exercise the log")
+	for _, logged := range []string{"create connection failed", "sync run failed", "key check failed"} {
+		if !strings.Contains(out, logged) {
+			t.Fatalf("%q was not logged: the test does not exercise it", logged)
+		}
 	}
 	for _, k := range keys {
 		if strings.Contains(out, k.apiKey) || strings.Contains(out, k.apiSecret) {

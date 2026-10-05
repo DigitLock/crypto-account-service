@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -26,6 +27,7 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/engine"
 	"github.com/DigitLock/crypto-account-service/internal/grpc/api"
 	casv1 "github.com/DigitLock/crypto-account-service/internal/grpc/pb/cas/v1"
+	"github.com/DigitLock/crypto-account-service/internal/limiter"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 	"github.com/DigitLock/crypto-account-service/internal/testdb"
@@ -89,6 +91,13 @@ func (c *fakeClock) Set(t time.Time) {
 
 func (c *fakeClock) Advance(d time.Duration) { c.Set(c.Now().Add(d)) }
 
+// waiterCount returns how many waiters wait on the clock.
+func (c *fakeClock) waiterCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.waiters)
+}
+
 // earliestWaiter returns the earliest wake-up time of a waiter.
 func (c *fakeClock) earliestWaiter() (time.Time, bool) {
 	c.mu.Lock()
@@ -111,6 +120,8 @@ type recorder struct {
 	unmapped    []string
 	waited      time.Duration
 	rateLimited int
+	connections map[string]int
+	staleness   map[string]time.Duration
 }
 
 func (r *recorder) RunFinished(source, family string, success bool) {
@@ -153,6 +164,18 @@ func (r *recorder) RateLimited(string) {
 	r.mu.Unlock()
 }
 
+func (r *recorder) Connections(byStatus map[string]int) {
+	r.mu.Lock()
+	r.connections = byStatus
+	r.mu.Unlock()
+}
+
+func (r *recorder) Staleness(bySource map[string]time.Duration) {
+	r.mu.Lock()
+	r.staleness = bySource
+	r.mu.Unlock()
+}
+
 func (r *recorder) snapshot() recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -161,7 +184,7 @@ func (r *recorder) snapshot() recorder {
 		runs[k] = v
 	}
 	return recorder{runs: runs, inserted: r.inserted, skipped: r.skipped, unmapped: append([]string(nil), r.unmapped...),
-		waited: r.waited, rateLimited: r.rateLimited}
+		waited: r.waited, rateLimited: r.rateLimited, connections: r.connections, staleness: r.staleness}
 }
 
 // syncBuffer is the log sink of the engine.
@@ -189,6 +212,7 @@ type harness struct {
 	conns         *registry.Connections
 	fake          *fake.Connector
 	set           *connector.Set
+	limiters      *limiter.Set
 	vault         *vault.Envelope
 	clock         *fakeClock
 	rec           *recorder
@@ -229,15 +253,20 @@ func setup(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	h.logger = slog.New(slog.NewJSONHandler(h.log, nil))
-	h.conns = registry.NewConnections(h.server, h.vault, h.set, h.clock.Now)
-	h.cfg = engine.Config{MaxPagesPerRun: 20, FailureThreshold: 5, BackoffInitial: 30 * time.Second, BackoffMax: time.Hour}
+	h.limiters = limiter.NewSet(h.clock, h.rec.BudgetWaited)
+	h.conns = registry.NewConnections(h.server, h.vault, h.set, h.limiters, h.clock.Now, 50*time.Millisecond)
+	h.cfg = engine.Config{
+		MaxPagesPerRun: 20, FailureThreshold: 5, BackoffInitial: 30 * time.Second, BackoffMax: time.Hour,
+		Workers: 4, Tick: time.Second, LockRetry: 10 * time.Second, KeyCheckInterval: 24 * time.Hour,
+	}
 	return h
 }
 
 // engine returns a new engine value on db, as cas_server.
 func (h *harness) engine(db engine.DB) *engine.Engine {
 	return engine.New(h.cfg, engine.Deps{
-		DB: db, Vault: h.vault, Connectors: h.set, Clock: h.clock, Reporter: h.rec, Logger: h.logger,
+		DB: db, Vault: h.vault, Connectors: h.set, Limiters: h.limiters, Locker: engine.PGLocker{Pool: h.server},
+		Clock: h.clock, Reporter: h.rec, Logger: h.logger,
 	})
 }
 
@@ -413,7 +442,13 @@ func (h *harness) drive(t *testing.T, fn func() error) int {
 // apiClient is the gRPC API of cmd/server on the same database and connections, as tenant-a.
 func (h *harness) apiClient(t *testing.T) (casv1.ConnectionServiceClient, context.Context) {
 	t.Helper()
-	srv := api.NewServer(api.Deps{Credentials: repository.New(h.server), Connections: h.conns, Logger: h.logger})
+	return h.apiClientWithMetrics(t, nil)
+}
+
+// apiClientWithMetrics is apiClient with grpc_request_seconds registered in reg.
+func (h *harness) apiClientWithMetrics(t *testing.T, reg prometheus.Registerer) (casv1.ConnectionServiceClient, context.Context) {
+	t.Helper()
+	srv := api.NewServer(api.Deps{Credentials: repository.New(h.server), Connections: h.conns, Logger: h.logger, Metrics: reg})
 	lis := bufconn.Listen(1 << 20)
 	go func() { _ = srv.Serve(lis) }()
 	conn, err := grpc.NewClient("passthrough:///bufnet",

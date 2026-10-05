@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,26 +25,32 @@ import (
 type running struct {
 	client casv1.ConnectionServiceClient
 	logs   *syncBuffer
+	// stop ends the server and waits for run to return; the end of the test calls it too.
+	stop func()
 }
 
-// startServer runs the server with env until the end of the test.
+// startServer runs the server with env until stop or the end of the test.
 func startServer(t *testing.T, env map[string]string) running {
 	t.Helper()
 	logs := &syncBuffer{}
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(runCtx, getenvFrom(env), logs) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Errorf("run: %v", err)
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("run: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Error("run did not stop")
 			}
-		case <-time.After(10 * time.Second):
-			t.Error("run did not stop")
-		}
-	})
+		})
+	}
+	t.Cleanup(stop)
 	waitFor(t, "http://127.0.0.1:"+env["HEALTH_HTTP_PORT"]+"/healthz", 200)
 
 	conn, err := grpc.NewClient("127.0.0.1:"+env["GRPC_PORT"], grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -51,7 +58,7 @@ func startServer(t *testing.T, env map[string]string) running {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return running{client: casv1.NewConnectionServiceClient(conn), logs: logs}
+	return running{client: casv1.NewConnectionServiceClient(conn), logs: logs, stop: stop}
 }
 
 // databaseEnv is testEnv on the test database, as cas_server, with a tenant and its token.
@@ -180,4 +187,66 @@ func TestT536_FakeSourceBehindItsFlag(t *testing.T) {
 			t.Errorf("create on fake: %v", err)
 		}
 	})
+}
+
+// C1-T626 — Req: §3.2. Two servers through run on the test database, with real ticks of 100 ms.
+func TestT626_OneEngine(t *testing.T) {
+	envA, callCtx, reg := databaseEnv(t)
+	if _, err := reg.AddFakeSource(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]string{
+		"ENABLE_FAKE_SOURCE": "true", "SYNC_TICK": "100ms", "SYNC_LOCK_RETRY": "200ms", "LOG_LEVEL": "debug",
+	} {
+		envA[k] = v
+	}
+	envB := testEnv(t) // its own ports
+	for k, v := range envA {
+		if k != "GRPC_PORT" && k != "HEALTH_HTTP_PORT" {
+			envB[k] = v
+		}
+	}
+	a, b := startServer(t, envA), startServer(t, envB)
+	if _, err := a.client.CreateConnection(callCtx, &casv1.CreateConnectionRequest{
+		OwnerRef: "owner-1", Source: "fake",
+		Credential: &casv1.CreateConnectionRequest_ExchangeKey{ExchangeKey: &casv1.ExchangeKey{
+			ApiKey: randomHex(t, 32), ApiSecret: randomHex(t, 64),
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runs := func(r running) bool { return strings.Contains(r.logs.String(), `"msg":"sync run finished"`) }
+	holds := func(r running) bool { return strings.Contains(r.logs.String(), `"msg":"engine lock taken"`) }
+	waitUntil(t, "one server runs the streams", 5*time.Second, func() bool { return runs(a) || runs(b) })
+	holder, other := a, b
+	if runs(b) {
+		holder, other = b, a
+	}
+	if holds(other) || runs(other) {
+		t.Fatalf("both servers took the engine lock or ran streams")
+	}
+	if _, err := other.client.ListSources(callCtx, &casv1.ListSourcesRequest{}); err != nil {
+		t.Errorf("the server without the lock does not serve the API: %v", err)
+	}
+
+	holder.stop()
+	waitUntil(t, "the other server takes the lock within SYNC_LOCK_RETRY", 2*time.Second, func() bool { return holds(other) })
+	if _, err := testdb.Open(t).Exec(context.Background(), `UPDATE sync_cursors SET next_run_at = now()`); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the other server runs the streams", 2*time.Second, func() bool { return runs(other) })
+}
+
+// waitUntil polls cond every 10 ms until within.
+func waitUntil(t *testing.T, what string, within time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s did not happen within %v", what, within)
 }

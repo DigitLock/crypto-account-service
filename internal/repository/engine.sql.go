@@ -31,6 +31,54 @@ func (q *Queries) AnyStreamOverThreshold(ctx context.Context, arg AnyStreamOverT
 	return column_1, err
 }
 
+const countConnectionsByStatus = `-- name: CountConnectionsByStatus :many
+SELECT status, count(*) AS n
+FROM connections
+GROUP BY status
+`
+
+type CountConnectionsByStatusRow struct {
+	Status string
+	N      int64
+}
+
+func (q *Queries) CountConnectionsByStatus(ctx context.Context) ([]CountConnectionsByStatusRow, error) {
+	rows, err := q.db.Query(ctx, countConnectionsByStatus)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountConnectionsByStatusRow{}
+	for rows.Next() {
+		var i CountConnectionsByStatusRow
+		if err := rows.Scan(&i.Status, &i.N); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const engineLockHeld = `-- name: EngineLockHeld :one
+SELECT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_locks
+    WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid() AND objsubid = 1
+      AND classid = ($1::bigint >> 32)::oid
+      AND objid = ($1::bigint & 4294967295)::oid
+)::bool
+`
+
+// Whether this session still holds the engine lock.
+func (q *Queries) EngineLockHeld(ctx context.Context, key int64) (bool, error) {
+	row := q.db.QueryRow(ctx, engineLockHeld, key)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getStreamCursor = `-- name: GetStreamCursor :one
 SELECT mode, cursor
 FROM sync_cursors
@@ -93,6 +141,151 @@ func (q *Queries) GetSyncConnection(ctx context.Context, id uuid.UUID) (GetSyncC
 	return i, err
 }
 
+const insertMissingSyncCursor = `-- name: InsertMissingSyncCursor :execrows
+INSERT INTO sync_cursors (connection_id, stream, mode, cursor, next_run_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (connection_id, stream) DO NOTHING
+`
+
+type InsertMissingSyncCursorParams struct {
+	ConnectionID uuid.UUID
+	Stream       string
+	Mode         string
+	Cursor       []byte
+	NextRunAt    time.Time
+}
+
+// The cursor of a stream declared later (FR-122): existing cursors are not changed.
+func (q *Queries) InsertMissingSyncCursor(ctx context.Context, arg InsertMissingSyncCursorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertMissingSyncCursor,
+		arg.ConnectionID,
+		arg.Stream,
+		arg.Mode,
+		arg.Cursor,
+		arg.NextRunAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const listConnectionsToSync = `-- name: ListConnectionsToSync :many
+SELECT c.id, c.external_account, s.code AS source_code, s.kind AS source_kind, s.enabled AS source_enabled,
+       s.config AS source_config
+FROM connections c
+JOIN sources s ON s.id = c.source_id
+WHERE c.status IN ('ACTIVE', 'DEGRADED')
+ORDER BY c.created_at, c.id
+`
+
+type ListConnectionsToSyncRow struct {
+	ID              uuid.UUID
+	ExternalAccount string
+	SourceCode      string
+	SourceKind      string
+	SourceEnabled   bool
+	SourceConfig    []byte
+}
+
+// Connections whose streams the engine may run; the source decides availability in Go.
+func (q *Queries) ListConnectionsToSync(ctx context.Context) ([]ListConnectionsToSyncRow, error) {
+	rows, err := q.db.Query(ctx, listConnectionsToSync)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectionsToSyncRow{}
+	for rows.Next() {
+		var i ListConnectionsToSyncRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExternalAccount,
+			&i.SourceCode,
+			&i.SourceKind,
+			&i.SourceEnabled,
+			&i.SourceConfig,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCursorStreams = `-- name: ListCursorStreams :many
+SELECT stream
+FROM sync_cursors
+WHERE connection_id = $1
+`
+
+func (q *Queries) ListCursorStreams(ctx context.Context, connectionID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listCursorStreams, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var stream string
+		if err := rows.Scan(&stream); err != nil {
+			return nil, err
+		}
+		items = append(items, stream)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueKeyChecks = `-- name: ListDueKeyChecks :many
+SELECT c.id, c.permissions_checked_at
+FROM connections c
+JOIN tenants t ON t.id = c.tenant_id
+WHERE c.credentials_enc IS NOT NULL
+  AND c.status IN ('ACTIVE', 'DEGRADED')
+  AND t.status = 'ACTIVE'
+  AND (c.permissions_checked_at IS NULL OR c.permissions_checked_at <= $1)
+  AND ($2::uuid IS NULL OR c.id = $2::uuid)
+ORDER BY c.permissions_checked_at NULLS FIRST, c.id
+`
+
+type ListDueKeyChecksParams struct {
+	DueBefore    *time.Time
+	ConnectionID *uuid.UUID
+}
+
+type ListDueKeyChecksRow struct {
+	ID                   uuid.UUID
+	PermissionsCheckedAt *time.Time
+}
+
+// Connections with a key whose permissions were last checked at or before due_before (FR-119); ACTIVE or
+// DEGRADED with an ACTIVE tenant. The availability of the source is decided in Go. Never a wallet: no key.
+func (q *Queries) ListDueKeyChecks(ctx context.Context, arg ListDueKeyChecksParams) ([]ListDueKeyChecksRow, error) {
+	rows, err := q.db.Query(ctx, listDueKeyChecks, arg.DueBefore, arg.ConnectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDueKeyChecksRow{}
+	for rows.Next() {
+		var i ListDueKeyChecksRow
+		if err := rows.Scan(&i.ID, &i.PermissionsCheckedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDueStreams = `-- name: ListDueStreams :many
 SELECT sc.connection_id, sc.stream, sc.next_run_at
 FROM sync_cursors sc
@@ -128,6 +321,56 @@ func (q *Queries) ListDueStreams(ctx context.Context, arg ListDueStreamsParams) 
 	for rows.Next() {
 		var i ListDueStreamsRow
 		if err := rows.Scan(&i.ConnectionID, &i.Stream, &i.NextRunAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSourceStaleness = `-- name: ListSourceStaleness :many
+SELECT s.code, s.kind, s.enabled, s.config,
+       count(sc.last_success_at) AS succeeded,
+       COALESCE(min(sc.last_success_at), $1::timestamptz)::timestamptz AS oldest
+FROM sources s
+LEFT JOIN connections c ON c.source_id = s.id AND c.status IN ('ACTIVE', 'DEGRADED')
+    AND c.tenant_id IN (SELECT id FROM tenants WHERE status = 'ACTIVE')
+LEFT JOIN sync_cursors sc ON sc.connection_id = c.id
+GROUP BY s.id, s.code, s.kind, s.enabled, s.config
+ORDER BY s.code
+`
+
+type ListSourceStalenessRow struct {
+	Code      string
+	Kind      string
+	Enabled   bool
+	Config    []byte
+	Succeeded int64
+	Oldest    time.Time
+}
+
+// Per source: the oldest last_success_at among the streams the engine runs (connections ACTIVE or DEGRADED
+// of an ACTIVE tenant), and how many of those streams ever succeeded. oldest is now when none did.
+func (q *Queries) ListSourceStaleness(ctx context.Context, now time.Time) ([]ListSourceStalenessRow, error) {
+	rows, err := q.db.Query(ctx, listSourceStaleness, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSourceStalenessRow{}
+	for rows.Next() {
+		var i ListSourceStalenessRow
+		if err := rows.Scan(
+			&i.Code,
+			&i.Kind,
+			&i.Enabled,
+			&i.Config,
+			&i.Succeeded,
+			&i.Oldest,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -247,4 +490,35 @@ type SetConnectionStatusParams struct {
 func (q *Queries) SetConnectionStatus(ctx context.Context, arg SetConnectionStatusParams) error {
 	_, err := q.db.Exec(ctx, setConnectionStatus, arg.Status, arg.ID)
 	return err
+}
+
+const setPermissionsChecked = `-- name: SetPermissionsChecked :execrows
+UPDATE connections
+SET permissions_checked_at = $1
+WHERE id = $2
+`
+
+type SetPermissionsCheckedParams struct {
+	CheckedAt *time.Time
+	ID        uuid.UUID
+}
+
+func (q *Queries) SetPermissionsChecked(ctx context.Context, arg SetPermissionsCheckedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setPermissionsChecked, arg.CheckedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const tryEngineLock = `-- name: TryEngineLock :one
+SELECT pg_try_advisory_lock($1::bigint)::bool
+`
+
+// The engine lock: a session-level advisory lock, held on one dedicated connection (SRS — Core §3.2).
+func (q *Queries) TryEngineLock(ctx context.Context, key int64) (bool, error) {
+	row := q.db.QueryRow(ctx, tryEngineLock, key)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
