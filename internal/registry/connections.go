@@ -92,13 +92,18 @@ type Connections struct {
 	limiters   *limiter.Set
 	now        func() time.Time
 	checkWait  time.Duration
+	// triggerCooldown is TRIGGER_SYNC_COOLDOWN.
+	triggerCooldown time.Duration
 }
 
 // NewConnections returns Connections. limiters is the set of the process, shared with the engine; the key
-// check of Create waits for the limiter of its source at most checkWait. now is the clock; the logic never
-// calls time.Now itself.
-func NewConnections(db DB, v vault.Vault, connectors *connector.Set, limiters *limiter.Set, now func() time.Time, checkWait time.Duration) *Connections {
-	return &Connections{db: db, vault: v, connectors: connectors, limiters: limiters, now: now, checkWait: checkWait}
+// check of Create waits for the limiter of its source at most checkWait; TriggerSync refuses a call inside
+// triggerCooldown after the last accepted one. now is the clock; the logic never calls time.Now itself.
+func NewConnections(db DB, v vault.Vault, connectors *connector.Set, limiters *limiter.Set, now func() time.Time, checkWait, triggerCooldown time.Duration) *Connections {
+	return &Connections{
+		db: db, vault: v, connectors: connectors, limiters: limiters, now: now,
+		checkWait: checkWait, triggerCooldown: triggerCooldown,
+	}
 }
 
 // Sources returns the available sources, ordered by code.

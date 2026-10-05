@@ -90,7 +90,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	limiters := limiter.NewSet(limiter.SystemClock{}, reporter.BudgetWaited)
 	grpcSrv := api.NewServer(api.Deps{
 		Credentials: repository.New(pool),
-		Connections: registry.NewConnections(pool, v, connectors, limiters, time.Now, keyCheckWait),
+		Connections: registry.NewConnections(pool, v, connectors, limiters, time.Now, keyCheckWait, cfg.TriggerSyncCooldown),
 		Logger:      logger,
 		Metrics:     metrics,
 	})

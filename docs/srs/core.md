@@ -164,7 +164,7 @@ Methods with non-obvious rules are specified below. The others follow the common
 | `ListConnections` | `owner_ref`, optional, ≤ 128; `page_size`, `page_token` | `connections[]`: the connection of §2.1.2; `next_page_token` | Order: `created_at`, `connection_id`. No stream health. `next_page_token` is empty on the last page |
 | `GetConnection` | `connection_id` | The connection of §2.1.2 and `streams[]`: `stream`, `mode`, `next_run_at`, `last_success_at`, `last_error`, `consecutive_failures` | Streams ordered by `stream`. The cursor is not returned |
 | `DeleteConnection` | `connection_id` | Empty | UC-104. A second call: `NOT_FOUND`. Audit `CONNECTION_DELETED` with the acting credential |
-| `TriggerSync` | `connection_id` | Empty | Every stream of the connection becomes due now; the engine runs them on its next tick. Inside `trigger_sync_cooldown` after the last accepted call: `RESOURCE_EXHAUSTED`; the time of that call is `connections.last_manual_sync_at`. Connection in `CREDENTIALS_INVALID`: `FAILED_PRECONDITION / CREDENTIALS_INVALID`. Connection without streams: accepted, nothing runs |
+| `TriggerSync` | `connection_id` | Empty | Every stream of the connection becomes due now; the engine runs them on its next tick. Inside `trigger_sync_cooldown` after the last accepted call: `RESOURCE_EXHAUSTED`; the time of that call is `connections.last_manual_sync_at`. Connection in `CREDENTIALS_INVALID`: `FAILED_PRECONDITION / CREDENTIALS_INVALID`; this is checked before the cooldown. Connection without streams: accepted, nothing runs. A stream that is running when the call arrives is not run again. No audit record |
 
 ##### Connector contract
 
@@ -303,6 +303,7 @@ See Common rules.
 
 - `owner_ref` and `connection_id` are alternatives (`oneof`). A request with neither: `INVALID_ARGUMENT`.
 - Unknown `owner_ref`: empty response. Unknown `connection_id`: `NOT_FOUND`.
+- `owner_ref` empty or longer than 128 characters: `INVALID_ARGUMENT`.
 
 ##### Response parameters
 ###### Response body example
@@ -331,6 +332,7 @@ See Common rules.
 | balances[].locked | String, decimal | Yes | Amount in orders or lock-up | `0` |
 
 - An asset absent from the snapshot has a zero balance.
+- The snapshot returned for a connection is its newest by import time. Order: connections as in `ListConnections`; balances by connection, account type, native asset.
 - A connection that has never synced appears in `connections` with `stale: true`, no `as_of` and no balances.
 - A snapshot may be empty: the connection then has `as_of` and no balances.
 - `stale` measures the age of the sync; `as_of` shows the age of the data.
@@ -410,6 +412,7 @@ See Common rules.
 - Entries are immutable. Only final operations of the source are imported (ADR-5).
 - The raw source payload is stored but not returned by this method.
 - No `page_token`: the consumer continues with `after_seq` = `last_seq`.
+- Filters combine with AND. A negative `after_seq`, an unknown value in `types`, or an `owner_ref` longer than 128 characters: `INVALID_ARGUMENT`.
 
 #### 2.1.5 RegisterCard
 
@@ -1012,6 +1015,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 | `key_check_interval` | Environment: `KEY_CHECK_INTERVAL` | 24 h | Period of the key permission re-check |
 | Fake source | Environment: `ENABLE_FAKE_SOURCE` | `false` | Registers the fake connector in a running `server`. Development and demo only |
 
+- Values of `sources.config` are JSON; a duration is a string such as `15m` or `1h`: `{"sync_interval": {"balances": "15m", "ops": "1h"}, "stale_after": "30m"}`. A missing or malformed value takes its default. The default interval of a family other than `balances` is 1 h. Connectors and the read API take these values from the same place, so a read never asks a connector.
 - `/healthz`: the process runs.
 - `/readyz`: the database answers and its schema version is the one the binary expects. The state of the engine is not part of readiness.
 

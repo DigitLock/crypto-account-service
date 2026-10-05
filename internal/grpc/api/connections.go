@@ -29,6 +29,7 @@ const (
 	reasonSourceDisabled       = "SOURCE_DISABLED"
 	reasonKeyInvalid           = "KEY_INVALID"
 	reasonKeyNotReadOnly       = "KEY_NOT_READ_ONLY"
+	reasonCredentialsInvalid   = "CREDENTIALS_INVALID"
 	fingerprintPrefix          = "…"
 	maxOwnerRef, maxLabel      = 128, 64
 	minAPIKey, maxAPIKey       = 16, 256
@@ -133,6 +134,11 @@ func (s *connectionService) errorStatus(ctx context.Context, op string, err erro
 		return status.Error(codes.AlreadyExists, "this account is already connected")
 	case errors.Is(err, registry.ErrConnectionNotFound):
 		return status.Error(codes.NotFound, "connection not found")
+	case errors.Is(err, registry.ErrCredentialsInvalid):
+		return withReason(codes.FailedPrecondition, "the connection is stopped: its key was rejected or is no longer read-only",
+			reasonCredentialsInvalid)
+	case errors.Is(err, registry.ErrCooldown):
+		return status.Error(codes.ResourceExhausted, "a manual sync was accepted recently: wait for the cooldown")
 	case ctx.Err() != nil:
 		return status.FromContextError(ctx.Err()).Err()
 	default:
@@ -276,6 +282,19 @@ func (s *connectionService) DeleteConnection(ctx context.Context, req *casv1.Del
 		return nil, s.errorStatus(ctx, "delete connection", err)
 	}
 	return &casv1.DeleteConnectionResponse{}, nil
+}
+
+// TriggerSync makes every stream of a connection of the tenant due now (FR-120).
+func (s *connectionService) TriggerSync(ctx context.Context, req *casv1.TriggerSyncRequest) (*casv1.TriggerSyncResponse, error) {
+	id, err := parseConnectionID(req.GetConnectionId())
+	if err != nil {
+		return nil, err
+	}
+	tenantID, _ := TenantID(ctx)
+	if err := s.conns.TriggerSync(ctx, tenantID, id); err != nil {
+		return nil, s.errorStatus(ctx, "trigger sync", err)
+	}
+	return &casv1.TriggerSyncResponse{}, nil
 }
 
 // parseConnectionID accepts a UUID in its 36-character form, either letter case.

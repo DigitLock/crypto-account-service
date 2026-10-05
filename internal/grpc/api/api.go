@@ -63,7 +63,7 @@ func NewServer(deps Deps, opts ...grpc.ServerOption) *grpc.Server {
 	)}, opts...)
 	srv := grpc.NewServer(opts...)
 	casv1.RegisterConnectionServiceServer(srv, &connectionService{conns: deps.Connections, logger: deps.Logger})
-	casv1.RegisterAccountDataServiceServer(srv, casv1.UnimplementedAccountDataServiceServer{})
+	casv1.RegisterAccountDataServiceServer(srv, &accountDataService{conns: deps.Connections, logger: deps.Logger})
 	reflection.Register(srv)
 	return srv
 }

@@ -84,7 +84,7 @@ func (c *Connector) Reset() {
 	defer c.mu.Unlock()
 	c.caps = connector.Capabilities{PermissionsReadable: true}
 	c.check = defaultCheck
-	c.streams = DefaultStreams()
+	c.streams = nil // not scripted: DefaultStreams with the intervals of sources.config
 	c.budgets = []connector.Budget{{Name: DefaultBudget, Units: 1200, Window: time.Minute}}
 	c.costs = map[string]Cost{}
 	c.pages = map[string][][]connector.Entry{"ops": DefaultHistory()}
@@ -147,18 +147,28 @@ func (c *Connector) CheckAccount(ctx context.Context, src connector.Source, cred
 const CheckStream = "check"
 
 // Streams implements connector.Connector.
-func (c *Connector) Streams(context.Context, connector.Source, connector.AccountInfo) ([]connector.Stream, error) {
+// Without a script the intervals come from sources.config of the source (connector.SyncInterval); scripted
+// streams are returned as they are.
+func (c *Connector) Streams(_ context.Context, src connector.Source, _ connector.AccountInfo) ([]connector.Stream, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]connector.Stream(nil), c.streams...), nil
+	if c.streams != nil {
+		return append([]connector.Stream(nil), c.streams...), nil
+	}
+	streams := DefaultStreams()
+	for i := range streams {
+		streams[i].Interval = connector.SyncInterval(src, streams[i].Family)
+	}
+	return streams, nil
 }
 
-// DefaultStreams are the streams of the fake without a script: balances, then ops, each with an empty cursor.
+// DefaultStreams are the streams of the fake without a script: balances, then ops, each with an empty cursor,
+// with the default intervals of SRS — Core §3.1.
 func DefaultStreams() []connector.Stream {
 	empty := json.RawMessage(`{}`)
 	return []connector.Stream{
-		{Name: "balances", Family: "balances", Interval: 15 * time.Minute, FirstMode: connector.ModeIncremental, FirstCursor: empty},
-		{Name: "ops", Family: "ops", Interval: time.Hour, FirstMode: connector.ModeBackfill, FirstCursor: empty},
+		{Name: "balances", Family: "balances", Interval: connector.DefaultBalanceInterval, FirstMode: connector.ModeIncremental, FirstCursor: empty},
+		{Name: "ops", Family: "ops", Interval: connector.DefaultLedgerInterval, FirstMode: connector.ModeBackfill, FirstCursor: empty},
 	}
 }
 

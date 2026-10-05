@@ -99,14 +99,15 @@ func addHistory(t *testing.T, e *env, who caller, id string) string {
 	return snapshotID
 }
 
-// C1-T408 — Req: FR-105, BR-13, G-6. GetConnection and ListConnections. Missing until st8: GetBalances and
-// ListLedgerEntries as tenant B.
+// C1-T408 — Req: FR-105, BR-13, G-6. Both tenants use the same owner_ref; both are synced.
 func TestT408_IsolationOfReads(t *testing.T) {
 	e := setup(t)
 	a, b := e.caller(t, "tenant-a"), e.caller(t, "tenant-b")
-	c := client(e.realServer(t))
+	conn := e.realServer(t)
+	c, ac := client(conn), accountClient(conn)
 	idA, _ := createExchange(t, c, a, "owner-1")
-	idB := createWallet(t, c, b, "owner-1")
+	idB, _ := createExchange(t, c, b, "owner-1")
+	e.pass(t)
 
 	_, err := c.GetConnection(b.ctx, &casv1.GetConnectionRequest{ConnectionId: idA})
 	assertCode(t, "B reads A's connection", err, codes.NotFound)
@@ -123,9 +124,32 @@ func TestT408_IsolationOfReads(t *testing.T) {
 	if got := listIDs(t, c, a, &casv1.ListConnectionsRequest{OwnerRef: "owner-1"}); !slices.Equal(got, []string{idA}) {
 		t.Errorf("A lists %v, want only %s", got, idA)
 	}
+
+	_, err = ac.GetBalances(b.ctx, byConnection(idA))
+	assertCode(t, "B reads the balances of A's connection", err, codes.NotFound)
+	balances := balancesBy(t, ac, b, byOwner("owner-1"))
+	if len(balances.GetConnections()) != 1 || balances.GetConnections()[0].GetConnectionId() != idB || len(balances.GetBalances()) == 0 {
+		t.Errorf("B's balances by owner_ref = %v, want its own connection only", balances)
+	}
+	for _, bal := range balances.GetBalances() {
+		if bal.GetConnectionId() != idB {
+			t.Errorf("B reads a balance of %s", bal.GetConnectionId())
+		}
+	}
+	entries := ledger(t, ac, b, &casv1.ListLedgerEntriesRequest{})
+	if len(entries) == 0 {
+		t.Error("B reads no entry of its own")
+	}
+	for _, en := range entries {
+		if en.GetConnectionId() != idB {
+			t.Errorf("B reads an entry of %s", en.GetConnectionId())
+		}
+	}
+	_, err = ac.ListLedgerEntries(b.ctx, &casv1.ListLedgerEntriesRequest{ConnectionId: idA})
+	assertCode(t, "B filters the ledger by A's connection", err, codes.NotFound)
 }
 
-// C1-T409 — Req: FR-105, BR-13. DeleteConnection. Missing until st8: TriggerSync as tenant B.
+// C1-T409 — Req: FR-105, BR-13. DeleteConnection and TriggerSync as tenant B.
 func TestT409_IsolationOfWrites(t *testing.T) {
 	e := setup(t)
 	a, b := e.caller(t, "tenant-a"), e.caller(t, "tenant-b")
@@ -149,6 +173,9 @@ func TestT409_IsolationOfWrites(t *testing.T) {
 
 	_, err := c.DeleteConnection(b.ctx, &casv1.DeleteConnectionRequest{ConnectionId: idA})
 	assertCode(t, "B deletes A's connection", err, codes.NotFound)
+	e.now = testNow.Add(time.Hour)
+	_, err = c.TriggerSync(b.ctx, &casv1.TriggerSyncRequest{ConnectionId: idA})
+	assertCode(t, "B triggers A's connection", err, codes.NotFound)
 	if after := snapshot(); after != before {
 		t.Errorf("A's rows or audit log changed:\nbefore %s\nafter  %s", before, after)
 	}
@@ -388,14 +415,18 @@ func TestT521_Delete(t *testing.T) {
 	})
 }
 
-// C1-T522 — Req: FR-118. GetConnection and ListConnections. Missing until st8: GetBalances and
-// ListLedgerEntries after the deletion.
+// C1-T522 — Req: FR-118
 func TestT522_NothingReadableAfterDeletion(t *testing.T) {
 	e := setup(t)
 	a := e.caller(t, "tenant-a")
-	c := client(e.realServer(t))
+	conn := e.realServer(t)
+	c, ac := client(conn), accountClient(conn)
 	id, _ := createExchange(t, c, a, "owner-1")
 	kept := createWallet(t, c, a, "owner-1")
+	e.pass(t) // the deleted connection had a snapshot and entries
+	if len(ledger(t, ac, a, &casv1.ListLedgerEntriesRequest{ConnectionId: id})) == 0 {
+		t.Fatal("no entries before the deletion: the test does not exercise the reads")
+	}
 	if _, err := c.DeleteConnection(a.ctx, &casv1.DeleteConnectionRequest{ConnectionId: id}); err != nil {
 		t.Fatal(err)
 	}
@@ -405,6 +436,17 @@ func TestT522_NothingReadableAfterDeletion(t *testing.T) {
 	if got := listIDs(t, c, a, &casv1.ListConnectionsRequest{}); !slices.Equal(got, []string{kept}) {
 		t.Errorf("list after delete = %v, want only %s", got, kept)
 	}
+	_, err = ac.GetBalances(a.ctx, byConnection(id))
+	assertCode(t, "balances after delete", err, codes.NotFound)
+	if resp := balancesBy(t, ac, a, byOwner("owner-1")); len(resp.GetConnections()) != 1 ||
+		resp.GetConnections()[0].GetConnectionId() != kept || len(resp.GetBalances()) != 0 {
+		t.Errorf("balances by owner after delete = %v, want only %s", resp, kept)
+	}
+	if entries := ledger(t, ac, a, &casv1.ListLedgerEntriesRequest{}); len(entries) != 0 {
+		t.Errorf("ledger after delete = %d entries, want none", len(entries))
+	}
+	_, err = ac.ListLedgerEntries(a.ctx, &casv1.ListLedgerEntriesRequest{ConnectionId: id})
+	assertCode(t, "ledger of the deleted connection", err, codes.NotFound)
 }
 
 // C1-T524 — Req: UC-104, §2.1.1

@@ -205,7 +205,7 @@ func (e *env) connectors() *connector.Set {
 func (e *env) deps(db registry.DB) api.Deps {
 	return api.Deps{
 		Credentials: repository.New(e.server),
-		Connections: registry.NewConnections(db, e.vault, e.connectors(), e.limiters, func() time.Time { return e.now }, keyCheckWait),
+		Connections: registry.NewConnections(db, e.vault, e.connectors(), e.limiters, func() time.Time { return e.now }, keyCheckWait, time.Minute),
 		Logger:      e.logger,
 	}
 }
@@ -429,8 +429,9 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 				return conn.Invoke(callCtx, name, in, out)
 			}
 			assertCode(t, "without a token", call(ctx), codes.Unauthenticated)
-			// With a valid token the method runs: any answer but UNAUTHENTICATED.
-			if err := call(bearer(tok.Value)); status.Code(err) == codes.Unauthenticated {
+			// With a valid token the method runs: any answer but UNAUTHENTICATED, and every method of cas.v1
+			// is implemented.
+			if err := call(bearer(tok.Value)); status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.Unimplemented {
 				t.Errorf("with a valid token: %v", err)
 			}
 		})

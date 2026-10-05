@@ -254,7 +254,7 @@ func setup(t *testing.T) *harness {
 	}
 	h.logger = slog.New(slog.NewJSONHandler(h.log, nil))
 	h.limiters = limiter.NewSet(h.clock, h.rec.BudgetWaited)
-	h.conns = registry.NewConnections(h.server, h.vault, h.set, h.limiters, h.clock.Now, 50*time.Millisecond)
+	h.conns = registry.NewConnections(h.server, h.vault, h.set, h.limiters, h.clock.Now, 50*time.Millisecond, time.Minute)
 	h.cfg = engine.Config{
 		MaxPagesPerRun: 20, FailureThreshold: 5, BackoffInitial: 30 * time.Second, BackoffMax: time.Hour,
 		Workers: 4, Tick: time.Second, LockRetry: 10 * time.Second, KeyCheckInterval: 24 * time.Hour,

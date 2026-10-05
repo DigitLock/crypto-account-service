@@ -206,8 +206,7 @@ func TestT621_KeyCheckScope(t *testing.T) {
 	}
 }
 
-// C1-T625 — Req: §3.2, UC-102. Instead of TriggerSync, which comes in st8, a stream of a running connection
-// is made due through the owner pool.
+// C1-T625 — Req: §3.2, UC-102
 func TestT625_ParallelWork(t *testing.T) {
 	h := setup(t)
 	var ids []uuid.UUID
@@ -264,9 +263,12 @@ func TestT625_ParallelWork(t *testing.T) {
 	stop := startRun(t, e)
 	eventually(t, "four connections in flight", func() bool { return inFlight() == 4 })
 
-	// A stream of a running connection becomes due and a new pass starts while the first still runs.
+	// TriggerSync on a running connection, then a new pass starts while the first still runs.
 	running := h.fake.Calls()[len(h.fake.Calls())-1].Connection
-	h.exec(t, `UPDATE sync_cursors SET next_run_at = $2 WHERE connection_id = $1 AND stream = 'ops'`, running, h.clock.Now())
+	api, callCtx := h.apiClient(t)
+	if _, err := api.TriggerSync(callCtx, &casv1.TriggerSyncRequest{ConnectionId: running}); err != nil {
+		t.Fatalf("TriggerSync during a run: %v", err)
+	}
 	until, _ := h.clock.earliestWaiter()
 	h.clock.Set(until)
 	time.Sleep(5 * time.Millisecond)
@@ -454,7 +456,7 @@ func TestT634_Metrics(t *testing.T) {
 	reg := health.NewRegistry()
 	prom := engine.NewPromReporter(reg)
 	h.limiters = limiter.NewSet(h.clock, prom.BudgetWaited)
-	h.conns = registry.NewConnections(h.server, h.vault, h.set, h.limiters, h.clock.Now, 50*time.Millisecond)
+	h.conns = registry.NewConnections(h.server, h.vault, h.set, h.limiters, h.clock.Now, 50*time.Millisecond, time.Minute)
 	h.fake.SetBudgets([]connector.Budget{{Name: fake.DefaultBudget, Units: 4, Window: time.Minute}})
 	e := h.engineWith(prom, h.logger)
 
