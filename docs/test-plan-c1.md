@@ -86,7 +86,7 @@
 
 | ID | Description | Preconditions | Steps | Expected | Req | Status |
 |---|---|---|---|---|---|---|
-| C1-T401 | Create a tenant | Migrated database | `casctl tenant create` twice with the same name | First: row with status `ACTIVE`. Second: refused, nothing stored | UC-105, EC-120 | — |
+| C1-T401 | Create a tenant | Migrated database | `casctl tenant create` twice with the same name; then with names outside the rule of UC-105 | First: row with status `ACTIVE`. Second: refused, nothing stored. Names outside the rule: refused, nothing stored | UC-105, EC-120 | — |
 | C1-T402 | Issue a token | A tenant | `casctl token issue`; read `api_credentials` | The token is printed once; the row holds `key_id` and a hash; the secret is nowhere in the database | UC-105, ADR-7, §3.2 | — |
 | C1-T403 | Valid token | Common | Call any method | The request runs in the tenant of the token | §2.1.1 | — |
 | C1-T404 | Bad token | Common | Call without metadata; without `Bearer`; with an unknown `key_id`; with a wrong secret | `UNAUTHENTICATED` with the same message in all four cases | §2.1.1 | — |

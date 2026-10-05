@@ -17,10 +17,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 
 	"github.com/DigitLock/crypto-account-service/internal/config"
+	"github.com/DigitLock/crypto-account-service/internal/grpc/api"
 	"github.com/DigitLock/crypto-account-service/internal/health"
+	"github.com/DigitLock/crypto-account-service/internal/repository"
 	"github.com/DigitLock/crypto-account-service/migrations"
 )
 
@@ -68,8 +69,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	grpcSrv := grpc.NewServer()
-	reflection.Register(grpcSrv)
+	grpcSrv := api.NewServer(repository.New(pool), logger)
 
 	logger.Info("server starting", "config", cfg)
 

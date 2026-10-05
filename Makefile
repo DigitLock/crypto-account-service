@@ -9,7 +9,7 @@ FROZEN_IMAGE := proto/frozen/cas_v1.json
 MIGRATE_VERSION := 4.20.1
 SQLC_VERSION := 1.31.1
 
-.PHONY: build run fmt vet test check secrets tools proto proto-check proto-freeze buf-version plugins \
+.PHONY: build run casctl fmt vet test check secrets tools proto proto-check proto-freeze buf-version plugins \
 	migrate-tool migrate-url migrate-up migrate-down migrate-version sqlc-tool sqlc-generate sqlc-check
 
 build:
@@ -17,6 +17,10 @@ build:
 
 run:
 	go run ./cmd/server
+
+# casctl on CASCTL_DATABASE_URL (owner role): make casctl ARGS="tenant list"
+casctl:
+	go run ./cmd/casctl $(ARGS)
 
 fmt:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt needs to run on:"; echo "$$out"; exit 1; fi

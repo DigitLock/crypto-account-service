@@ -106,7 +106,7 @@ sequenceDiagram
 ##### Common rules
 
 - **Protocol:** gRPC, package `cas.v1`. The `.proto` files in `proto/cas/v1/` are the contract; `buf lint` and `buf breaking` run in CI. The contract is frozen as the image `proto/frozen/cas_v1.json`: CI compares every build with it, and a change of the contract updates the image by the owner's decision.
-- **Transport:** plain gRPC inside the internal network, no TLS (ADR-7). Server reflection is on.
+- **Transport:** plain gRPC inside the internal network, no TLS (ADR-7). Server reflection is on and needs no token.
 - **Authorization:** metadata `authorization: Bearer <service token>`. The token resolves to one tenant. Format and handling of the token: UC-105.
 - **Tenant scope:** every request reads and writes only the caller's tenant. A resource of another tenant is reported as `NOT_FOUND`.
 - **Reads never call a source.** Balances and ledger come from the database; freshness is reported, not forced.
@@ -675,15 +675,15 @@ N/A — database operations only.
 
 | # | Operation | Rules |
 |---|---|---|
-| 1 | Create a tenant | `casctl tenant create`. The name is unique. Status `ACTIVE` |
+| 1 | Create a tenant | `casctl tenant create`. The name is unique: 1 to 64 characters of `a-z`, `0-9`, `-` and `_`, the first one a letter or a digit. Another name is refused and nothing is stored. Status `ACTIVE` |
 | 2 | Disable, enable a tenant | `casctl tenant disable`, `enable`: `ACTIVE` ↔ `DISABLED`. While disabled: every request is `UNAUTHENTICATED`, the sync of its connections stops, its data stays |
-| 3 | Issue a service token | `casctl token issue`. Format `cas_<key_id>_<secret>`: `key_id` is 12 hexadecimal characters, `secret` is 32 random bytes as 64 hexadecimal characters. The token is printed once; `api_credentials` keeps `key_id` and the SHA-256 hash of the secret |
+| 3 | Issue a service token | `casctl token issue`. Format `cas_<key_id>_<secret>`: `key_id` is 12 hexadecimal characters, `secret` is 32 random bytes as 64 hexadecimal characters. The token is printed once; `api_credentials` keeps `key_id` and the SHA-256 hash of the 32 secret bytes |
 | 4 | Revoke a token | `casctl token revoke`: sets `revoked_at`. The next request with the token is `UNAUTHENTICATED` |
 | 5 | List | `casctl tenant list`, `casctl token list`. No secret and no hash is shown |
 
 - Authentication of a request: the credential is found by `key_id`; the SHA-256 hash of the presented secret is compared in constant time.
 - A tenant may hold several valid tokens at a time: a new one is issued, the consumer switches, the old one is revoked. A token is never shared between tenants or services (ADR-7).
-- `casctl` connects with the owner role of the database (§3.2).
+- `casctl` connects with the owner role of the database (§3.2). Its connection string is the variable `CASCTL_DATABASE_URL`.
 
 ##### Preconditions
 - The operator has the owner role of the database.
@@ -744,7 +744,7 @@ A consuming system. Managed through the CLI (UC-105).
 | Name | Type | Required | Description |
 |---|---|---|---|
 | id | UUID | Yes | Primary key |
-| name | TEXT | Yes | Unique |
+| name | TEXT | Yes | Unique. Format: UC-105 |
 | status | TEXT | Yes | `ACTIVE`, `DISABLED` |
 | created_at | TIMESTAMPTZ | Yes | — |
 

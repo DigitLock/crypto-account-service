@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -185,10 +186,15 @@ func TestT104_RunServesHealthPortAndGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var services []string
 	for _, s := range resp.GetListServicesResponse().GetService() {
 		if !strings.HasPrefix(s.GetName(), "grpc.reflection.") {
-			t.Errorf("unexpected gRPC service %q", s.GetName())
+			services = append(services, s.GetName())
 		}
+	}
+	slices.Sort(services)
+	if want := []string{"cas.v1.AccountDataService", "cas.v1.ConnectionService"}; !slices.Equal(services, want) {
+		t.Errorf("gRPC services = %v, want %v", services, want)
 	}
 	_ = stream.CloseSend()
 

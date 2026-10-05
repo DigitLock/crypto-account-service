@@ -95,6 +95,12 @@ func TestT101_RequiredConfiguration(t *testing.T) {
 			}
 		}
 
+		for _, want := range []string{`"SHUTDOWN_TIMEOUT":"15s"`, `"KEY_CHECK_INTERVAL":"24h0m0s"`, `SYNC_TICK=1s`} {
+			if !strings.Contains(buf.String(), want) {
+				t.Errorf("log does not show the duration as %s: %s", want, buf.String())
+			}
+		}
+
 		js, err := json.Marshal(cfg)
 		if err != nil {
 			t.Fatal(err)

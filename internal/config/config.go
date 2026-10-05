@@ -109,17 +109,22 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("HEALTH_HTTP_PORT", c.HealthHTTPPort),
 		slog.String("LOG_LEVEL", strings.ToLower(c.LogLevel.String())),
 		slog.String("LOG_FORMAT", c.LogFormat),
-		slog.Duration("SHUTDOWN_TIMEOUT", c.ShutdownTimeout),
-		slog.Duration("SYNC_TICK", c.SyncTick),
+		duration("SHUTDOWN_TIMEOUT", c.ShutdownTimeout),
+		duration("SYNC_TICK", c.SyncTick),
 		slog.Int("SYNC_WORKERS", c.SyncWorkers),
-		slog.Duration("SYNC_LOCK_RETRY", c.SyncLockRetry),
+		duration("SYNC_LOCK_RETRY", c.SyncLockRetry),
 		slog.Int("SYNC_FAILURE_THRESHOLD", c.SyncFailureThreshold),
-		slog.Duration("SYNC_BACKOFF_INITIAL", c.SyncBackoffInitial),
-		slog.Duration("SYNC_BACKOFF_MAX", c.SyncBackoffMax),
-		slog.Duration("TRIGGER_SYNC_COOLDOWN", c.TriggerSyncCooldown),
-		slog.Duration("KEY_CHECK_INTERVAL", c.KeyCheckInterval),
+		duration("SYNC_BACKOFF_INITIAL", c.SyncBackoffInitial),
+		duration("SYNC_BACKOFF_MAX", c.SyncBackoffMax),
+		duration("TRIGGER_SYNC_COOLDOWN", c.TriggerSyncCooldown),
+		duration("KEY_CHECK_INTERVAL", c.KeyCheckInterval),
 		slog.Bool("ENABLE_FAKE_SOURCE", c.EnableFakeSource),
 	)
+}
+
+// duration logs d in Go syntax, such as 15s or 24h0m0s, not in nanoseconds.
+func duration(key string, d time.Duration) slog.Attr {
+	return slog.String(key, d.String())
 }
 
 // Secret holds a value that must never be printed. Every fmt verb, String, GoString,
