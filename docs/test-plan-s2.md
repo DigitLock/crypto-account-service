@@ -9,9 +9,10 @@
 
 | Item | Value |
 |---|---|
-| Go | `1.27.1`; go-ethereum pinned in `go.mod` (version fixed in st2) |
+| Go | `1.27.1`; go-ethereum `v1.17.7` pinned in `go.mod` (st2); bindings by `abigen` of the same version (`make bindings`, `make bindings-check`) |
 | PostgreSQL | 16. `TEST_DATABASE_URL` owner role; `TEST_DATABASE_URL_SERVER` role `cas_server`; **new** `TEST_DATABASE_URL_CARD_AUTH` role `cas_card_auth` |
 | Local chain | Anvil of Foundry 1.8.3, chain ID 31337, started by the tests (`anvil` on `PATH`). Contracts deployed by the tests from the frozen ABI and the build of `contracts/` |
+| Foundry in CI | The `go` workflow checks out the submodules and installs Foundry `v1.8.3` with `foundry-rs/foundry-toolchain@v1`: `anvil` and `forge` on `PATH`. `internal/testchain` skips without them locally and fails in CI |
 | Public chain | Base Sepolia, chain ID 84532: phase 8 only. Alchemy primary, `https://sepolia.base.org` fallback. Keys in `.env` only |
 | CRS | A fake gRPC server in tests. A local CRS for phase 8 when a non-USD authorization is demonstrated |
 | Chain listener | A fake WebSocket JSON-RPC server in tests (phase 6); the provider in phase 8 |
@@ -48,11 +49,11 @@
 
 | ID | Description | Preconditions | Steps | Expected | Req | Status |
 |---|---|---|---|---|---|---|
-| S2-T101 | Required configuration | — | Start `card-auth` without each of: `OPERATOR_PRIVATE_KEY`, `DATABASE_URL`, `rpc_url`, `chain_id`, `controller_address`, `token_address`, `token_decimals` | Exit ≠ 0; the message names the variable and prints no value | §3.1 | — |
+| S2-T101 | Required configuration | — | Start `card-auth` without each of: `OPERATOR_PRIVATE_KEY`, `CARD_AUTH_DATABASE_URL`, `CARD_AUTH_RPC_URL`, `CARD_AUTH_CHAIN_ID`, `CARD_AUTH_CONTROLLER_ADDRESS`, `CARD_AUTH_TOKEN_ADDRESS`, `CARD_AUTH_TOKEN_DECIMALS` | Exit ≠ 0; the message names the variable and prints no value | §3.1 | — |
 | S2-T102 | Defaults | Required variables only | Read the parsed configuration | `decision_deadline` 2.5 s, `debit_validity` 4 s, `rpc_read_timeout` 500 ms, `receipt_poll_interval` 200 ms, `quote_buffer_bps` 100, `finality_mode` `confirmations` 10, `tracker_interval` 2 s, `return_retry_interval` 30 s, HTTP 8092, health 8093 | §3.1 | — |
-| S2-T103 | Invalid configuration | — | `debit_validity` ≤ `decision_deadline` + 1 s; `chain_id` outside the allow-list; a key that is not 32 bytes; `finality_mode` unknown; a malformed duration | Exit ≠ 0 in each case | §3.1, handoff §4 | — |
+| S2-T103 | Invalid configuration | — | `debit_validity` < `decision_deadline` + 1 s (equal is valid); `chain_id` outside the allow-list; a key that is not 32 bytes; `finality_mode` unknown; a malformed duration | Exit ≠ 0 in each case | §3.1, handoff §4 | — |
 | S2-T104 | Health | `card-auth` running | `GET /healthz`, `/readyz`, `/metrics` on 8093; make the database unreachable; `/readyz` | 200, 200, 200 text format; then 503 | §3.1 | — |
-| S2-T105 | Operator key never printed | Log captured at `debug` | Start, run one authorization, fail one send | The log, the configuration dump and every error contain neither the key nor `DATABASE_URL` | §3.2 Security, handoff §4 | — |
+| S2-T105 | Operator key never printed | Log captured at `debug` | Start, run one authorization, fail one send | The log, the configuration dump and every error contain neither the key nor `CARD_AUTH_DATABASE_URL` nor an RPC URL | §3.2 Security, handoff §4 | — |
 | S2-T106 | Start checks of the chain | Anvil | Start against an endpoint whose `eth_chainId` ≠ `chain_id`; against a controller whose `token()` ≠ `token_address`; against a token whose `decimals()` ≠ `token_decimals` | Exit ≠ 0 in each case; nothing sent | §3.2 Chain access, handoff §4 | — |
 | S2-T107 | Nonce checked at start | Anvil; `operator_accounts.next_nonce` below and above the chain's count | Start | Below: `next_nonce` raised to the chain's count, log line. Above: kept (slots reserved, UC-3 row 9 resolves them) | ADR-10 | — |
 
@@ -272,3 +273,6 @@ Filled in st10.
 
 - Rows of phase 8 are run by the owner; their evidence — addresses, transaction links, the p95 value — goes into §7 and the Deployment Guide.
 - Phase 8 needs the test accounts and the test ETH of package §5.
+- T107 runs in st4 with `operator_accounts`.
+- T105 is checked at start and configuration dump in st2 and completed in st5.
+- T709 is built in st2.

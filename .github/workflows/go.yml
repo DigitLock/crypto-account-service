@@ -12,6 +12,9 @@ on:
       - "Makefile"
       - "migrations/**"
       - "sqlc.yaml"
+      - "contracts/src/**"
+      - "contracts/script/**"
+      - "contracts/abi/**"
       - ".github/workflows/go.yml"
   pull_request:
     branches:
@@ -23,6 +26,9 @@ on:
       - "Makefile"
       - "migrations/**"
       - "sqlc.yaml"
+      - "contracts/src/**"
+      - "contracts/script/**"
+      - "contracts/abi/**"
       - ".github/workflows/go.yml"
 
 permissions:
@@ -51,8 +57,11 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/cas_test?sslmode=disable
       TEST_DATABASE_URL_SERVER: postgres://cas_server:cas_server@localhost:5432/cas_test?sslmode=disable
+      TEST_DATABASE_URL_CARD_AUTH: postgres://cas_card_auth:cas_card_auth@localhost:5432/cas_test?sslmode=disable
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - uses: actions/setup-go@v7
         with:
@@ -60,6 +69,14 @@ jobs:
 
       - name: Go version
         run: go version
+
+      # anvil and forge for the chain tests (internal/testchain).
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.3
+
+      - name: Forge version
+        run: forge --version
 
       - name: Format check
         run: |
@@ -88,8 +105,14 @@ jobs:
       - name: Generated data access code is current
         run: make sqlc-check
 
+      - name: Generated contract bindings are current
+        run: make bindings-check
+
       - name: Create the role cas_server
         run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_server LOGIN PASSWORD 'cas_server';"
+
+      - name: Create the role cas_card_auth
+        run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_card_auth LOGIN PASSWORD 'cas_card_auth';"
 
       - name: Test
         run: go test -race -count=1 -p 1 ./...

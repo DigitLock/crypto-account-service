@@ -1,6 +1,8 @@
 // Package testdb gives integration tests the test database (docs/test-plan-c1.md §1).
 // TEST_DATABASE_URL is the owner role: it runs the migrations and cleans tables.
 // TEST_DATABASE_URL_SERVER is the role cas_server: it is used by the code under test.
+// TEST_DATABASE_URL_CARD_AUTH is the role cas_card_auth: it is used by card-auth under test
+// (docs/test-plan-s2.md §1).
 package testdb
 
 import (
@@ -32,6 +34,12 @@ func ServerURL(t testing.TB) string {
 	return envURL(t, "TEST_DATABASE_URL_SERVER")
 }
 
+// CardAuthURL returns TEST_DATABASE_URL_CARD_AUTH with the same rule as URL.
+func CardAuthURL(t testing.TB) string {
+	t.Helper()
+	return envURL(t, "TEST_DATABASE_URL_CARD_AUTH")
+}
+
 func envURL(t testing.TB, name string) string {
 	t.Helper()
 	u := os.Getenv(name)
@@ -58,6 +66,12 @@ func Open(t testing.TB) *pgxpool.Pool {
 func OpenServer(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	return newPool(t, ServerURL(t))
+}
+
+// OpenCardAuth returns a pool of the role cas_card_auth. It does not migrate: call Open first.
+func OpenCardAuth(t testing.TB) *pgxpool.Pool {
+	t.Helper()
+	return newPool(t, CardAuthURL(t))
 }
 
 // Migrator returns a golang-migrate instance on TEST_DATABASE_URL with the embedded migrations.

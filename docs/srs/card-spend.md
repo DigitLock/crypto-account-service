@@ -825,32 +825,34 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 
 ### 3.1 Configuration
 
-| Parameter | Default | Meaning |
-|---|---|---|
 All parameters come from the environment of `card-auth`; the variable names are fixed in `.env.example`. Nothing is read from `sources.config` in S2: the EVM connector of S3 decides where it takes the shared values from (SRS — EVM Connector §3.1).
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `decision_deadline` | 2.5 s | Maximum time to answer the processor. One value for the service in S2; per processor later. The default fits a 3 s processor budget |
-| `debit_validity` | 4 s | `validUntil − received_at`; must exceed `decision_deadline` by at least 1 s, because `validUntil` is rounded down to a whole second. The service does not start otherwise |
-| `rpc_read_timeout` | 500 ms | Timeout of the on-chain read in step 9 |
-| `rpc_ws_url` | — | WebSocket endpoint of the RPC provider, for the chain listener. Unset: no listener, polling only |
-| `listener_subscription` | `pendingLogs` | Subscription type of the chain listener: `pendingLogs` on Base Sepolia, `logs` on a chain without Flashblocks such as Anvil |
-| `receipt_poll_interval` | 200 ms | Polling beside the subscription |
-| `quote_buffer_bps` | 100 | Buffer for non-USD currencies, basis points |
-| `finality_mode`, `finality_tag`, `finality_confirmations` | `confirmations`, —, 10 | Finality rule for `DEBIT_CONFIRMED`, per network: a block tag or N blocks after inclusion. Same rule as the indexer (SRS — EVM Connector §2.1.1). The defaults are for the local chain; Base Sepolia uses the tag `finalized` |
-| `tracker_interval` | 2 s | Tracker cycle |
-| `return_retry_interval` | 30 s | Pause between return attempts |
-| `chain_id`, `rpc_url`, `rpc_fallback_url` | — | Network access. `chain_id` must be in the allow-list of test networks (SRS — EVM Connector §3.1) |
-| `rpc_fallback_after` | 3 | Consecutive failures of the primary endpoint after which the fallback is used (§3.2) |
-| `debit_gas_limit`, `refund_gas_limit` | measured in st5 | Fixed gas limits of the two operator transactions: no `eth_estimateGas` in the decision path. A release transaction uses 21 000 |
-| `fee_bump_percent` | 25 | Raise of `maxFeePerGas` and `maxPriorityFeePerGas` on a replacement |
-| `controller_address`, `token_address`, `token_decimals` | — | Contract and funding token; checked at start (§3.2) |
-| `OPERATOR_PRIVATE_KEY` | — | Environment only. On Anvil a default Anvil account key may be used, in `.env` only |
-| `DATABASE_URL` | — | PostgreSQL, role `cas_card_auth`; environment |
-| `CRS_ADDRESS` | — | gRPC address of CRS; environment |
-| HTTP port | 8092 | Processor API; environment |
-| Health port | 8093 | `/healthz`, `/readyz`, `/metrics`; environment |
+| Parameter | Variable | Default | Meaning |
+|---|---|---|---|
+| `decision_deadline` | `CARD_AUTH_DECISION_DEADLINE` | 2.5 s | Maximum time to answer the processor. One value for the service in S2; per processor later. The default fits a 3 s processor budget |
+| `debit_validity` | `CARD_AUTH_DEBIT_VALIDITY` | 4 s | `validUntil − received_at`; must exceed `decision_deadline` by at least 1 s, because `validUntil` is rounded down to a whole second. The service does not start otherwise |
+| `rpc_read_timeout` | `CARD_AUTH_RPC_READ_TIMEOUT` | 500 ms | Timeout of the on-chain read in step 9 |
+| `rpc_ws_url` | `CARD_AUTH_RPC_WS_URL` | — | WebSocket endpoint of the RPC provider, for the chain listener. Unset: no listener, polling only |
+| `listener_subscription` | `CARD_AUTH_LISTENER_SUBSCRIPTION` | `pendingLogs` | Subscription type of the chain listener: `pendingLogs` on Base Sepolia, `logs` on a chain without Flashblocks such as Anvil |
+| `receipt_poll_interval` | `CARD_AUTH_RECEIPT_POLL_INTERVAL` | 200 ms | Polling beside the subscription |
+| `quote_buffer_bps` | `CARD_AUTH_QUOTE_BUFFER_BPS` | 100 | Buffer for non-USD currencies, basis points |
+| `finality_mode`, `finality_tag`, `finality_confirmations` | `CARD_AUTH_FINALITY_MODE`, `CARD_AUTH_FINALITY_TAG`, `CARD_AUTH_FINALITY_CONFIRMATIONS` | `confirmations`, `finalized`, 10 | Finality rule for `DEBIT_CONFIRMED`, per network: a block tag or N blocks after inclusion. Same rule as the indexer (SRS — EVM Connector §2.1.1). The defaults are for the local chain; Base Sepolia uses the tag `finalized` |
+| `tracker_interval` | `CARD_AUTH_TRACKER_INTERVAL` | 2 s | Tracker cycle |
+| `return_retry_interval` | `CARD_AUTH_RETURN_RETRY_INTERVAL` | 30 s | Pause between return attempts |
+| `chain_id`, `rpc_url`, `rpc_fallback_url` | `CARD_AUTH_CHAIN_ID`, `CARD_AUTH_RPC_URL`, `CARD_AUTH_RPC_FALLBACK_URL` | — | Network access. `chain_id` must be in the allow-list of test networks (SRS — EVM Connector §3.1) |
+| `rpc_fallback_after` | `CARD_AUTH_RPC_FALLBACK_AFTER` | 3 | Consecutive failures of the primary endpoint after which the fallback is used (§3.2) |
+| `debit_gas_limit`, `refund_gas_limit` | `CARD_AUTH_DEBIT_GAS_LIMIT`, `CARD_AUTH_REFUND_GAS_LIMIT` | measured in st5 | Fixed gas limits of the two operator transactions: no `eth_estimateGas` in the decision path. A release transaction uses 21 000 |
+| `fee_bump_percent` | `CARD_AUTH_FEE_BUMP_PERCENT` | 25 | Raise of `maxFeePerGas` and `maxPriorityFeePerGas` on a replacement |
+| `controller_address`, `token_address`, `token_decimals` | `CARD_AUTH_CONTROLLER_ADDRESS`, `CARD_AUTH_TOKEN_ADDRESS`, `CARD_AUTH_TOKEN_DECIMALS` | — | Contract and funding token; checked at start (§3.2) |
+| `OPERATOR_PRIVATE_KEY` | `OPERATOR_PRIVATE_KEY` | — | Environment only. On Anvil a default Anvil account key may be used, in `.env` only |
+| `DATABASE_URL` | `CARD_AUTH_DATABASE_URL` | — | PostgreSQL, role `cas_card_auth`; environment |
+| `CRS_ADDRESS` | `CRS_ADDRESS` | — | gRPC address of CRS; environment |
+| HTTP port | `CARD_AUTH_HTTP_PORT` | 8092 | Processor API; environment |
+| Health port | `CARD_AUTH_HEALTH_PORT` | 8093 | `/healthz`, `/readyz`, `/metrics`; environment |
+| Connection pool, shutdown | `CARD_AUTH_DB_POOL_MAX_CONNS`, `CARD_AUTH_DB_POOL_MIN_CONNS`, `CARD_AUTH_SHUTDOWN_TIMEOUT` | 10, 2, 15 s | As `server` (SRS — Core §3.1) |
+| Logging, allow-list | `LOG_LEVEL`, `LOG_FORMAT`, `EVM_ALLOWED_CHAIN_IDS` | `info`, `json`, 31337 and 84532 | Shared with `server`, no prefix |
+
+- Ranges checked at start beyond the rules above: `quote_buffer_bps` 0–10 000; `finality_confirmations` ≥ 1; `rpc_fallback_after` ≥ 1; `fee_bump_percent` ≥ 10; `token_decimals` 0–18; RPC URLs `http`/`https`, the WebSocket URL `ws`/`wss`, each with a host; addresses well formed and not zero. Any failure stops the start; the message names the variable and prints no value.
 
 ### 3.2 General Non-functional Requirements
 

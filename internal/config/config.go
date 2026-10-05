@@ -1,5 +1,5 @@
-// Package config loads the environment parameters of server (SRS — Core §3.1).
-// Parameters stored in sources.config are not part of this package.
+// Package config loads the environment parameters of server (SRS — Core §3.1) and of card-auth
+// (SRS — Card Spend §3.1). Parameters stored in sources.config are not part of this package.
 package config
 
 import (

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "feature/**"
+      - main
     paths:
       - "contracts/**"
       - ".github/workflows/contracts.yml"
