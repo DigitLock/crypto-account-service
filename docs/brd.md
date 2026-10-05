@@ -136,7 +136,7 @@ Tracks S and X are independent of each other and can run in parallel. Both build
 
 | ID | Content | Depends on |
 |---|---|---|
-| C1 | Core: tenants, connections, encrypted secrets, gRPC API, CI | — |
+| C1 | Core: tenants, connections, encrypted secrets, sync engine, ledger, gRPC API, CI | — |
 | S1 | Contracts `CardSpendController` and `MockUSDC`, tests on a local chain | — |
 | S2 | `card-auth`: end-to-end authorization locally, then on Base Sepolia | S1, C1 |
 | S3 | Event indexer into the ledger; reconciliation | S2, C1 |

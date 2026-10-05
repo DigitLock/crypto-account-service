@@ -37,6 +37,7 @@ type Connector interface {
 - Differences are capability flags, never `if source == …` in the engine: key permissions readable, unified ledger, trades per pair, block-based cursor, test environment, event stream.
 - What is truly configurable stays in the database: base URL, intervals, rate budgets, asset aliases.
 - A shared connector test suite defines "done" for an adapter: idempotency, cursor resume, limit handling.
+- The code block above is the sketch of the decision. The interface as built in C1 is in [SRS — Core](../srs/core.md) §2.1.1, Connector contract.
 
 ## Trade-offs
 

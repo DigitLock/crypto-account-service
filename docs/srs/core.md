@@ -13,7 +13,7 @@
   - the EVM connector (event indexer) — [SRS — EVM Connector](evm-connector.md);
   - tenant self-onboarding, credential rotation through the API, data retention jobs — §4.
 - **Parents:** [BRD](../brd.md) BR-1 … BR-5, BR-13; [PRD — Card Spend](../prd/card-spend.md) US-6, US-7, US-8, US-13; [PRD — Exchange Accounts](../prd/exchange-accounts.md) US-204, US-205, US-208 … US-210, US-213; [ADR](../adr/README.md) 1–7, 11, 13.
-- **Version:** 1.1, 2026-10-04. Completed by the discovery of C1: method shapes, error details, connector contract, tenants and service tokens (UC-105), snapshot model, connection status rules, database roles, configuration names. Version 1.0 approved 2026-10-04.
+- **Version:** 1.2, 2026-10-05. Completed while C1 was built: tenant name and key length rules, `wallet_address`, ID and page token rules, connector contract as built, rate limiter on every account check, source availability in the engine, page limit per run, invalid balances, key check cases, format of `sources.config`, metric labels. Version 1.1, 2026-10-04: completed by the discovery of C1. Version 1.0 approved 2026-10-04.
 
 | Term | Meaning |
 |---|---|
@@ -199,7 +199,7 @@ type Limiter interface {
 | Streams | The connector declares the streams of a connection: name, family, interval, first mode, first cursor. It reads the interval from `sources.config` |
 | Page | One call returns entries, the next cursor, the mode and whether more pages follow. Only final records are returned |
 | Snapshot | One call returns all balances of the connection and their time, or fails as a whole. A balance has `free` and `locked` not negative, with at most 18 decimal places and 20 integer digits, a known account type, and appears once per account type and native asset. A snapshot that breaks this is refused as a whole (EC-117) |
-| Rate limiter | The engine creates one limiter per source from the budgets the connector declares and hands it to the connector. The connector reserves the cost before every request and reports the limit answers of the source. A budget is a number of cost units per time window: a reservation waits until the window allows it. A window starts with the first reservation after the previous window ended. A pause demanded by the source blocks its budget until the pause ends |
+| Rate limiter | One limiter per source for the whole process, built on first use from the budgets the connector declares. The engine and `CreateConnection` hand it to the connector. The connector reserves the cost before every request and reports the limit answers of the source. A budget is a number of cost units per time window: a reservation waits until the window allows it. A window starts with the first reservation after the previous window ended. A pause demanded by the source blocks its budget until the pause ends |
 | Errors | Typed: key rejected, key not read-only, rate limit with the pause the source demands, source unreachable. Anything else is a plain failure of the run |
 | Entry | Positive amount with at most 18 decimal places and 20 integer digits; `external_id` not empty; a known type, leg and direction. An entry that breaks this fails its page (EC-117). Amounts travel as decimal strings and are stored as `NUMERIC`: no float and no exponent on the path |
 | Secrets | A connector gets the decrypted key only for the call and never puts it into an error or a log line. The engine removes the key and the secret from `last_error` and from its own log lines |
