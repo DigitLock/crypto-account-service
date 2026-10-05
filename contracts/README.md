@@ -27,8 +27,8 @@ Run from `contracts/`.
 
 ## Local deployment on Anvil
 
-- The scripts refuse any chain other than 31337 (local Anvil). Deployment to Base Sepolia is S2.
-- No private key and no mnemonic is used: scripts sign with Anvil's unlocked accounts (`--unlocked --sender`).
+- The scripts accept two chains: 31337 (local Anvil) and 84532 (Base Sepolia); any other chain ID reverts. S1 allowed 31337 only; S2 adds 84532 and the deployment on Base Sepolia, described in `docs/deployment-guide.md`.
+- On Anvil no private key and no mnemonic is used: scripts sign with Anvil's unlocked accounts (`--unlocked --sender`). On Base Sepolia the scripts sign with generated test keys from `.env`, never a personal wallet (Deployment Guide).
 - Take the addresses from the `Available Accounts` list of the anvil banner.
 
 | Index | Role | Env variable | Default Anvil address |

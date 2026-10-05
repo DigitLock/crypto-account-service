@@ -1,14 +1,14 @@
 # ADR-12 — Authorization decision timing
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-03. Updated 2026-10-05: drop rate of preconfirmations re-checked; open point closed
 - **Related:** BR-7, BR-8, G-1, G-2, ADR-8, ADR-9, SRS — Card Spend UC-1, UC-3
 
 ## Context
 
 - The processor waits 2–3 s for a decision, then decides by its own rules: 2 s at Stripe Issuing, 3 s at Marqeta.
 - The allowance model has no hold (ADR-9): between the check and the debit the user can move the funds or revoke the allowance.
-- Base produces a block every 2 s and a preconfirmation every 200 ms. A preconfirmed transaction can still be dropped; the network targets below 0.1%.
+- Base produces a block every 2 s and a preconfirmation (Flashblock) every 200 ms. A preconfirmed transaction can still be dropped. No drop rate is published: the Base and Alchemy Flashblocks documentation, checked on 2026-10-05, gives no figure; the "below 0.1%" quoted here before came from no documented source. The design treats a drop as rare but possible (rule 4).
 - Finality on L1 takes minutes.
 
 ## Options
@@ -45,4 +45,4 @@ Also:
 
 ## Open points
 
-- RPC provider for preconfirmed data on Base Sepolia; the approach is decided in ADR-13 — SRS — Card Spend §4, issue 1.
+- RPC provider for preconfirmed data on Base Sepolia: closed on 2026-10-05, Alchemy with Flashblocks on the free plan — SRS — Card Spend §4, issue 1; the subscription is specified in ADR-13.

@@ -12,7 +12,7 @@
   - the authorization flow, the contract and the reconciliation rules: [SRS — Card Spend](card-spend.md);
   - real-time signals: `card-auth` tracks its own transactions (ADR-13). This connector reads logs from final blocks only.
 - **Parents:** [BRD](../brd.md) BR-1, BR-3, BR-4, BR-5, BR-12; [PRD — Card Spend](../prd/card-spend.md) US-13; [ADR](../adr/README.md) 2, 3, 5, 6, 8, 11, 13.
-- **Version:** 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
+- **Version:** 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
 - **Network facts:** finality stages and their timing are taken from the Base documentation for Base mainnet, checked on 2026-10-03. Base Sepolia may differ; the values are measured at S3.
 
 | Term | Meaning |
@@ -386,7 +386,7 @@ Rows added by the migration that introduces a network, and the connection create
 
 | Table | Row |
 |---|---|
-| `sources` | One row per network: `code = anvil` or `base-sepolia`, `kind = EVM`, `config` with the values of §3.1. The migrations of C1 add both rows, enabled, with `chain_id` only; the other values are added in S2 and S3 |
+| `sources` | One row per network: `code = anvil` or `base-sepolia`, `kind = EVM`, `config` with the values of §3.1. The migrations of C1 add both rows, enabled, with `chain_id` only; the other values are added in S3, when this connector starts to read them. S2 adds nothing here: `card-auth` reads the shared values from its own environment (SRS — Card Spend §3.1) |
 | `asset_aliases` | One row per tracked token: `native_asset` = token address, `asset` = `USDC`, `decimals` = 6 for `MockUSDC` |
 | `connections` | The treasury connection: created through the CLI in the platform's tenant after the contract is deployed. The CLI writes its ID to `treasury_connection` of the source |
 

@@ -13,7 +13,7 @@
   - the EVM connector (event indexer) — [SRS — EVM Connector](evm-connector.md);
   - tenant self-onboarding, credential rotation through the API, data retention jobs — §4.
 - **Parents:** [BRD](../brd.md) BR-1 … BR-5, BR-13; [PRD — Card Spend](../prd/card-spend.md) US-6, US-7, US-8, US-13; [PRD — Exchange Accounts](../prd/exchange-accounts.md) US-204, US-205, US-208 … US-210, US-213; [ADR](../adr/README.md) 1–7, 11, 13.
-- **Version:** 1.2, 2026-10-05. Completed while C1 was built: tenant name and key length rules, `wallet_address`, ID and page token rules, connector contract as built, rate limiter on every account check, source availability in the engine, page limit per run, invalid balances, key check cases, format of `sources.config`, metric labels. Version 1.1, 2026-10-04: completed by the discovery of C1. Version 1.0 approved 2026-10-04.
+- **Version:** 1.3, 2026-10-05. Completed by the discovery of S2: the methods of `CardService`, processor credentials in `casctl`, rights of the role `cas_card_auth`, EC-114 without card removal. Version 1.2, 2026-10-05. Completed while C1 was built: tenant name and key length rules, `wallet_address`, ID and page token rules, connector contract as built, rate limiter on every account check, source availability in the engine, page limit per run, invalid balances, key check cases, format of `sources.config`, metric labels. Version 1.1, 2026-10-04: completed by the discovery of C1. Version 1.0 approved 2026-10-04.
 
 | Term | Meaning |
 |---|---|
@@ -137,6 +137,8 @@ sequenceDiagram
 | `KEY_INVALID` | `FAILED_PRECONDITION` | The source rejects the key |
 | `SOURCE_DISABLED` | `FAILED_PRECONDITION` | The source is not available |
 | `CREDENTIALS_INVALID` | `FAILED_PRECONDITION` | The connection is stopped: its key was rejected or is no longer read-only |
+| `CONNECTION_NOT_USABLE` | `FAILED_PRECONDITION` | `RegisterCard`: the connection is not a wallet, not `ACTIVE`, or belongs to another owner (EC-113). From S2 |
+| `CONNECTION_HAS_CARDS` | `FAILED_PRECONDITION` | `DeleteConnection`: cards are bound to the connection (EC-114). From S2 |
 
 ##### Method catalogue
 
@@ -165,6 +167,11 @@ Methods with non-obvious rules are specified below. The others follow the common
 | `GetConnection` | `connection_id` | The connection of §2.1.2 and `streams[]`: `stream`, `mode`, `next_run_at`, `last_success_at`, `last_error`, `consecutive_failures` | Streams ordered by `stream`. The cursor is not returned |
 | `DeleteConnection` | `connection_id` | Empty | UC-104. A second call: `NOT_FOUND`. Audit `CONNECTION_DELETED` with the acting credential |
 | `TriggerSync` | `connection_id` | Empty | Every stream of the connection becomes due now; the engine runs them on its next tick. Inside `trigger_sync_cooldown` after the last accepted call: `RESOURCE_EXHAUSTED`; the time of that call is `connections.last_manual_sync_at`. Connection in `CREDENTIALS_INVALID`: `FAILED_PRECONDITION / CREDENTIALS_INVALID`; this is checked before the cooldown. Connection without streams: accepted, nothing runs. A stream that is running when the call arrives is not run again. No audit record |
+| `UpdateCard` | `card_ref`; optional `daily_limit`; optional `status` | The card of §2.1.5 | S2. At least one of the two optional fields; otherwise `INVALID_ARGUMENT`. `daily_limit`: a base-unit integer string ≥ 0. `status`: `ACTIVE` or `FROZEN`. A value equal to the stored one changes nothing and writes no audit row; a change sets `updated_at` and writes `CARD_UPDATED` with the changed fields. The change applies to the next authorization (EC-115) |
+| `GetCard` | `card_ref` | The card of §2.1.5 | S2. Unknown in the tenant: `NOT_FOUND` |
+| `ListCards` | `owner_ref`, optional, ≤ 128; `page_size`, `page_token` | `cards[]`: the card of §2.1.5; `next_page_token` | S2. Order: `created_at`, `card_ref`. Pagination as `ListConnections` |
+| `GetAuthorization` | `auth_id` | The authorization of SRS — Card Spend §2.1.4: the same fields, `returns` and `history` included; timestamps as `Timestamp` | S2. Unknown in the tenant: `NOT_FOUND`. A tombstone is returned as in SRS — Card Spend §2.1.4 |
+| `ListAuthorizations` | optional `card_ref`, `owner_ref`, `status`, `received_from`, `received_to`; `page_size`, `page_token` | `authorizations[]`: the authorization without `returns` and `history`; `next_page_token` | S2. Filters combine with AND; `received_from` inclusive, `received_to` exclusive; an unknown `status` is `INVALID_ARGUMENT`. Order: `received_at` descending, `auth_id`. Tombstones are included |
 
 ##### Connector contract
 
@@ -462,8 +469,12 @@ See Common rules.
 | wallet_address | String | Yes | Address of the bound wallet | — |
 
 - The same request repeated returns the existing card. A different body for a known `card_ref` → `ALREADY_EXISTS`.
+- `card_ref`: 1 to 64 characters. `daily_limit`: a base-unit integer string ≥ 0, at most 78 digits; no sign, no decimal point, no exponent. Otherwise `INVALID_ARGUMENT`.
+- The response also carries `created_at` and `updated_at`.
+- `FAILED_PRECONDITION / CONNECTION_NOT_USABLE`: the connection is not a wallet, is not `ACTIVE`, or its owner is not `owner_ref` (EC-113).
 - Several cards may share one wallet. The wallet daily limit in the contract caps them together (SRS — Card Spend §2.1.5).
 - The wallet daily limit is set on-chain by the admin, not by this method.
+- There is no method that removes a card: a card is frozen instead, and a connection with cards cannot be deleted (EC-114). Audit `CARD_REGISTERED` with the acting credential.
 - Proof of wallet ownership and the KYC status check are design only (US-1).
 
 ---
@@ -627,7 +638,7 @@ N/A — database operations only.
 | 1 | Register | §2.1.5 |
 | 2 | Change the daily limit | New value applies to the next authorization |
 | 3 | Freeze, unfreeze | `ACTIVE` ↔ `FROZEN`; a frozen card is declined by `card-auth` |
-| 4 | Read authorizations | Data of [SRS — Card Spend](card-spend.md) §2.4, read-only |
+| 4 | Read authorizations | `GetAuthorization`, `ListAuthorizations` (§2.1.1): data of [SRS — Card Spend](card-spend.md) §2.4, read-only, with the role `cas_server` |
 
 ##### Preconditions
 - An `ACTIVE` wallet connection of the same tenant and owner.
@@ -643,7 +654,7 @@ Row 1, then `card-auth` uses the card.
 | EC | Case | Handling |
 |---|---|---|
 | EC-113 | The connection is not a wallet, not `ACTIVE`, or belongs to another owner | `FAILED_PRECONDITION` |
-| EC-114 | Delete a connection that has cards | `FAILED_PRECONDITION`; the cards must be removed first |
+| EC-114 | Delete a connection that has cards | `FAILED_PRECONDITION / CONNECTION_HAS_CARDS`; nothing is deleted. There is no card removal: such a connection stays |
 | EC-115 | Change a card while an authorization is in progress | The authorization keeps the values it read; the change applies to the next one |
 
 ##### Acceptance Criteria
@@ -668,7 +679,7 @@ N/A — database operations only.
 
 | # | Step | On failure |
 |---|---|---|
-| 1 | Check that no card references the connection. From S2: the card registry does not exist before | `FAILED_PRECONDITION` (EC-114) |
+| 1 | Check that no card references the connection, in the same transaction as step 2. From S2: the card registry does not exist before | `FAILED_PRECONDITION / CONNECTION_HAS_CARDS` (EC-114) |
 | 2 | In one transaction: delete the connection, its secret, cursors, snapshots and ledger entries; write the audit record | Rollback |
 | 3 | Running sync of the connection stops at its next step | — |
 
@@ -707,7 +718,9 @@ N/A — database operations only.
 | 2 | Disable, enable a tenant | `casctl tenant disable`, `enable`: `ACTIVE` ↔ `DISABLED`. While disabled: every request is `UNAUTHENTICATED`, the sync of its connections stops, its data stays |
 | 3 | Issue a service token | `casctl token issue`. Format `cas_<key_id>_<secret>`: `key_id` is 12 hexadecimal characters, `secret` is 32 random bytes as 64 hexadecimal characters. The token is printed once; `api_credentials` keeps `key_id` and the SHA-256 hash of the 32 secret bytes |
 | 4 | Revoke a token | `casctl token revoke`: sets `revoked_at`. The next request with the token is `UNAUTHENTICATED` |
-| 5 | List | `casctl tenant list`, `casctl token list`. No secret and no hash is shown |
+| 5 | List | `casctl tenant list`, `casctl token list`, `casctl processor list`. No secret and no hash is shown |
+| 6 | Issue a processor credential, from S2 | `casctl processor issue <tenant>`: a Basic pair for the processor API of `card-auth` (SRS — Card Spend §2.1.1). Username = `key_id`, 12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters. Printed once as `username:password`; `api_credentials` keeps `kind = PROCESSOR_BASIC`, `key_id` and the SHA-256 hash of the 32 password bytes. Audit `CREDENTIAL_ISSUED` |
+| 7 | Revoke a processor credential, from S2 | `casctl processor revoke <username>`: sets `revoked_at`; the next request with the pair is `401`. Audit `CREDENTIAL_REVOKED` |
 
 - Authentication of a request: the credential is found by `key_id`; the SHA-256 hash of the presented secret is compared in constant time.
 - A tenant may hold several valid tokens at a time: a new one is issued, the consumer switches, the old one is revoked. A token is never shared between tenants or services (ADR-7).
@@ -788,7 +801,7 @@ Service tokens for gRPC and Basic credentials for the processor API of `card-aut
 | tenant_id | UUID | Yes | Tenant |
 | kind | TEXT | Yes | `SERVICE_TOKEN`, `PROCESSOR_BASIC` |
 | key_id | TEXT | Yes | `SERVICE_TOKEN`: the `key_id` part of the token. `PROCESSOR_BASIC`: username. Unique. |
-| secret_hash | BYTEA | Yes | `SERVICE_TOKEN`: SHA-256 of the secret part. `PROCESSOR_BASIC`: defined in S2 |
+| secret_hash | BYTEA | Yes | `SERVICE_TOKEN`: SHA-256 of the secret part. `PROCESSOR_BASIC`: SHA-256 of the 32 password bytes (UC-105, row 6) |
 | created_at | TIMESTAMPTZ | Yes | — |
 | revoked_at | TIMESTAMPTZ | No | Set when revoked |
 
@@ -1038,17 +1051,31 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
   - service tokens and processor passwords stored as hashes;
   - tenant filter on every query (FR-105), covered by an automated test with two tenants;
   - database roles: `cas_server` for `server`, `cas_card_auth` for `card-auth` (S2). The operator creates a role once per environment; the migrations run under the owner role and grant the rights below;
-  - `cas_server` reads card-auth tables but cannot write them; the operator key is not in the database;
-  - `casctl` connects with the owner role: `cas_server` cannot create a tenant or a token.
+  - `cas_server` reads card-auth tables but cannot write them; `cas_card_auth` reads `cards` but cannot write them; the operator key is not in the database;
+  - `cas_card_auth` has no right on the column `connections.credentials_enc`: its `SELECT` on `connections` is granted per column, every column but that one;
+  - `casctl` connects with the owner role: neither runtime role can create a tenant or a credential.
 
 | Tables | Rights of `cas_server` |
 |---|---|
 | `connections` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` |
 | `sync_cursors` | `SELECT`, `INSERT`, `UPDATE`. Rows are removed only by the cascade of a deleted connection |
 | `balance_snapshots`, `snapshot_balances`, `ledger_entries` | `SELECT`, `INSERT`. Rows are removed only by the cascade of a deleted connection |
+| `cards`, from S2 | `SELECT`, `INSERT`, `UPDATE` |
+| `authorizations`, `authorization_events`, `returns`, from S2 | `SELECT` |
 | `audit_log` | `INSERT` |
 | `tenants`, `api_credentials`, `sources`, `asset_aliases` | `SELECT` |
 | `schema_migrations` | `SELECT`, for `/readyz` |
+
+| Tables | Rights of `cas_card_auth`, from S2 |
+|---|---|
+| `authorizations`, `returns`, `operator_txs`, `operator_accounts` | `SELECT`, `INSERT`, `UPDATE` |
+| `authorization_events` | `SELECT`, `INSERT`. Append-only: no `UPDATE`, no `DELETE` |
+| `audit_log` | `INSERT` |
+| `cards`, `tenants`, `api_credentials`, `sources` | `SELECT` |
+| `connections` | `SELECT` on every column except `credentials_enc` |
+| `schema_migrations` | `SELECT`, for `/readyz` |
+
+- Neither role has `DELETE` on a card-auth table: an authorization and its history are never removed. A connection with cards cannot be deleted (EC-114), so no cascade reaches them.
 
 - **Compliance:** no personal data. `owner_ref`, `card_ref` and labels are supplied by the tenant and must not contain any.
 
