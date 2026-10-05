@@ -93,6 +93,9 @@ func Clean(t testing.TB) {
 			ledger_entries, audit_log RESTART IDENTITY CASCADE`,
 		`DELETE FROM asset_aliases`,
 		`DELETE FROM sources WHERE code NOT IN ('anvil', 'base-sepolia')`,
+		// Every setup inserts the source fake again; without this the SMALLINT identity of sources.id
+		// grows with every run of the suite until it overflows.
+		`SELECT setval(pg_get_serial_sequence('sources', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM sources`,
 	} {
 		if _, err := pool.Exec(context.Background(), stmt); err != nil {
 			t.Fatalf("clean the test database: %v", err)

@@ -165,8 +165,11 @@ func TestT519_GetConnection(t *testing.T) {
 	id, k := createExchange(t, c, a, "owner-1")
 
 	lastSuccess := testNow.Add(-time.Minute)
+	// A marker that cannot occur by chance in the response: not hexadecimal, 32 random characters inside.
+	marker := "cursor-marker-" + randomHex(t, 32) + "-end"
 	if _, err := e.owner.Exec(ctx, `UPDATE sync_cursors SET last_success_at = $2, consecutive_failures = 0,
-		cursor = '{"last_id": 42}' WHERE connection_id = $1 AND stream = 'balances'`, id, lastSuccess); err != nil {
+		cursor = jsonb_build_object('last_id', $3::text) WHERE connection_id = $1 AND stream = 'balances'`,
+		id, lastSuccess, marker); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.owner.Exec(ctx, `UPDATE sync_cursors SET last_error = 'rate limit of the source',
@@ -202,7 +205,7 @@ func TestT519_GetConnection(t *testing.T) {
 		ops.GetConsecutiveFailures() != 2 {
 		t.Errorf("ops = %v", ops)
 	}
-	if strings.Contains(resp.String(), "last_id") || strings.Contains(resp.String(), "42") {
+	if text := resp.String(); strings.Contains(text, marker) || strings.Contains(text, "last_id") {
 		t.Error("the response contains the cursor")
 	}
 }

@@ -44,7 +44,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres -d cas_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -92,4 +92,4 @@ jobs:
         run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_server LOGIN PASSWORD 'cas_server';"
 
       - name: Test
-        run: go test -race -p 1 ./...
+        run: go test -race -count=1 -p 1 ./...
