@@ -95,7 +95,7 @@ func TestT101_RequiredConfiguration(t *testing.T) {
 			}
 		}
 
-		for _, want := range []string{`"SHUTDOWN_TIMEOUT":"15s"`, `"EVM_ALLOWED_CHAIN_IDS":"31337,84532"`, `"KEY_CHECK_INTERVAL":"24h0m0s"`, `SYNC_TICK=1s`} {
+		for _, want := range []string{`"SHUTDOWN_TIMEOUT":"15s"`, `"EVM_ALLOWED_CHAIN_IDS":"31337,84532"`, `"SYNC_MAX_PAGES_PER_RUN":20`, `"KEY_CHECK_INTERVAL":"24h0m0s"`, `SYNC_TICK=1s`} {
 			if !strings.Contains(buf.String(), want) {
 				t.Errorf("log does not show the duration as %s: %s", want, buf.String())
 			}
@@ -138,6 +138,7 @@ func TestT102_Defaults(t *testing.T) {
 		{"SHUTDOWN_TIMEOUT", cfg.ShutdownTimeout, 15 * time.Second},
 		{"SYNC_TICK", cfg.SyncTick, time.Second},
 		{"SYNC_WORKERS", cfg.SyncWorkers, 4},
+		{"SYNC_MAX_PAGES_PER_RUN", cfg.SyncMaxPagesPerRun, 20},
 		{"SYNC_LOCK_RETRY", cfg.SyncLockRetry, 10 * time.Second},
 		{"SYNC_FAILURE_THRESHOLD", cfg.SyncFailureThreshold, 5},
 		{"SYNC_BACKOFF_INITIAL", cfg.SyncBackoffInitial, 30 * time.Second},
@@ -198,6 +199,8 @@ func TestT103_InvalidConfiguration(t *testing.T) {
 		{"unknown log level", "LOG_LEVEL", "verbose"},
 		{"boolean not true or false", "ENABLE_FAKE_SOURCE", "yes-please"},
 		{"zero workers", "SYNC_WORKERS", "0"},
+		{"zero pages per run", "SYNC_MAX_PAGES_PER_RUN", "0"},
+		{"pages per run not a number", "SYNC_MAX_PAGES_PER_RUN", "many"},
 		{"master key version zero", "CAS_MASTER_KEY_VERSION", "0"},
 		{"master key version above SMALLINT", "CAS_MASTER_KEY_VERSION", "32768"},
 		{"chain ID not a number", "EVM_ALLOWED_CHAIN_IDS", "31337,anvil"},

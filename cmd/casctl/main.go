@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -246,21 +247,29 @@ func (a *app) sourceCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "source", Short: "Development seeds of sources"}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "add-fake",
-		Short: "Add the source fake of the fake connector: kind EXCHANGE, enabled. Development and demo only",
+		Short: "Add the source fake of the fake connector and the aliases of its assets. Development and demo only",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			reg, err := a.registry(cmd.Context())
 			if err != nil {
 				return err
 			}
-			added, err := reg.AddFakeSource(cmd.Context())
+			seed, err := reg.AddFakeSource(cmd.Context())
 			if err != nil {
 				return err
 			}
-			if added {
-				fmt.Fprintln(cmd.OutOrStdout(), "Source fake added")
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "Source fake exists: nothing changed")
+			out := cmd.OutOrStdout()
+			switch {
+			case !seed.SourceAdded && len(seed.AliasesAdded) == 0:
+				fmt.Fprintln(out, "Source fake and its aliases exist: nothing changed")
+				return nil
+			case seed.SourceAdded:
+				fmt.Fprintln(out, "Source fake added")
+			default:
+				fmt.Fprintln(out, "Source fake exists")
+			}
+			if len(seed.AliasesAdded) > 0 {
+				fmt.Fprintln(out, "Aliases added: "+strings.Join(seed.AliasesAdded, ", "))
 			}
 			return nil
 		},

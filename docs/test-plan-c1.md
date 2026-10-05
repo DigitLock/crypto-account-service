@@ -42,7 +42,7 @@
 | 3 | Schema | st4 | 8 |
 | 4 | Tenants and access | st5 | 14 |
 | 5 | Connections and vault | st6a, st6b | 37 |
-| 6 | Sync engine and ledger | st7 | 35 |
+| 6 | Sync engine and ledger | st7a, st7b | 36 |
 | 7 | Read API | st8 | 21 |
 | 8 | CI and repository | st2, st9 | 6 |
 
@@ -166,7 +166,7 @@
 | C1-T617 | Failure and backoff | Exchange connection | The fake fails a stream several times, then succeeds | `last_error` stored; counter + 1; next run after 30 s, 60 s, 120 s … at most 1 h; the success zeroes the counter | UC-102 step 8, §3.1 | — |
 | C1-T618 | Degraded and recovered | Exchange connection | Fail `ops` five times; let it succeed. Repeat with both streams failing | `DEGRADED` at the fifth failure; the other stream keeps its schedule; reads answer. `ACTIVE` at the first success, or when both recovered. Audit `CONNECTION_DEGRADED` and `CONNECTION_RECOVERED`, `credential_id` empty | EC-111, §2.3.1, FR-117 | — |
 | C1-T619 | Key rejected during a sync | Exchange connection | The fake rejects the key | `CREDENTIALS_INVALID`; no further call for the connection; audit record | EC-108, FR-117 | — |
-| C1-T620 | Periodic key check | Exchange connection | Advance 24 h with a read-only key; then with a key that gained a permission | `permissions_checked_at` moves; then `CREDENTIALS_INVALID`, streams stop, audit record | FR-119, EC-116, FR-117 | — |
+| C1-T620 | Periodic key check | Two exchange connections | Advance 24 h with a read-only key; then with a key that gained a permission. On the second connection: a key that the source rejects | `permissions_checked_at` moves; then `CREDENTIALS_INVALID`, streams stop, audit record. Second connection: `CREDENTIALS_INVALID`, audit record | FR-119, EC-116, EC-108, FR-117 | — |
 | C1-T621 | Key check scope | An exchange and a wallet connection | Advance less than 24 h; then 24 h | No check before the interval; never for the wallet; the check passes the limiter | FR-119, UC-102 | — |
 | C1-T622 | One limiter per source | Two exchange connections | Sync both | Every call of the fake carried a reservation; both connections draw on one budget | FR-110 | — |
 | C1-T623 | Budget spent | Exchange connection; a small budget | Sync more pages than the budget allows | The run waits and continues when the budget allows | UC-102 step 2, FR-110 | — |
@@ -175,13 +175,14 @@
 | C1-T626 | One engine | Two `server` processes on one database | Start both; stop the lock holder | Only one runs streams; the other serves the API and takes the lock within `SYNC_LOCK_RETRY` | §3.2 | — |
 | C1-T627 | `last_error` without secrets | Exchange connection | The fake returns an error that contains the key and the secret | `last_error` and the log hold the message without them | §2.1.1 Connector contract, FR-103 | — |
 | C1-T628 | A source is a connector and seed data | — | Check the imports of the engine, ledger and API packages | No connector package imported; no code of a source named | FR-112, ADR-2 | — |
-| C1-T629 | Invalid entry | Exchange connection | The fake returns a page with one invalid entry: amount 0; negative; 19 decimal places; 21 integer digits; empty `external_id` | The page is rolled back, its valid entries too; the cursor stays; a failure is recorded | EC-117 | — |
+| C1-T629 | Invalid entry or balance | Exchange connection | The fake returns a page with one invalid entry: amount 0; negative; 19 decimal places; 21 integer digits; empty `external_id`; unknown type, leg or direction. Then a snapshot with one invalid balance: negative; 19 decimal places; 21 integer digits; unknown account type; the same account type and asset twice | The page is rolled back, its valid entries too; the cursor stays; a failure is recorded. The snapshot is refused as a whole; the previous one stays the latest; a failure is recorded | EC-117 | — |
 | C1-T630 | Stream declared later | Exchange connection; the fake starts to declare a third stream | Restart the engine | The missing cursor is created and due at once; the other cursors are unchanged | FR-122, EC-119 | — |
-| C1-T631 | Key check, source unreachable | Exchange connection | The fake is unreachable at the key check | The status does not change; the check is repeated with backoff | EC-118 | — |
+| C1-T631 | Key check, source unreachable | Exchange connection | The fake is unreachable at the key check; then it answers with a rate limit; then the engine restarts | The status does not change; the check is repeated with backoff; after the restart it runs at once | EC-118 | — |
 | C1-T632 | Empty snapshot | Exchange connection; the fake returns no balances | Sync | One row in `balance_snapshots`, none in `snapshot_balances`; the run is a success | UC-102 step 6, §2.4 | — |
-| C1-T633 | Disabled tenant | Exchange connection | Disable the tenant; advance the clock; enable | No run while disabled; the streams run again after enable | UC-105, UC-102 preconditions | — |
+| C1-T633 | Disabled tenant, unavailable source | Exchange connection | Disable the tenant; advance the clock; enable. Then disable the source; advance the clock; enable | No run and no failure counted while the tenant is disabled or the source is not available; the streams run again afterwards, from their cursors | UC-105, UC-102 preconditions | — |
 | C1-T634 | Metrics | A scripted scenario: success, failure, duplicate, unknown asset, limit answer | Read `/metrics` | The nine metrics of §2.5.1 with the expected values | §2.5.1 | — |
 | C1-T635 | Interval from the connector | The fake declares streams with intervals of 5 and 20 min | Sync | `next_run_at` of each stream uses its own interval | §2.1.1 Connector contract, §3.1 | — |
+| C1-T636 | Page limit per run | Exchange connection; the fake holds a backfill of seven pages; `SYNC_MAX_PAGES_PER_RUN` 3 | Run the engine until the backfill ends | Three runs of the stream: 3, 3 and 1 pages. A run that stops at the limit is a success and its stream is due at once; a due balance stream of the connection runs in between; the ledger equals an uninterrupted run | UC-102 step 7, §3.1 | — |
 
 ### Phase 7 — Read API
 
@@ -257,7 +258,7 @@
 | EC-105 | T603, T604 | EC-119 | T630 |
 | EC-106 | T606 | EC-120 | T401 |
 | EC-107 | T624 | EC-121 | T406 |
-| EC-108 | T619 | EC-301 | T528 |
+| EC-108 | T619, T620 | EC-301 | T528 |
 | EC-109 | T614 | EC-302 | T531 |
 | EC-110 | T611 | EC-303 | T532 |
 | EC-111 | T618 | EC-318 | T535 |

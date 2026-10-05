@@ -177,12 +177,12 @@ What the engine expects from every connector (ADR-2). The Go types are fixed in 
 | Account check | Returns the account identity and, for a key, its permissions. Used by `CreateConnection` and by the periodic key check |
 | Streams | The connector declares the streams of a connection: name, family, interval, first mode, first cursor. It reads the interval from `sources.config` |
 | Page | One call returns entries, the next cursor, the mode and whether more pages follow. Only final records are returned |
-| Snapshot | One call returns all balances of the connection and their time, or fails as a whole |
-| Rate limiter | The engine creates one limiter per source from the budgets the connector declares and hands it to the connector. The connector reserves the cost before every request and reports the limit answers of the source |
+| Snapshot | One call returns all balances of the connection and their time, or fails as a whole. A balance has `free` and `locked` not negative, with at most 18 decimal places and 20 integer digits, a known account type, and appears once per account type and native asset. A snapshot that breaks this is refused as a whole (EC-117) |
+| Rate limiter | The engine creates one limiter per source from the budgets the connector declares and hands it to the connector. The connector reserves the cost before every request and reports the limit answers of the source. A budget is a number of cost units per time window: a reservation waits until the window allows it. A pause demanded by the source blocks its budget until the pause ends |
 | Errors | Typed: key rejected, key not read-only, rate limit with the pause the source demands, source unreachable. Anything else is a plain failure of the run |
-| Entry | Positive amount with at most 18 decimal places and 20 integer digits; `external_id` not empty. An entry that breaks this fails its page (EC-117) |
+| Entry | Positive amount with at most 18 decimal places and 20 integer digits; `external_id` not empty; a known type, leg and direction. An entry that breaks this fails its page (EC-117). Amounts travel as decimal strings and are stored as `NUMERIC`: no float and no exponent on the path |
 | Secrets | A connector gets the decrypted key only for the call and never puts it into an error or a log line. The engine removes the key and the secret from `last_error` and from its own log lines |
-| Fake connector | Scripted connector for tests. In a running `server` only with `ENABLE_FAKE_SOURCE`: development and demo, fictitious data only. Without a script it accepts any key, derives the account from the API key and reports `READ` |
+| Fake connector | Scripted connector for tests. In a running `server` only with `ENABLE_FAKE_SOURCE`: development and demo, fictitious data only. Without a script it accepts any key, derives the account from the API key and reports `READ`; it returns a small fixed history and a snapshot of `BTC` and `USDT` |
 
 #### 2.1.2 CreateConnection
 
@@ -530,15 +530,16 @@ See §2.1.1.
 | 4 | The connector maps native records to canonical entries or a snapshot; native asset codes are resolved through `asset_aliases` | An unknown code is kept as the canonical code and counted |
 | 5 | Ledger stream: in one transaction insert the entries, skip those whose idempotency key exists, move the cursor | Rollback; step 8 |
 | 6 | Balance stream: insert a new snapshot with its balances; a snapshot without balances is stored too | Rollback; step 8 |
-| 7 | More pages → step 2. Otherwise set `last_success_at`, zero the failure counter, set `next_run_at` | — |
+| 7 | More pages → step 2, up to `max_pages_per_run` pages in one run. Otherwise set `last_success_at`, zero the failure counter, set `next_run_at`. A run that stops at the page limit is a success too, and its stream is due at once, behind the streams that were already due | — |
 | 8 | Failure: store `last_error`, increase the failure counter, set `next_run_at` with exponential backoff | — |
 
 - The streams of one connection run one after another. Connections run in parallel, at most `SYNC_WORKERS` at a time.
 - A stream gets its interval, first mode and first cursor from the connector (Connector contract).
+- A cursor of a stream that the connector no longer declares is kept and not run.
 - The periodic key check covers every `ACTIVE` and `DEGRADED` connection that has a key. It passes through the limiter of the source.
 
 ##### Preconditions
-- The connection is `ACTIVE` or `DEGRADED`; its tenant is `ACTIVE`.
+- The connection is `ACTIVE` or `DEGRADED`; its tenant is `ACTIVE`; its source is available (Common rules). While one of these does not hold, the streams of the connection are not run and no failure is counted; they continue from their cursors afterwards.
 
 ##### Trigger
 Timer per stream; `TriggerSync`; connection created; an event of the source (ADR-13).
@@ -560,14 +561,14 @@ Steps 1–7.
 | EC-105 | The same record arrives again (overlapping window, retry, restart) | Step 5: skipped by the idempotency key |
 | EC-106 | The service stops in the middle of a backfill | The cursor moved only with committed pages; the next run continues from it |
 | EC-107 | The source answers "rate limit exceeded" | The limiter pauses the affected budget for the time the source demands; no retry before that. The run counts as failed (step 8); its next run is not before the end of the pause |
-| EC-108 | The source rejects the key | Connection → `CREDENTIALS_INVALID`; all its streams stop; audit record |
+| EC-108 | The source rejects the key, during a sync or the periodic key check | Connection → `CREDENTIALS_INVALID`; all its streams stop; audit record |
 | EC-109 | Unknown native asset code | Step 4: imported under its native code; metric and log |
 | EC-110 | An operation at the source is not final yet | Not imported; picked up by a later run once final |
 | EC-111 | A stream keeps failing | After `failure_threshold` failures the connection is `DEGRADED`; reads keep returning the last snapshot, stale by the age rule of §2.1.3. The first success of the stream returns the connection to `ACTIVE`, unless another stream is over the threshold |
 | EC-112 | `TriggerSync` called again inside the cooldown | `RESOURCE_EXHAUSTED` |
 | EC-116 | The key gains a trade, withdrawal or transfer permission after the connection was created | Found by the periodic key check; connection → `CREDENTIALS_INVALID`; audit record |
-| EC-117 | The connector returns an invalid entry: amount not positive, more than 18 decimal places or 20 integer digits, empty `external_id` | The page is rolled back: nothing of it is stored; step 8 |
-| EC-118 | The source cannot be reached during the periodic key check | The status does not change; the check is repeated with the backoff of step 8 |
+| EC-117 | The connector returns an invalid entry: amount not positive, more than 18 decimal places or 20 integer digits, empty `external_id`, unknown type, leg or direction. Or an invalid balance (Connector contract, Snapshot) | The page or the snapshot is refused as a whole: nothing of it is stored, the previous snapshot stays the latest; step 8 |
+| EC-118 | The source cannot be reached, or answers with a rate limit, during the periodic key check | The status does not change; the check is repeated with the backoff of step 8. The count of repeats is kept in memory: after a restart the check runs at once |
 | EC-119 | A connector declares a stream that an existing connection does not have | The engine creates the missing cursor when it starts; the stream is due at once |
 
 ##### Acceptance Criteria
@@ -769,7 +770,7 @@ Service tokens for gRPC and Basic credentials for the processor API of `card-aut
 
 ##### sources
 ###### Description
-Exchanges and EVM networks. Business configuration lives here; system configuration lives in the environment. The migrations of C1 add the EVM networks (SRS — EVM Connector §2.4); an exchange is added with its connector. The row `fake` of the fake connector is a development seed, not a migration: `casctl source add-fake` adds it as an enabled `EXCHANGE` source; a second run changes nothing.
+Exchanges and EVM networks. Business configuration lives here; system configuration lives in the environment. The migrations of C1 add the EVM networks (SRS — EVM Connector §2.4); an exchange is added with its connector. The row `fake` of the fake connector is a development seed, not a migration: `casctl source add-fake` adds it as an enabled `EXCHANGE` source with the aliases of its two assets; a second run changes nothing.
 
 ###### Data model
 
@@ -831,7 +832,7 @@ Position and health of one stream of one connection.
 | cursor | JSONB | Yes | Connector-defined: last ID, time window, block number |
 | next_run_at | TIMESTAMPTZ | Yes | When the stream is due |
 | last_success_at | TIMESTAMPTZ | No | Last successful run |
-| last_error | TEXT | No | Last error, without secrets |
+| last_error | TEXT | No | Last error, without secrets, at most 500 characters |
 | consecutive_failures | INTEGER | Yes | Zeroed on success |
 
 ##### balance_snapshots
@@ -947,7 +948,7 @@ One row per reconciliation run (SRS — Card Spend UC-4). Milestone S3.
 
 | Service | Metric name | Value | Alert | Description | Requestor |
 |---|---|---|---|---|---|
-| server | `sync_runs_total{source,stream,result}` | — | Failure share > 20% for 15 min | Sync runs by outcome | BR-3 |
+| server | `sync_runs_total{source,stream,result}` | — | Failure share > 20% for 15 min | Sync runs by outcome: `success` or `failure`. `stream` is the stream family | BR-3 |
 | server | `sync_staleness_seconds{source}` | < `stale_after` | Above `stale_after` | Now minus the oldest `last_success_at` | BR-3 |
 | server | `connections{status}` | — | Any `CREDENTIALS_INVALID` | Connections by state | BR-1 |
 | server | `ledger_entries_inserted_total{source}` | — | — | New entries | BR-4 |
@@ -982,6 +983,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 | Rate-limit settings | `sources.config` | Per source | Defined in the source's SRS: `budget_share` for Binance, `rpc_rate_limit` for EVM networks |
 | Scheduler tick | Environment: `SYNC_TICK` | 1 s | How often the scheduler looks for due streams |
 | Workers | Environment: `SYNC_WORKERS` | 4 | Connections synced at the same time |
+| `max_pages_per_run` | Environment: `SYNC_MAX_PAGES_PER_RUN` | 20 | Pages of a ledger stream fetched in one run (UC-102 step 7) |
 | Engine lock retry | Environment: `SYNC_LOCK_RETRY` | 10 s | How often an instance without the engine lock tries to take it |
 | `failure_threshold` | Environment: `SYNC_FAILURE_THRESHOLD` | 5 | Failures before `DEGRADED` |
 | `backoff` | Environment: `SYNC_BACKOFF_INITIAL`, `SYNC_BACKOFF_MAX` | 30 s, doubling, cap 1 h | Delay after a failed run |
@@ -997,7 +999,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 - **Parallel work:**
   - the sync engine runs in one `server` instance at a time, guarded by a database advisory lock: one process owns the rate budgets of each source. An instance without the lock serves the API and tries to take the lock every `SYNC_LOCK_RETRY`;
   - API instances are stateless and can be many. C1 runs one instance: §4, issue 5;
-  - the ledger has one writer, so `seq` order equals commit order (FR-114);
+  - the ledger has one writer, so `seq` order equals commit order (FR-114): every transaction that writes ledger entries first takes one database lock, so the entries of different connections are committed one after another;
   - connections sync concurrently, at most `SYNC_WORKERS` at a time; the streams of one connection run one after another; a stream never runs twice at once.
 - **Audit log:** `audit_log` for changes; `ledger_entries.raw` for imported data; no secrets in either.
 - **Performance:** read methods p95 ≤ 100 ms: database only. Sync speed is bounded by the source's rate budget, not by CAS.

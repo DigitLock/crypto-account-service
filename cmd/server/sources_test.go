@@ -143,9 +143,9 @@ func TestT535_ChainOutsideTheAllowList(t *testing.T) {
 func TestT536_FakeSourceBehindItsFlag(t *testing.T) {
 	env, callCtx, reg := databaseEnv(t)
 	for i, want := range []bool{true, false} {
-		added, err := reg.AddFakeSource(context.Background())
-		if err != nil || added != want {
-			t.Fatalf("AddFakeSource run %d: added %v, %v; want %v", i+1, added, err, want)
+		seed, err := reg.AddFakeSource(context.Background())
+		if err != nil || seed.SourceAdded != want {
+			t.Fatalf("AddFakeSource run %d: source added %v, %v; want %v", i+1, seed.SourceAdded, err, want)
 		}
 	}
 	request := &casv1.CreateConnectionRequest{

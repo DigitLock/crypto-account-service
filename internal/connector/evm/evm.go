@@ -5,6 +5,8 @@ package evm
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 
 	"golang.org/x/crypto/sha3"
 
@@ -48,6 +50,22 @@ func (c *Connector) CheckAccount(_ context.Context, _ connector.Source, cred con
 // Streams: a wallet connection has no stream in C1 (UC-101 postcondition).
 func (c *Connector) Streams(context.Context, connector.Source, connector.AccountInfo) ([]connector.Stream, error) {
 	return nil, nil
+}
+
+// errNoStreams: the EVM connector of C1 declares no stream, so the engine never asks for pages or snapshots.
+var errNoStreams = errors.New("evm: the connector has no streams in C1")
+
+// Budgets: no budget; the RPC client comes in S3.
+func (c *Connector) Budgets(connector.Source) []connector.Budget { return nil }
+
+// FetchPage: the connector has no streams.
+func (c *Connector) FetchPage(context.Context, connector.Connection, string, connector.Mode, json.RawMessage) (connector.Page, error) {
+	return connector.Page{}, errNoStreams
+}
+
+// FetchSnapshot: the connector has no streams.
+func (c *Connector) FetchSnapshot(context.Context, connector.Connection) (connector.Snapshot, error) {
+	return connector.Snapshot{}, errNoStreams
 }
 
 // CheckAddress applies UC-301 steps 1 to 3 and returns the address in EIP-55 form.

@@ -40,6 +40,7 @@ type Config struct {
 
 	SyncTick             time.Duration
 	SyncWorkers          int
+	SyncMaxPagesPerRun   int
 	SyncLockRetry        time.Duration
 	SyncFailureThreshold int
 	SyncBackoffInitial   time.Duration
@@ -80,6 +81,7 @@ func Load(getenv func(string) string) (Config, error) {
 
 		SyncTick:             p.duration("SYNC_TICK", time.Second),
 		SyncWorkers:          p.integer("SYNC_WORKERS", 4, 1, 1<<31-1),
+		SyncMaxPagesPerRun:   p.integer("SYNC_MAX_PAGES_PER_RUN", 20, 1, 1<<31-1),
 		SyncLockRetry:        p.duration("SYNC_LOCK_RETRY", 10*time.Second),
 		SyncFailureThreshold: p.integer("SYNC_FAILURE_THRESHOLD", 5, 1, 1<<31-1),
 		SyncBackoffInitial:   p.duration("SYNC_BACKOFF_INITIAL", 30*time.Second),
@@ -118,6 +120,7 @@ func (c Config) LogValue() slog.Value {
 		duration("SHUTDOWN_TIMEOUT", c.ShutdownTimeout),
 		duration("SYNC_TICK", c.SyncTick),
 		slog.Int("SYNC_WORKERS", c.SyncWorkers),
+		slog.Int("SYNC_MAX_PAGES_PER_RUN", c.SyncMaxPagesPerRun),
 		duration("SYNC_LOCK_RETRY", c.SyncLockRetry),
 		slog.Int("SYNC_FAILURE_THRESHOLD", c.SyncFailureThreshold),
 		duration("SYNC_BACKOFF_INITIAL", c.SyncBackoffInitial),

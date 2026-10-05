@@ -376,11 +376,26 @@ func lineWith(text, s string) string {
 func TestT536_FakeSourceBehindItsFlag(t *testing.T) {
 	pool := setup(t)
 
-	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake added\n" {
+	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake added\nAliases added: BTC, USDT\n" {
 		t.Errorf("first run printed %q", r.stdout)
 	}
-	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake exists: nothing changed\n" {
+	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake and its aliases exist: nothing changed\n" {
 		t.Errorf("second run printed %q", r.stdout)
+	}
+	// A lost alias is added again; the source stays.
+	if _, err := pool.Exec(ctx, `DELETE FROM asset_aliases WHERE native_asset = 'USDT'`); err != nil {
+		t.Fatal(err)
+	}
+	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake exists\nAliases added: USDT\n" {
+		t.Errorf("third run printed %q", r.stdout)
+	}
+	var aliases string
+	if err := pool.QueryRow(ctx, `SELECT string_agg(a.native_asset || '=' || a.asset, ',' ORDER BY a.native_asset)
+		FROM asset_aliases a JOIN sources s ON s.id = a.source_id WHERE s.code = 'fake'`).Scan(&aliases); err != nil {
+		t.Fatal(err)
+	}
+	if aliases != "BTC=BTC,USDT=USDT" {
+		t.Errorf("aliases of fake = %s, want BTC=BTC,USDT=USDT", aliases)
 	}
 
 	var rows int

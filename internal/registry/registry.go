@@ -243,9 +243,37 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == codeUniqueViolation
 }
 
-// AddFakeSource adds the development seed of the fake connector: the source fake, kind EXCHANGE,
-// enabled, empty config. It reports false and changes nothing when the row exists. No audit row.
-func (r *Registry) AddFakeSource(ctx context.Context) (bool, error) {
-	n, err := repository.New(r.pool).AddFakeSource(ctx)
-	return n == 1, err
+// FakeSeed reports what AddFakeSource added.
+type FakeSeed struct {
+	SourceAdded  bool
+	AliasesAdded []string
+}
+
+// fakeAssets are the assets of the fake connector: native code and canonical asset.
+var fakeAssets = [][2]string{{"BTC", "BTC"}, {"USDT", "USDT"}}
+
+// AddFakeSource adds the development seed of the fake connector in one transaction: the source fake, kind
+// EXCHANGE, enabled, empty config, and the aliases of its two assets, BTC and USDT. What exists stays as
+// it is. No audit row.
+func (r *Registry) AddFakeSource(ctx context.Context) (FakeSeed, error) {
+	var seed FakeSeed
+	err := r.inTx(ctx, func(q *repository.Queries) error {
+		seed = FakeSeed{}
+		n, err := q.AddFakeSource(ctx)
+		if err != nil {
+			return err
+		}
+		seed.SourceAdded = n == 1
+		for _, a := range fakeAssets {
+			n, err := q.AddFakeAlias(ctx, repository.AddFakeAliasParams{NativeAsset: a[0], Asset: a[1]})
+			if err != nil {
+				return err
+			}
+			if n == 1 {
+				seed.AliasesAdded = append(seed.AliasesAdded, a[0])
+			}
+		}
+		return nil
+	})
+	return seed, err
 }

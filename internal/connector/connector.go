@@ -1,6 +1,6 @@
 // Package connector is the contract between the core and the source adapters (ADR-2, SRS — Core §2.1.1
-// Connector contract). This stage holds what connection creation needs: capabilities, the account check
-// and the declared streams. Pages, snapshots, the rate limiter and the periodic key check come in st7.
+// Connector contract): capabilities, the account check, the declared streams, the budgets of the rate
+// limiter, pages of entries and balance snapshots. Amounts are decimal strings: no float on the path.
 package connector
 
 import (
@@ -84,6 +84,79 @@ type Connector interface {
 	CheckAccount(ctx context.Context, src Source, cred Credentials) (AccountInfo, error)
 	// Streams declares the streams of a connection of the account.
 	Streams(ctx context.Context, src Source, account AccountInfo) ([]Stream, error)
+	// Budgets declares the budgets of the rate limiter of a source. The engine builds one limiter per source.
+	Budgets(src Source) []Budget
+	// FetchPage returns one page of a ledger stream from cursor. Only final records are returned.
+	FetchPage(ctx context.Context, conn Connection, stream string, mode Mode, cursor json.RawMessage) (Page, error)
+	// FetchSnapshot returns all balances of the connection and their time, or fails as a whole.
+	FetchSnapshot(ctx context.Context, conn Connection) (Snapshot, error)
+}
+
+// Budget is a number of cost units per time window of one source.
+type Budget struct {
+	Name   string
+	Units  int
+	Window time.Duration
+}
+
+// Limiter is the rate limiter of a source, as a connector sees it.
+type Limiter interface {
+	// Reserve takes cost units of a budget before a request; it waits until the budget allows it and
+	// returns the error of ctx when ctx ends first.
+	Reserve(ctx context.Context, budget string, cost int) error
+	// Pause blocks a budget for the pause the source demands; the other budgets go on.
+	Pause(budget string, d time.Duration)
+}
+
+// Connection is what the page and snapshot calls get.
+type Connection struct {
+	// ID is the connection ID in its 36-character form.
+	ID     string
+	Source Source
+	// Account is the account identity: an exchange account ID or a wallet address.
+	Account string
+	// Key is the decrypted key of an exchange connection, for this call only; nil for a wallet.
+	Key *ExchangeKey
+	// Limiter is the limiter of the source; every request reserves its cost in it first.
+	Limiter Limiter
+}
+
+// Page is one page of a ledger stream.
+type Page struct {
+	Entries []Entry
+	// Cursor and Mode are where the next page starts.
+	Cursor json.RawMessage
+	Mode   Mode
+	// More reports that more pages follow now.
+	More bool
+}
+
+// Entry is one movement of one asset, as the connector maps it (SRS — Core §2.1.4, ADR-5).
+type Entry struct {
+	ExternalID  string
+	Leg         string
+	Type        string
+	Direction   string
+	NativeAsset string
+	// Amount is a positive plain decimal: at most 20 integer digits and 18 decimal places.
+	Amount     string
+	OccurredAt time.Time
+	// Raw is the source record as received.
+	Raw json.RawMessage
+}
+
+// Snapshot is all balances of a connection at one time.
+type Snapshot struct {
+	TakenAt  time.Time
+	Balances []Balance
+}
+
+// Balance is the balance of one asset in one account type. Free and Locked are plain decimals, not negative.
+type Balance struct {
+	AccountType string
+	NativeAsset string
+	Free        string
+	Locked      string
 }
 
 // ChainAllowList is implemented by the EVM connector, which holds the allow-list of chain IDs.
@@ -116,7 +189,9 @@ func (e *KeyNotReadOnlyError) Error() string {
 
 // RateLimitError: the source answered with a rate limit and demands a pause.
 type RateLimitError struct {
-	Pause time.Duration
+	// Budget is the budget the source limited; the connector has reported the pause to the limiter.
+	Budget string
+	Pause  time.Duration
 }
 
 func (e *RateLimitError) Error() string {

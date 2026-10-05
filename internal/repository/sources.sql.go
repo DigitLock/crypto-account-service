@@ -9,6 +9,26 @@ import (
 	"context"
 )
 
+const addFakeAlias = `-- name: AddFakeAlias :execrows
+INSERT INTO asset_aliases (source_id, native_asset, asset)
+SELECT id, $1, $2 FROM sources WHERE code = 'fake'
+ON CONFLICT (source_id, native_asset) DO NOTHING
+`
+
+type AddFakeAliasParams struct {
+	NativeAsset string
+	Asset       string
+}
+
+// Alias of an asset of the fake source: 1 row when added, 0 when it exists.
+func (q *Queries) AddFakeAlias(ctx context.Context, arg AddFakeAliasParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addFakeAlias, arg.NativeAsset, arg.Asset)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const addFakeSource = `-- name: AddFakeSource :execrows
 INSERT INTO sources (code, kind, enabled, config)
 VALUES ('fake', 'EXCHANGE', true, '{}')

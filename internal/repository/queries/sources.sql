@@ -14,3 +14,9 @@ WHERE code = $1;
 INSERT INTO sources (code, kind, enabled, config)
 VALUES ('fake', 'EXCHANGE', true, '{}')
 ON CONFLICT (code) DO NOTHING;
+
+-- name: AddFakeAlias :execrows
+-- Alias of an asset of the fake source: 1 row when added, 0 when it exists.
+INSERT INTO asset_aliases (source_id, native_asset, asset)
+SELECT id, sqlc.arg(native_asset), sqlc.arg(asset) FROM sources WHERE code = 'fake'
+ON CONFLICT (source_id, native_asset) DO NOTHING;
