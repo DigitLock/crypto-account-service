@@ -95,60 +95,73 @@ func (e *StartCheckError) Error() string {
 
 // StartChecks runs the start checks of SRS — Card Spend §3.2: eth_chainId of every endpoint equals the
 // configured chain ID and is in the allow-list; token() of the controller equals the configured token;
-// decimals() of the token equals the configured decimals. It returns the first failure.
-func (c *Client) StartChecks(ctx context.Context, want Expected) error {
+// decimals() of the token equals the configured decimals; symbol() of the token is read. It returns the symbol,
+// which card-auth keeps in memory and stores with every quote (D-10), or the first failure.
+func (c *Client) StartChecks(ctx context.Context, want Expected) (string, error) {
 	for _, ep := range c.Endpoints() {
 		check := "eth_chainId of " + ep.Name
 		cctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 		id, err := ep.Client.ChainID(cctx)
 		cancel()
 		if err != nil {
-			return &StartCheckError{Check: check, Detail: c.describe(err)}
+			return "", &StartCheckError{Check: check, Detail: c.describe(err)}
 		}
 		if !id.IsUint64() || id.Uint64() != want.ChainID {
-			return &StartCheckError{Check: check, Detail: fmt.Sprintf("the endpoint serves chain ID %s, CARD_AUTH_CHAIN_ID is %d", id, want.ChainID)}
+			return "", &StartCheckError{Check: check, Detail: fmt.Sprintf("the endpoint serves chain ID %s, CARD_AUTH_CHAIN_ID is %d", id, want.ChainID)}
 		}
 		if !slices.Contains(want.Allowed, id.Uint64()) {
-			return &StartCheckError{Check: check, Detail: fmt.Sprintf("chain ID %d is not in EVM_ALLOWED_CHAIN_IDS", id.Uint64())}
+			return "", &StartCheckError{Check: check, Detail: fmt.Sprintf("chain ID %d is not in EVM_ALLOWED_CHAIN_IDS", id.Uint64())}
 		}
 	}
 
 	backend := c.Primary.Client
 	controller, err := bindings.NewCardSpendControllerCaller(want.Controller, backend)
 	if err != nil {
-		return &StartCheckError{Check: "token() of the controller", Detail: "cannot bind the controller ABI"}
+		return "", &StartCheckError{Check: "token() of the controller", Detail: "cannot bind the controller ABI"}
 	}
 	cctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	token, err := controller.Token(&bind.CallOpts{Context: cctx})
 	cancel()
 	if err != nil {
-		return &StartCheckError{Check: "token() of the controller", Detail: c.describe(err)}
+		return "", &StartCheckError{Check: "token() of the controller", Detail: c.describe(err)}
 	}
 	if token != want.Token {
-		return &StartCheckError{Check: "token() of the controller", Detail: fmt.Sprintf(
+		return "", &StartCheckError{Check: "token() of the controller", Detail: fmt.Sprintf(
 			"the controller %s returns the token %s, CARD_AUTH_TOKEN_ADDRESS is %s", want.Controller.Hex(), token.Hex(), want.Token.Hex())}
 	}
 
 	tokenCaller, err := bindings.NewMockUSDCCaller(want.Token, backend)
 	if err != nil {
-		return &StartCheckError{Check: "decimals() of the token", Detail: "cannot bind the token ABI"}
+		return "", &StartCheckError{Check: "decimals() of the token", Detail: "cannot bind the token ABI"}
 	}
 	cctx, cancel = context.WithTimeout(ctx, CheckTimeout)
 	decimals, err := tokenCaller.Decimals(&bind.CallOpts{Context: cctx})
 	cancel()
 	if err != nil {
-		return &StartCheckError{Check: "decimals() of the token", Detail: c.describe(err)}
+		return "", &StartCheckError{Check: "decimals() of the token", Detail: c.describe(err)}
 	}
 	if decimals != want.Decimals {
-		return &StartCheckError{Check: "decimals() of the token", Detail: fmt.Sprintf(
+		return "", &StartCheckError{Check: "decimals() of the token", Detail: fmt.Sprintf(
 			"the token returns %d, CARD_AUTH_TOKEN_DECIMALS is %d", decimals, want.Decimals)}
 	}
-	return nil
+
+	cctx, cancel = context.WithTimeout(ctx, CheckTimeout)
+	symbol, err := tokenCaller.Symbol(&bind.CallOpts{Context: cctx})
+	cancel()
+	if err != nil {
+		return "", &StartCheckError{Check: "symbol() of the token", Detail: c.describe(err)}
+	}
+	return symbol, nil
 }
 
 // describe turns an error of an RPC call into text without a URL. Only the JSON-RPC error of the node and the
 // HTTP status are kept; transport errors quote the URL and are reduced to a fixed text.
 func (c *Client) describe(err error) string {
+	return c.describeWithin(err, CheckTimeout)
+}
+
+// describeWithin is describe for a call bounded by timeout.
+func (c *Client) describeWithin(err error, timeout time.Duration) string {
 	var (
 		rpcErr  rpc.Error
 		httpErr rpc.HTTPError
@@ -156,7 +169,7 @@ func (c *Client) describe(err error) string {
 	var s string
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		s = fmt.Sprintf("no answer within %s", CheckTimeout)
+		s = fmt.Sprintf("no answer within %s", timeout)
 	case errors.Is(err, context.Canceled):
 		s = "cancelled"
 	case errors.Is(err, bind.ErrNoCode):

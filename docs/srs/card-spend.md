@@ -116,12 +116,12 @@ sequenceDiagram
 
 ##### Common rules
 
-- **Contract:** `api/openapi/card-auth.yaml`, OpenAPI 3.0.3. Frozen copy: `api/openapi/frozen/card-auth.yaml`; `make openapi-check` compares the two and runs `oasdiff breaking`. A change of the contract needs the owner's decision and an update of this SRS first.
+- **Contract:** `api/openapi/card-auth.yaml`, OpenAPI 3.0.3. Frozen copy: `api/openapi/frozen/card-auth.yaml`; `make openapi-check` compares the two and runs `oasdiff breaking`. A change of the contract needs the owner's decision and an update of this SRS first. Changed once after the freeze of st3, by the owner's decisions D-17 … D-19 of 2026-10-06, before any consumer existed.
 - **Base path:** `/v1`. Media type: `application/json`. A request body above 16 KiB is `422`.
 - **Authorization:** HTTP Basic. One credential pair maps to one tenant. The pair is issued by `casctl processor issue <tenant>` and printed once: username = `key_id`, 12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters. Stored in `api_credentials` with `kind = PROCESSOR_BASIC` and the SHA-256 hash of the password bytes; verified in constant time (SRS — Core UC-105). `casctl processor list` and `revoke` as for service tokens. mTLS and request signing are out of MVP.
 - **TLS:** terminated in front of the service by the deployment (Deployment Guide). `card-auth` itself listens on plain HTTP; S2 runs it locally that way.
 - **Amounts:** fiat amounts are decimal strings; token amounts are base-unit integer strings. Responses carry decimal amounts without trailing zeros and without exponent, as SRS — Core §2.1.1; a request may carry trailing zeros.
-- **Validation, every endpoint:** `auth_id` and `return_id` are 1 to 64 printable ASCII characters (0x20–0x7E); `amount` is a decimal string greater than 0 with at most 4 decimal places and no exponent; `currency` is three upper-case letters; unknown fields are ignored.
+- **Validation, every endpoint:** `auth_id` and `return_id` are 1 to 64 printable ASCII characters (0x20–0x7E); `card_ref` is 1 to 64 characters, as in `RegisterCard` (D-19); `amount` is a decimal string greater than 0 with at most 14 digits before the point and at most 4 decimal places, no exponent: it fits `NUMERIC(18,4)` (D-17); `currency` is three upper-case letters; unknown fields are ignored.
 - **Normalized request:** the body compared for idempotency is the canonical form of the request: keys sorted, no whitespace, `amount` as a decimal without trailing zeros, `currency` upper case, `merchant` canonicalized the same way. `request_hash` is the SHA-256 of that form, so `"25.40"` and `"25.4"` and a different key order are the same request.
 - **HTTP status codes:**
 
@@ -132,9 +132,10 @@ sequenceDiagram
 | `404` | `auth_id` not found (status query only). |
 | `409` | Conflict: same `auth_id` or `return_id` with a different body, or a return for an authorization that is still being decided. |
 | `422` | Invalid request. |
+| `500` | Internal failure of a status query or a return; never for an authorization (D-18). |
 
 - An internal error during an authorization returns `200` with `DECLINED / INTERNAL_ERROR`: the processor always gets a decision.
-- **Error body** of `401`, `404`, `409` and `422`: `{ "error": { "code": "<code>", "message": "<text>" } }`. The message carries no secret and no internal detail.
+- **Error body** of `401`, `404`, `409`, `422` and `500`: `{ "error": { "code": "<code>", "message": "<text>" } }`. The message carries no secret and no internal detail.
 
 | Code | Status | When |
 |---|---|---|
@@ -145,6 +146,7 @@ sequenceDiagram
 | `AUTHORIZATION_IN_PROGRESS` | `409` | Return while the authorization is `RECEIVED` or `DEBIT_SUBMITTED` |
 | `RETURN_EXCEEDS_DEBIT` | `422` | Return amount above the part not yet returned |
 | `NOT_FOUND` | `404` | Unknown `auth_id` in the status query |
+| `INTERNAL` | `500` | Internal failure of a status query or a return: the database cannot be read. The message carries no internal detail (D-18) |
 
 #### 2.1.2 Authorize
 
@@ -172,7 +174,7 @@ See Common rules.
 | Parameter | Type | Required | Description | Example |
 |---|---|---|---|---|
 | auth_id | String, ≤ 64 | Yes | Processor's authorization ID. Unique per tenant. Reused on retries. | `9f1c2a7e-…` |
-| card_ref | String | Yes | Opaque card reference registered by the partner. | `card_7Q2M` |
+| card_ref | String, 1 to 64 characters | Yes | Opaque card reference registered by the partner. | `card_7Q2M` |
 | amount | String, decimal | Yes | Amount in `currency`, > 0. | `25.40` |
 | currency | String, ISO 4217 | Yes | Authorization currency. | `EUR` |
 | merchant | Object | No | Stored for audit. Not used in the decision in MVP. | — |
@@ -213,8 +215,8 @@ See Common rules.
 
 Quote example: 1 EUR = 1.1642 USD. 25.40 EUR × 1.1642 × 1.01 = 29.8663868 USD → rounded up to 29 866 387 base units.
 
-- **Rate source:** CRS serves `rate` = USD per one unit of the authorization currency, checked on 2026-10-05: pairs `EUR→USD`, `RSD→USD`, with `GBP→USD` and `CHF→USD` from the CRS package. No inversion anywhere. Until CRS serves a decimal string field, the `double` is formatted to 10 decimal places and all arithmetic is decimal from there; the stored CRS value has 10 decimal places, so nothing is lost. When the decimal field exists, it is used as it is.
-- **Rate age:** CRS rates are daily. A rate may be a day old, up to three days over a weekend; accepted by the owner on 2026-10-05. `is_outdated` of CRS means a failed poll, not the age of the rate: `RATE_UNAVAILABLE` is returned on `is_outdated`, never on age alone. An intraday rate source is a backlog item.
+- **Rate source:** CRS `v0.2.0` or later, checked on 2026-10-05. `card-auth` calls `GetRate(from_currency = currency, to_currency = USD)` and reads `rate_decimal`: USD per one unit of the authorization currency, the stored `NUMERIC(20,10)` as text with exactly 10 fractional digits, parsed as a decimal. The `double` field `rate` is never used. Pairs served: `EUR→USD`, `RSD→USD`, `GBP→USD`, `CHF→USD`; a pair is served only in that direction, so nothing is inverted. CRS answers `NOT_FOUND` for an unknown pair and also for a known pair before its first poll after a CRS start: both are `CURRENCY_NOT_SUPPORTED` (owner's decision D-14, fail-closed). An empty `rate_decimal` — a CRS older than `v0.2.0` — is `RATE_UNAVAILABLE` (D-15). `quote.rate` of a response follows the amount format of §2.1.1: `"1.1642000000"` is returned as `"1.1642"`.
+- **Rate age:** CRS rates are daily; accepted by the owner on 2026-10-05. ECB rates (Frankfurter, the primary for `EUR`, `GBP`, `CHF`) are published on working days only: on a weekend or before the day's publication the newest rate is from the previous working day, so a rate may be up to three days old. `updated_at` of CRS is the time of its poll, not the date of the rate; `is_outdated` means a failed poll, not the age. `RATE_UNAVAILABLE` is returned on `is_outdated`, never on age alone. An intraday rate source is a backlog item here and in CRS.
 
 ###### Decline reasons
 
@@ -223,8 +225,8 @@ Quote example: 1 EUR = 1.1642 USD. 25.40 EUR × 1.1642 × 1.01 = 29.8663868 USD 
 | `CARD_NOT_FOUND` | `card_ref` is unknown for the tenant |
 | `CARD_FROZEN` | Card status is `FROZEN` |
 | `PROGRAM_PAUSED` | The contract is paused |
-| `CURRENCY_NOT_SUPPORTED` | No rate pair for the currency |
-| `RATE_UNAVAILABLE` | CRS is unavailable, answers after the rate budget, or marks the rate `is_outdated` |
+| `CURRENCY_NOT_SUPPORTED` | No rate pair for the currency: CRS answers `NOT_FOUND` |
+| `RATE_UNAVAILABLE` | CRS is unavailable, answers after the rate budget, marks the rate `is_outdated`, or returns no `rate_decimal` |
 | `LIMIT_EXCEEDED` | Card daily limit or wallet daily limit would be exceeded |
 | `INSUFFICIENT_FUNDS` | Wallet balance < token amount |
 | `INSUFFICIENT_ALLOWANCE` | Allowance < token amount |
@@ -359,7 +361,7 @@ See Common rules.
 | `refundUsed(refundId)` | `bool` |
 | `token()`, `treasury()` | The immutable addresses |
 
-- `authId = keccak256(tenant_id, auth_id)`; `refundId = keccak256(tenant_id, return_id)`. IDs of different tenants cannot collide.
+- `authId = keccak256(tenant_uuid ‖ auth_id)`, `refundId = keccak256(tenant_uuid ‖ return_id)`: the 16 bytes of the tenant UUID followed by the UTF-8 bytes of the processor's ID, no separator, no length (D-16). The prefix has a fixed length, so two tenants with the same `auth_id` or `return_id` hash different inputs and get different IDs.
 - A known `authId` is one whose stored `user` is not the zero address. This is why `debit` rejects a zero `user`. A zero `authId` has no special rule.
 - Day = UTC day: `block.timestamp / 1 days`. A refund does not restore the day's limit.
 - `validUntil` is a Unix time in whole seconds; it is the last second at which the debit is accepted. `block.timestamp` advances by the block time (2 s on Base), so the expiry takes effect at a block boundary.
@@ -707,7 +709,7 @@ One row per `auth_id` of a tenant, including tombstones.
 | id | UUID | Yes | Primary key |
 | tenant_id | UUID | Yes | Tenant |
 | auth_id | TEXT | Yes | Processor's ID. Unique with `tenant_id` |
-| chain_auth_id | BYTEA | Yes | `keccak256(tenant_id, auth_id)`, 32 bytes |
+| chain_auth_id | BYTEA | Yes | `keccak256` of the 16 bytes of the tenant UUID followed by the UTF-8 bytes of `auth_id`, 32 bytes (§2.1.5, D-16) |
 | parent_auth_id | TEXT | No | Design only |
 | card_id | UUID | No | Null for a tombstone and for an unknown `card_ref` |
 | request_hash | BYTEA | No | Hash of the normalized request; detects EC-2. Null for a tombstone |
@@ -757,7 +759,7 @@ One row per reversal, refund or automatic return.
 | tenant_id | UUID | Yes | Tenant |
 | authorization_id | UUID | Yes | Authorization |
 | return_id | TEXT | Yes | Processor's ID, or generated for `LATE_DEBIT`. Unique with `tenant_id` |
-| chain_refund_id | BYTEA | Yes | `keccak256(tenant_id, return_id)`, 32 bytes |
+| chain_refund_id | BYTEA | Yes | `keccak256` of the 16 bytes of the tenant UUID followed by the UTF-8 bytes of `return_id`, 32 bytes (§2.1.5, D-16) |
 | type | TEXT | Yes | `REVERSAL`, `REFUND`, `LATE_DEBIT` |
 | request_hash | BYTEA | No | Hash of the normalized request; detects a changed retry. Null for `LATE_DEBIT` |
 | fiat_amount | NUMERIC(18,4) | No | Null for `LATE_DEBIT` |
@@ -850,7 +852,7 @@ All parameters come from the environment of `card-auth`; the variable names are 
 | `controller_address`, `token_address`, `token_decimals` | `CARD_AUTH_CONTROLLER_ADDRESS`, `CARD_AUTH_TOKEN_ADDRESS`, `CARD_AUTH_TOKEN_DECIMALS` | — | Contract and funding token; checked at start (§3.2) |
 | `OPERATOR_PRIVATE_KEY` | `OPERATOR_PRIVATE_KEY` | — | Environment only. On Anvil a default Anvil account key may be used, in `.env` only |
 | `DATABASE_URL` | `CARD_AUTH_DATABASE_URL` | — | PostgreSQL, role `cas_card_auth`; environment |
-| `CRS_ADDRESS` | `CRS_ADDRESS` | — | gRPC address of CRS; environment |
+| `CRS_ADDRESS` | `CRS_ADDRESS` | — | gRPC address of CRS `v0.2.0` or later, plaintext; locally `localhost:50052`. Unset: every non-USD authorization is `RATE_UNAVAILABLE` |
 | HTTP port | `CARD_AUTH_HTTP_PORT` | 8092 | Processor API; environment |
 | Health port | `CARD_AUTH_HEALTH_PORT` | 8093 | `/healthz`, `/readyz`, `/metrics`; environment |
 | Connection pool, shutdown | `CARD_AUTH_DB_POOL_MAX_CONNS`, `CARD_AUTH_DB_POOL_MIN_CONNS`, `CARD_AUTH_SHUTDOWN_TIMEOUT` | 10, 2, 15 s | As `server` (SRS — Core §3.1) |
@@ -870,7 +872,7 @@ All parameters come from the environment of `card-auth`; the variable names are 
   - every read of the decision path uses the `pending` block tag: on Base it sees the Flashblocks state the debit will see; on Anvil it equals `latest`;
   - transactions are EIP-1559: `maxPriorityFeePerGas` from `eth_maxPriorityFeePerGas`, `maxFeePerGas` = 2 × base fee of the pending block + the tip; a replacement raises both by `fee_bump_percent` on the same nonce (ADR-10);
   - fallback endpoint: after `rpc_fallback_after` consecutive failures of the primary, reads and sends go to `rpc_fallback_url`; every tracker cycle probes the primary with `eth_chainId` and switches back on success. No retry inside the read budget of step 9: a failed read is `CHAIN_UNAVAILABLE`. The fallback has no WebSocket; the listener stays on the primary;
-  - start checks, the service does not start otherwise: `eth_chainId` of the primary and of the fallback equals `chain_id` and is in the allow-list; `token()` of the controller equals `token_address`; `decimals()` of the token equals `token_decimals`; `next_nonce` of the operator is compared with its transaction count at the pending block tag: a missing `operator_accounts` row is created with that count; a lower `next_nonce` is raised to it and logged; a higher one is kept.
+  - start checks, the service does not start otherwise: `eth_chainId` of the primary and of the fallback equals `chain_id` and is in the allow-list; `token()` of the controller equals `token_address`; `decimals()` of the token equals `token_decimals`; `symbol()` of the token is read and kept in memory: it is the `token` stored with every quote and answered with an approval (D-10); `next_nonce` of the operator is compared with its transaction count at the pending block tag: a missing `operator_accounts` row is created with that count; a lower `next_nonce` is raised to it and logged; a higher one is kept.
 - **Audit log:**
   - `authorization_events`: every status change;
   - `operator_txs`: every transaction hash ever sent, including replaced ones;
@@ -898,5 +900,5 @@ All parameters come from the environment of `card-auth`; the variable names are 
 | 2 | Finality rule: N confirmations or a block tag. Ten L2 blocks are not finality on Base | Decided: tag `finalized` on Base Sepolia (L1 batch final, about 20 minutes), N confirmations on the local chain. `card-auth` and the indexer use the same rule (SRS — EVM Connector §2.1.1) |
 | 3 | Should a same-day return restore the card daily limit | No, same as the contract |
 | 4 | A contract event that matches no authorization of any tenant: where it is reported | In the reconciliation run of the platform tenant, as `UNKNOWN_DEBIT` or `UNKNOWN_REFUND` |
-| 5 | Rates to USD in CRS: which pairs it serves and in which direction. A lesson from ET: its rate is the inverse of the CRS rate | **Closed 2026-10-05.** Checked against the CRS contract: `rate` = USD per one unit of the authorization currency, no inversion; pairs `EUR→USD`, `RSD→USD`, with `GBP→USD` and `CHF→USD` from the CRS package; `rate` is a `double` stored with 10 decimal places, formatted to 10 places before decimal arithmetic until the decimal field exists; the rate is daily (§2.1.2). A currency without a pair is declined as `CURRENCY_NOT_SUPPORTED` |
+| 5 | Rates to USD in CRS: which pairs it serves and in which direction. A lesson from ET: its rate is the inverse of the CRS rate | **Closed 2026-10-05.** CRS `v0.2.0`: `rate_decimal` with 10 fractional digits, pairs `EUR`, `RSD`, `GBP`, `CHF` to USD, no inversion, daily rates (§2.1.2). A currency without a pair is declined as `CURRENCY_NOT_SUPPORTED` |
 | 6 | Several `card-auth` instances: the per-card lock and the waiter of a repeated `auth_id` live in memory of one instance (§3.2) | S2 runs one instance. Later: a session advisory lock per card and a waiter that polls the row; `docs/backlog.md` |

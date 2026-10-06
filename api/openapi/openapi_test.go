@@ -56,7 +56,7 @@ var operations = []operation{
 	},
 	{
 		method: "GET", path: "/v1/authorizations/{auth_id}", success: "Authorization",
-		errors: map[string][]string{"401": {"UNAUTHENTICATED"}, "404": {"NOT_FOUND"}},
+		errors: map[string][]string{"401": {"UNAUTHENTICATED"}, "404": {"NOT_FOUND"}, "500": {"INTERNAL"}},
 	},
 }
 
@@ -94,7 +94,7 @@ var enums = map[string][]string{
 	"ReturnStatus":      {"ACCEPTED", "SUBMITTED", "INCLUDED", "CONFIRMED", "RETRYING", "NOTHING_TO_RETURN"},
 	"ErrorCode": {
 		"UNAUTHENTICATED", "INVALID_REQUEST", "AUTH_ID_CONFLICT", "RETURN_ID_CONFLICT", "AUTHORIZATION_IN_PROGRESS",
-		"RETURN_EXCEEDS_DEBIT", "NOT_FOUND",
+		"RETURN_EXCEEDS_DEBIT", "NOT_FOUND", "INTERNAL",
 	},
 }
 
@@ -301,6 +301,10 @@ func TestT202_OpenAPIAgainstSRS(t *testing.T) {
 	})
 
 	t.Run("validation of §2.1.1", func(t *testing.T) {
+		// D-19: card_ref is 1 to 64 characters, as RegisterCard.
+		if ref := schema(t, doc, "AuthorizeRequest").Properties["card_ref"].Value; ref.MinLength != 1 || ref.MaxLength == nil || *ref.MaxLength != 64 {
+			t.Errorf("card_ref lengths = %d..%v, want 1..64", ref.MinLength, ref.MaxLength)
+		}
 		id := schema(t, doc, "ProcessorId")
 		if id.MinLength != 1 || id.MaxLength == nil || *id.MaxLength != 64 {
 			t.Errorf("ProcessorId lengths = %d..%v, want 1..64", id.MinLength, id.MaxLength)
@@ -310,7 +314,9 @@ func TestT202_OpenAPIAgainstSRS(t *testing.T) {
 			ok     []string
 			bad    []string
 		}{
-			{"FiatAmount", []string{"25.40", "25.4", "0.0001", "1000"}, []string{"25.40000", "1e3", "-1", "+1", "01.5", "25.", ".5", ""}},
+			// D-17: at most 14 digits before the point, NUMERIC(18,4).
+			{"FiatAmount", []string{"25.40", "25.4", "0.0001", "1000", "99999999999999.9999"},
+				[]string{"25.40000", "1e3", "-1", "+1", "01.5", "25.", ".5", "", "100000000000000", "123456789012345.5"}},
 			{"Currency", []string{"EUR", "USD"}, []string{"eur", "EU", "EURO"}},
 			{"TokenAmount", []string{"0", "29866387"}, []string{"-1", "1.5", "01", "1e6", ""}},
 			{"ProcessorId", []string{"9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11", "rv-20261002-0001", "a b"}, []string{"", strings.Repeat("a", 65), "tab\there", "ünicode"}},

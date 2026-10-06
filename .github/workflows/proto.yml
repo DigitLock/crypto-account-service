@@ -9,7 +9,10 @@ on:
       - "proto/**"
       - "buf.yaml"
       - "buf.gen.yaml"
+      - "third_party/**"
+      - "buf.gen.crs.yaml"
       - "internal/grpc/pb/**"
+      - "internal/crs/pb/**"
       - "api/**"
       - "Makefile"
       - ".github/workflows/proto.yml"
@@ -20,7 +23,10 @@ on:
       - "proto/**"
       - "buf.yaml"
       - "buf.gen.yaml"
+      - "third_party/**"
+      - "buf.gen.crs.yaml"
       - "internal/grpc/pb/**"
+      - "internal/crs/pb/**"
       - "api/**"
       - "Makefile"
       - ".github/workflows/proto.yml"
@@ -56,6 +62,9 @@ jobs:
 
       - name: Contract check
         run: make proto-check
+
+      - name: Generated CRS code is current
+        run: make crs-proto-check
 
       - name: OpenAPI contract check
         run: make openapi-check

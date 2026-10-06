@@ -210,7 +210,8 @@ func TestT104_Health(t *testing.T) {
 				t.Errorf("/metrics Content-Type = %q, want the Prometheus text format", header.Get("Content-Type"))
 			}
 		}
-		for _, path := range []string{"/", "/v1/authorizations", "/healthz"} {
+		// Only the routes of the processor API exist on the HTTP port.
+		for _, path := range []string{"/", "/healthz", "/metrics", "/v1/authorizations/a/returns"} {
 			if status, _ := get(t, s.httpURL+path); status != http.StatusNotFound {
 				t.Errorf("GET %s on the HTTP port = %d, want 404", path, status)
 			}
@@ -293,8 +294,8 @@ func TestT105_OperatorKeyNeverPrinted(t *testing.T) {
 		}
 		out := s.logs.String()
 		if !strings.Contains(out, `"msg":"card-auth starting"`) || !strings.Contains(out, `"CARD_AUTH_CHAIN_ID":31337`) ||
-			!strings.Contains(out, `"operator":"`+c.Operator.Hex()+`"`) {
-			t.Errorf("start line with the configuration and the operator address missing:\n%s", out)
+			!strings.Contains(out, `"operator":"`+c.Operator.Hex()+`"`) || !strings.Contains(out, `"token":"USDC"`) {
+			t.Errorf("start line with the configuration, the operator address and the token symbol missing:\n%s", out)
 		}
 		assertClean(t, "log", out, env)
 		for _, name := range []string{"OPERATOR_PRIVATE_KEY", "CARD_AUTH_DATABASE_URL", "CARD_AUTH_RPC_URL"} {

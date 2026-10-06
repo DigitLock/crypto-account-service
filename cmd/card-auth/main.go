@@ -1,5 +1,6 @@
 // Command card-auth is the card authorization service of CAS (SRS — Card Spend): processor API on
-// CARD_AUTH_HTTP_PORT, health and metrics on CARD_AUTH_HEALTH_PORT. The processor API has no route yet.
+// CARD_AUTH_HTTP_PORT, health and metrics on CARD_AUTH_HEALTH_PORT. Steps 10 to 13 of UC-1 are not built yet:
+// an authorization that passes every check is declined as INTERNAL_ERROR and no transaction is sent.
 package main
 
 import (
@@ -20,7 +21,11 @@ import (
 
 	"github.com/DigitLock/crypto-account-service/internal/chain"
 	"github.com/DigitLock/crypto-account-service/internal/config"
+	"github.com/DigitLock/crypto-account-service/internal/crs"
+	"github.com/DigitLock/crypto-account-service/internal/decision"
 	"github.com/DigitLock/crypto-account-service/internal/health"
+	"github.com/DigitLock/crypto-account-service/internal/processorapi"
+	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/signer"
 	"github.com/DigitLock/crypto-account-service/migrations"
 )
@@ -63,13 +68,14 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		return err
 	}
 	defer client.Close()
-	if err := client.StartChecks(ctx, chain.Expected{
+	symbol, err := client.StartChecks(ctx, chain.Expected{
 		ChainID:    cfg.ChainID,
 		Allowed:    cfg.EVMAllowedChainIDs,
 		Controller: cfg.ControllerAddress,
 		Token:      cfg.TokenAddress,
 		Decimals:   cfg.TokenDecimals,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 	count, err := client.OperatorNonce(ctx, operator.Address())
@@ -90,20 +96,61 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		return fmt.Errorf("listen on CARD_AUTH_HTTP_PORT: %w", err)
 	}
 
+	reader, err := chain.NewReader(client, chain.ReaderConfig{
+		ChainID:       cfg.ChainID,
+		Controller:    cfg.ControllerAddress,
+		Token:         cfg.TokenAddress,
+		ReadTimeout:   cfg.RPCReadTimeout,
+		FallbackAfter: cfg.RPCFallbackAfter,
+		ProbeInterval: cfg.TrackerInterval,
+	}, logger)
+	if err != nil {
+		return err
+	}
+	// Unset CRS_ADDRESS: no rate source, every non-USD authorization is RATE_UNAVAILABLE (§3.1).
+	var rates decision.Rates
+	if cfg.CRSAddress != "" {
+		rc, err := crs.Dial(cfg.CRSAddress)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		rates = rc
+	} else {
+		logger.Warn("CRS_ADDRESS is unset: every non-USD authorization is declined as RATE_UNAVAILABLE")
+	}
+	engine := decision.New(pool, rates, reader, notBuiltDebit{logger: logger}, decision.Config{
+		DecisionDeadline: cfg.DecisionDeadline,
+		QuoteBufferBPS:   cfg.QuoteBufferBPS,
+		TokenDecimals:    cfg.TokenDecimals,
+		Token:            symbol,
+		ChainID:          cfg.ChainID,
+	}, logger, time.Now)
+	metrics := health.NewRegistry()
+
 	healthSrv := &http.Server{
-		Handler: health.NewHandler(logger, health.NewRegistry(),
+		Handler: health.NewHandler(logger, metrics,
 			health.DatabasePing{DB: pool},
 			health.SchemaVersion{DB: pool, Want: migrations.Latest()},
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	// The processor API has no route yet: every request is 404.
 	httpSrv := &http.Server{
-		Handler:           http.NotFoundHandler(),
+		Handler: processorapi.NewHandler(processorapi.Deps{
+			DB:      pool,
+			Engine:  engine,
+			Reads:   registry.NewCards(pool, time.Now),
+			Metrics: processorapi.NewMetrics(metrics),
+			Logger:  logger,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	logger.Info("card-auth starting", "config", cfg, "operator", operator.Address().Hex())
+	logger.Info("card-auth starting", "config", cfg, "operator", operator.Address().Hex(), "token", symbol)
+
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	defer stopProbe()
+	go reader.Probe(probeCtx)
 
 	errc := make(chan error, 2)
 	serve := func(name string, srv *http.Server, ln net.Listener) {

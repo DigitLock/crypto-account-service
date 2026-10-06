@@ -237,6 +237,8 @@ paths:
                 error:
                   code: NOT_FOUND
                   message: authorization not found
+        '500':
+          $ref: '#/components/responses/Internal'
 components:
   securitySchemes:
     basicAuth:
@@ -266,6 +268,18 @@ components:
             error:
               code: UNAUTHENTICATED
               message: unauthenticated
+    Internal:
+      description: |
+        `INTERNAL`: an internal failure of a status query or a return. Never for an authorization: it answers `200`
+        with `DECLINED / INTERNAL_ERROR`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INTERNAL
+              message: internal error
     InvalidRequest:
       description: '`INVALID_REQUEST`: a validation rule fails, or the body is not JSON, or the body is above 16 KiB.'
       content:
@@ -285,8 +299,10 @@ components:
       pattern: '^[\x20-\x7E]+$'
     FiatAmount:
       type: string
-      description: Decimal string greater than 0, at most 4 decimal places, no exponent. Zero is refused by the service.
-      pattern: '^(0|[1-9][0-9]*)(\.[0-9]{1,4})?$'
+      description: |
+        Decimal string greater than 0, at most 14 digits before the point and 4 after it (NUMERIC(18,4)), no
+        exponent. Zero is refused by the service.
+      pattern: '^(0|[1-9][0-9]{0,13})(\.[0-9]{1,4})?$'
       example: '25.40'
     TokenAmount:
       type: string
@@ -386,7 +402,9 @@ components:
           description: Processor's authorization ID. Unique per tenant. Reused on retries.
         card_ref:
           type: string
-          description: Opaque card reference registered by the partner.
+          description: Opaque card reference registered by the partner, 1 to 64 characters.
+          minLength: 1
+          maxLength: 64
         amount:
           allOf:
             - $ref: '#/components/schemas/FiatAmount'
@@ -539,9 +557,10 @@ components:
         - AUTHORIZATION_IN_PROGRESS
         - RETURN_EXCEEDS_DEBIT
         - NOT_FOUND
+        - INTERNAL
     Error:
       type: object
-      description: Body of `401`, `404`, `409` and `422`. The message carries no secret and no internal detail.
+      description: Body of `401`, `404`, `409`, `422` and `500`. The message carries no secret and no internal detail.
       required: [error]
       properties:
         error:

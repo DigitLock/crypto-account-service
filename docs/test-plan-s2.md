@@ -36,7 +36,7 @@
 | 1 | Configuration, health, start checks | st2 | 7 |
 | 2 | Contracts of the APIs | st3 | 8 |
 | 3 | Schema, roles, card registry | st4 | 19 |
-| 4 | Decision on Anvil | st5 | 27 |
+| 4 | Decision on Anvil | st5a, st5b (§7) | 27 |
 | 5 | Returns and tracker | st6 | 22 |
 | 6 | Chain listener | st7 | 8 |
 | 7 | Processor CLI and hard tests | st8 | 10 |
@@ -62,7 +62,7 @@
 | ID | Description | Preconditions | Steps | Expected | Req | Status |
 |---|---|---|---|---|---|---|
 | S2-T201 | OpenAPI valid | `api/openapi/card-auth.yaml` | Load through the loader of the package `api/openapi`; validate | Valid OpenAPI 3.0.3, loaded and validated by kin-openapi | ADR-7, §2.1 | — |
-| S2-T202 | OpenAPI against the SRS | Contract | Compare paths, bodies, codes with §2.1.1 – §2.1.4, the error body and its codes included | Three operations; every field with the stated type and requiredness; codes 200, 401, 404, 409, 422; amounts are strings; `securitySchemes` Basic | §2.1.1 – §2.1.4 | — |
+| S2-T202 | OpenAPI against the SRS | Contract | Compare paths, bodies, codes with §2.1.1 – §2.1.4, the error body and its codes included | Three operations; every field with the stated type and requiredness; codes 200, 401, 404, 409, 422, and 500 for the status query; error codes with `INTERNAL`; amounts are strings; `securitySchemes` Basic. A database failure of the status query answers `500 INTERNAL` without internal detail, valid against the OpenAPI | §2.1.1 – §2.1.4, D-18 | — |
 | S2-T203 | Responses match the schema | `card-auth` running | Every response of phases 4 and 5 is validated against the OpenAPI in the test harness | No schema violation | §2.1 | — |
 | S2-T204 | `CardService` in the proto | `proto/cas/v1/card_service.proto` | `buf lint`; read the descriptors | Six methods: `RegisterCard`, `UpdateCard`, `GetCard`, `ListCards`, `GetAuthorization`, `ListAuthorizations`; `STANDARD` rules pass; no `GetReconciliationReport` | SRS — Core §2.1.1, §2.1.5 | — |
 | S2-T205 | Additive change only | Image of C1 | `buf breaking --against` the image of `v0.2.0` | Passes: nothing of C1 changed | C1 summary §4 | — |
@@ -94,16 +94,16 @@
 | S2-T318 | `ListAuthorizations` | 30 authorizations of two cards and two owners, several statuses and times; tenant B | List all; by `card_ref`, `owner_ref`, `status`, `received_from`/`to`, combined; an unknown `status`; pages; as B | Order `received_at` descending, `auth_id`; filters AND, from inclusive, to exclusive; `INVALID_ARGUMENT`; every row once; B sees only B's rows; tombstones included | FR-116, FR-105, SRS — Core §2.1.1 | — |
 | S2-T711 | Processor credential CLI | Migrated database | `casctl` issues a Basic pair for tenant A; lists; revokes | Printed once; only the hash stored; audit `CREDENTIAL_ISSUED`, `CREDENTIAL_REVOKED`; `401` after revocation | SRS — Core UC-105 | — |
 
-### Phase 4 — Decision on Anvil (st5)
+### Phase 4 — Decision on Anvil (st5a, st5b)
 
 | ID | Description | Preconditions | Steps | Expected | Req | Status |
 |---|---|---|---|---|---|---|
 | S2-T401 | Basic authentication | Common | `POST /v1/authorizations` without a header; unknown username; wrong password; revoked pair; pair of a disabled tenant; a `SERVICE_TOKEN` key_id as username | `401` with the body `{"error":{"code":"UNAUTHENTICATED"…}}`, the same in all six cases | UC-1 step 1, §2.1.1 | — |
-| S2-T402 | Validation | Common | `auth_id` empty and 65 characters; `amount` `0`, `-1`, `abc`, `1e2`, 5 decimal places; `currency` `eur`, `EU`, `EURO`; missing `card_ref`; a body that is not JSON; a body over the size limit | `422 INVALID_REQUEST`; nothing stored; no lock taken | UC-1 step 2, §2.1.1 | — |
+| S2-T402 | Validation | Common | `auth_id` empty and 65 characters; `amount` `0`, `-1`, `abc`, `1e2`, 5 decimal places, 15 digits before the point; `currency` `eur`, `EU`, `EURO`; `card_ref` missing, empty and 65 characters; a body that is not JSON; a body over the size limit. Then `amount` with 14 digits before the point and a `card_ref` of 64 characters | `422 INVALID_REQUEST`; nothing stored; no lock taken. The last request is accepted | UC-1 step 2, §2.1.1, D-17, D-19 | — |
 | S2-T403 | Approve, USD | Common | Authorize 25.40 USD | `200 APPROVED`: `token_amount` `25400000`, no `quote`, `tx_hash`; on chain one `Debited`; row `APPROVED`; history `RECEIVED → DEBIT_SUBMITTED → APPROVED` | UC-1, FR-2, FR-11 | — |
-| S2-T404 | Approve, EUR | Common; CRS fake serves `EUR→USD` 1.1642 | Authorize 25.40 EUR | `token_amount` `29866387`; `quote.rate` `1.1642`, `buffer_bps` 100; `rate` and `buffer_bps` stored; the rate is used as served, no inversion | UC-1 step 7, FR-7, §3 of the package | — |
-| S2-T405 | Rate with 10 decimal places | CRS fake serves a `double` with more than 10 significant decimals | Authorize | The quote uses the rate formatted to 10 decimal places, then decimal arithmetic; no float in the stored value | §2.1.2 | — |
-| S2-T406 | Currency and rate failures | Common | Authorize in `GBP` (no pair); CRS unreachable; CRS answers `is_outdated` | `DECLINED / CURRENCY_NOT_SUPPORTED`; `RATE_UNAVAILABLE`; `RATE_UNAVAILABLE`. No transaction | EC-10, FR-9 | — |
+| S2-T404 | Quote, EUR | Common; CRS fake serves `EUR→USD` with `rate_decimal` `"1.1642000000"` | Authorize 25.40 EUR | st5a, stored values: `token_amount` `29866387`, `rate` `1.1642`, `buffer_bps` 100, `token` `USDC`; one `GetRate(EUR → USD)`: the rate is used as served, no inversion. st5b, response: `quote.rate` `1.1642`, `buffer_bps` 100, `token_amount` `29866387` | UC-1 step 7, FR-7, §3 of the package | — |
+| S2-T405 | Rate as a decimal | CRS fake serves `rate_decimal` with 10 fractional digits and a wrong `double` in `rate` | Authorize; read the row and the status query | `rate_decimal` parsed exactly as a decimal, the `double` never read; the token amount by integer arithmetic, rounded up once; no float in any amount or rate path; `quote.rate` without trailing zeros: `"1.2500000000"` → `"1.25"`; a `rate_decimal` that is not a positive decimal fitting `NUMERIC(20,10)` → `RATE_UNAVAILABLE` | §2.1.2, D-15 | — |
+| S2-T406 | Currency and rate failures | Common | Authorize in a currency without a pair, e.g. `JPY` (CRS `NOT_FOUND`); CRS unreachable; CRS answers `is_outdated`; CRS answers an empty `rate_decimal`; CRS answers after the 100 ms budget; `CRS_ADDRESS` unset | `DECLINED / CURRENCY_NOT_SUPPORTED`; then `RATE_UNAVAILABLE` in every other case. No quote stored, no transaction | EC-10, FR-9, D-14, D-15 | — |
 | S2-T407 | Card checks | Common; `card_B` frozen; unknown `card_ref` | Authorize on each | `CARD_FROZEN`; `CARD_NOT_FOUND`; no transaction | EC-11, FR-8 | — |
 | S2-T408 | Card daily limit | Card limit 30 USDC; one approved 25.40 today; one `TIMED_OUT` of 10 | Authorize 5 USD; 4 USD; move the clock past the UTC day boundary; authorize 5 USD | `LIMIT_EXCEEDED`; approved (the `TIMED_OUT` one does not count); approved after the boundary | UC-1 step 8, FR-8 | — |
 | S2-T409 | On-chain checks | Common | Authorize above the balance; above the allowance; above the remaining wallet daily limit; with the contract paused | `INSUFFICIENT_FUNDS`; `INSUFFICIENT_ALLOWANCE`; `LIMIT_EXCEEDED`; `PROGRAM_PAUSED`. No transaction sent in any case | EC-3, EC-11, FR-8 | — |
@@ -275,7 +275,17 @@ Filled in st10.
 - Rows of phase 8 are run by the owner; their evidence — addresses, transaction links, the p95 value — goes into §7 and the Deployment Guide.
 - Phase 8 needs the test accounts and the test ETH of package §5.
 - T107 runs in st4 with `operator_accounts`.
-- T105 is checked at start and configuration dump in st2 and completed in st5.
+- T105 is checked at start and configuration dump in st2 and completed in st5b (one authorization, one failed send).
 - T709 is built in st2.
-- T711 runs in st4, in phase 3, with the card registry: `casctl processor` issues, lists and revokes. Its `401` after revocation needs the processor API and is checked in st5. The ID is kept.
-- T319 (EC-115) moves to st5, in phase 4: an authorization can be in flight only there. The ID is kept.
+- T711 runs in st4, in phase 3, with the card registry: `casctl processor` issues, lists and revokes. Its `401` after revocation needs the processor API and is checked in st5a. The ID is kept.
+- T319 (EC-115) moves to st5b, in phase 4: an authorization can be in flight only there. The ID is kept.
+- Stage 5 is split by the owner's decision: st5a = UC-1 steps 1–9, every decline, the status query; st5b = steps 10–13 (operator queue, debit, deadline, approval). In st5a no transaction is sent: an authorization that passes every check reaches the Debit step, which the binary of st5a does not have; it declines as `INTERNAL_ERROR` and logs `debit path not built`. Tests of the pass path use a fake Debit step.
+
+| Stage | Rows closed |
+|---|---|
+| st5a | T401, T402, T404 stored values, T405, T406, T407, T408, T409, T410, T411, T412 without the listener, T414 on a declined decision, T425 at step 4, T203 for the responses of st5a, T711 `401` after revocation; T521 in part: a declined authorization and every `404` |
+| st5b | T403, T404 response, T413, T415 – T424, T425 at step 10, T426, T319, T105 rest, T203 for the responses of st5b |
+| st6 | T521 rest: returns and the tombstone |
+| st7 | T412: the listener never moves |
+
+- In st5a, "approved" in T408 and T409 reads "passes the step and reaches the Debit step"; the approval itself is checked in st5b.

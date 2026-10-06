@@ -78,9 +78,9 @@ Work in other systems that a milestone needs. It runs outside the milestone bran
 | Task | System | Needed for | Status |
 |---|---|---|---|
 | Check which pairs to USD are served, and in which direction | CRS | S2 | Done 2026-10-04: `EUR→USD` and `RSD→USD`; the rate is USD per one unit, no inversion |
-| Add fiat pairs to USD so that card quotes work for more authorization currencies | CRS | S2 | Open. Configuration only. Not blocking: other currencies are declined |
-| Serve the rate as a decimal string beside the `double` | CRS | S2 | Open. Not blocking: the stored value has 10 decimal places and is recovered exactly |
-| Shorter polling interval for `EUR→USD` | CRS | S2 | Open. Not blocking |
+| Add fiat pairs to USD so that card quotes work for more authorization currencies | CRS | S2 | Done 2026-10-05, CRS `v0.2.0`: `GBP→USD`, `CHF→USD`; pairs reload without a restart |
+| Serve the rate as a decimal string beside the `double` | CRS | S2 | Done 2026-10-05, CRS `v0.2.0`: `rate_decimal`, field 7; no float between the provider and the database |
+| Shorter polling interval for `EUR→USD` | CRS | S2 | Dropped 2026-10-05: every provider publishes one rate per day. Replaced by an intraday rate source in [backlog](backlog.md), item 5 |
 | Add crypto pairs for the valuation of balances | CRS | E1 | Open |
 | Extend the gRPC contract, frozen at v0.4.0, if E1 needs it | ET | E1 | Open |
 

@@ -13,7 +13,7 @@ OASDIFF_VERSION := v1.33.0
 OPENAPI := api/openapi/card-auth.yaml
 FROZEN_OPENAPI := api/openapi/frozen/card-auth.yaml
 
-.PHONY: build run casctl fmt vet test check secrets tools proto proto-check proto-freeze buf-version plugins \
+.PHONY: build run casctl fmt vet test check secrets tools proto proto-check proto-freeze crs-proto crs-proto-check buf-version plugins \
 	migrate-tool migrate-url migrate-up migrate-down migrate-version sqlc-tool sqlc-generate sqlc-check \
 	bindings bindings-check openapi-check openapi-freeze
 
@@ -79,6 +79,19 @@ proto-check: buf-version plugins
 proto-freeze: buf-version
 	@mkdir -p $(dir $(FROZEN_IMAGE))
 	buf build --exclude-source-info -o $(FROZEN_IMAGE)
+
+# Go code of the CRS contract, vendored unchanged in third_party/proto (README there): a separate template, so the
+# cas.v1 module, its lint and its frozen image are not touched.
+
+crs-proto: buf-version plugins
+	PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.crs.yaml
+
+# Generates into a temporary directory and compares, as bindings-check: the tree is not touched.
+crs-proto-check: buf-version plugins
+	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+		PATH="$(CURDIR)/bin:$$PATH" buf generate --template buf.gen.crs.yaml -o "$$tmp" && \
+		diff -r "$$tmp/internal/crs/pb" internal/crs/pb >/dev/null || \
+		{ echo "Generated code in internal/crs/pb is not current: run make crs-proto"; exit 1; }
 
 # Contract of the processor API of card-auth. It is frozen like the proto: the source must equal the frozen copy,
 # and oasdiff of OASDIFF_VERSION reports any breaking change of the source against the frozen copy.
