@@ -15,6 +15,7 @@ on:
       - "contracts/src/**"
       - "contracts/script/**"
       - "contracts/abi/**"
+      - "scripts/**"
       - ".github/workflows/go.yml"
   pull_request:
     branches:
@@ -29,6 +30,7 @@ on:
       - "contracts/src/**"
       - "contracts/script/**"
       - "contracts/abi/**"
+      - "scripts/**"
       - ".github/workflows/go.yml"
 
 permissions:
@@ -92,6 +94,16 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      # buf curl for scripts/sepolia/register.sh in the rehearsal (internal/rehearsal); the pin of proto.yml.
+      - name: Install buf
+        run: |
+          mkdir -p "$RUNNER_TEMP/buf"
+          curl -sSfL -o "$RUNNER_TEMP/buf/buf" \
+            https://github.com/bufbuild/buf/releases/download/v1.73.0/buf-Linux-x86_64
+          echo "8f2986298ad08f0cc1bf999b9797b7c383adf32d7edf0f73d6f1e1a701baeac1  $RUNNER_TEMP/buf/buf" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/buf/buf"
+          echo "$RUNNER_TEMP/buf" >> "$GITHUB_PATH"
 
       - name: Install sqlc
         run: |

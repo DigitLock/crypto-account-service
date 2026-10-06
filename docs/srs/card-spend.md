@@ -916,7 +916,7 @@ All parameters come from the environment of `card-auth`; the variable names are 
   - the operator key is read from the environment, used only for signing, never logged;
   - the `card-auth` database role cannot read exchange secrets: it has no right on the column `connections.credentials_enc` (SRS — Core §3.2);
   - processor credentials are stored hashed;
-  - admin transactions of the contract — `setDailyLimit`, `pause`, `unpause` — are sent with `cast` and the `ADMIN` key from the environment, by the Deployment Guide; no service and no CLI of S2 holds that key;
+  - admin transactions of the contract — `setDailyLimit`, `pause`, `unpause` — are sent with `cast` and the `ADMIN` key of the keys file outside the repository (`CAS_SEPOLIA_KEYS`), by the Deployment Guide; no service and no CLI of S2 holds that key;
   - the contract bounds a compromised operator: debits go only to the treasury, within allowance and daily limit, and only until `ADMIN` pauses; refunds go only to the wallet that was debited.
 
 ---
