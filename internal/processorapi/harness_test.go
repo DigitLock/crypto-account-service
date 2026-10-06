@@ -34,11 +34,14 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/crs/crstest"
 	"github.com/DigitLock/crypto-account-service/internal/debit"
 	"github.com/DigitLock/crypto-account-service/internal/decision"
+	opqueue "github.com/DigitLock/crypto-account-service/internal/operator"
 	"github.com/DigitLock/crypto-account-service/internal/processorapi"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
+	"github.com/DigitLock/crypto-account-service/internal/returns"
 	"github.com/DigitLock/crypto-account-service/internal/signer"
 	"github.com/DigitLock/crypto-account-service/internal/testchain"
 	"github.com/DigitLock/crypto-account-service/internal/testdb"
+	"github.com/DigitLock/crypto-account-service/internal/tracker"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
 )
 
@@ -71,6 +74,7 @@ type options struct {
 	crsAddr       string
 	db            func(*pgxpool.Pool) decision.DB
 	readsDB       func(*pgxpool.Pool) decision.DB // the status query and the credentials
+	returnsDB     func(*pgxpool.Pool) decision.DB // the acceptance of returns
 	debit         *fakeDebit
 	bufferBPS     *int
 	realDebit     bool                            // the Debit step of card-auth instead of the fake
@@ -78,6 +82,9 @@ type options struct {
 	pollInterval  time.Duration
 	debitValidity time.Duration
 	minSendWindow time.Duration // default 500 ms
+	// Returns: the treasury gives the controller no allowance; finality_confirmations (default 2).
+	noRefundAllowance bool
+	confirmations     int
 }
 
 // env is a running processor API with its tenant A, card_A and wallet.
@@ -94,6 +101,9 @@ type env struct {
 	router   routers.Router
 	logs     *syncBuffer
 	reader   *chain.Reader
+	queue    *opqueue.Queue
+	tracker  *tracker.Tracker
+	log      *slog.Logger
 
 	tenantA uuid.UUID
 	pairA   registry.IssuedPair
@@ -140,6 +150,7 @@ func newEnv(t *testing.T, o options) *env {
 	}
 	t.Cleanup(client.Close)
 	logger := slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	e.log = logger
 	e.reader, err = chain.NewReader(client, chain.ReaderConfig{
 		ChainID: testchain.ChainID, Controller: e.chain.Controller, Token: e.chain.Token,
 		ReadTimeout: or(o.readTimeout, 500*time.Millisecond), FallbackAfter: or(o.fallbackAfter, 3), ProbeInterval: or(o.probe, 2*time.Second),
@@ -196,8 +207,12 @@ func newEnv(t *testing.T, o options) *env {
 	if o.readsDB != nil {
 		readsDB = o.readsDB(e.cardAuth)
 	}
+	var returnsDB decision.DB = e.cardAuth
+	if o.returnsDB != nil {
+		returnsDB = o.returnsDB(e.cardAuth)
+	}
 	e.srv = httptest.NewServer(processorapi.NewHandler(processorapi.Deps{
-		DB: readsDB, Engine: e.engine, Reads: registry.NewCards(readsDB, e.clock.Now),
+		DB: readsDB, Engine: e.engine, Reads: registry.NewCards(readsDB, e.clock.Now), Returns: returns.New(returnsDB, e.clock.Now),
 		Metrics: processorapi.NewMetrics(e.metrics), Logger: logger,
 	}))
 	t.Cleanup(e.srv.Close)
@@ -226,12 +241,27 @@ func (e *env) newDebitStep(t *testing.T, o options, deadline time.Duration, logg
 	if o.debitDB != nil {
 		db = o.debitDB(e.cardAuth)
 	}
-	step, err := debit.New(db, e.reader, operator, debit.NewSignals(), debit.NewMetrics(e.metrics), debit.Config{
-		ChainID: testchain.ChainID, Controller: e.chain.Controller, DecisionDeadline: deadline,
+	e.queue = opqueue.New(db, e.reader, operator, testchain.ChainID, or(o.readTimeout, 500*time.Millisecond), logger, e.clock.Now)
+	step, err := debit.New(db, e.queue, debit.NewSignals(), debit.NewMetrics(e.metrics), debit.Config{
+		Controller: e.chain.Controller, DecisionDeadline: deadline,
 		DebitValidity: or(o.debitValidity, 4*time.Second), GasLimit: config.DefaultDebitGasLimit,
-		PollInterval: or(o.pollInterval, 50*time.Millisecond), CallTimeout: or(o.readTimeout, 500*time.Millisecond),
+		PollInterval: or(o.pollInterval, 50*time.Millisecond),
 	}, logger, e.clock.Now)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.noRefundAllowance {
+		e.chain.ApproveRefunds(t, usdc(t, "1000000"))
+	}
+	e.tracker, err = tracker.New(e.cardAuth, e.queue, tracker.Config{
+		Controller: e.chain.Controller, Token: e.chain.Token, RefundGasLimit: config.DefaultRefundGasLimit,
+		Interval: time.Second, RetryInterval: 30 * time.Second, FinalityMode: config.FinalityModeConfirmations,
+		FinalityConfirmations: or(o.confirmations, 2),
+	}, tracker.NewMetrics(e.metrics), logger, e.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.tracker.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
 	return step

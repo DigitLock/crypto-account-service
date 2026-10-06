@@ -10,10 +10,14 @@ import (
 
 const signerPackage = "github.com/DigitLock/crypto-account-service/internal/signer"
 
-// cardAuthPackages run only in card-auth: the decision engine, the Debit step, the processor API and the CRS client.
+// cardAuthPackages run only in card-auth: the decision engine, the Debit step, the operator queue, returns, the
+// tracker, the processor API and the CRS client.
 var cardAuthPackages = []string{
 	"github.com/DigitLock/crypto-account-service/internal/decision",
 	"github.com/DigitLock/crypto-account-service/internal/debit",
+	"github.com/DigitLock/crypto-account-service/internal/operator",
+	"github.com/DigitLock/crypto-account-service/internal/returns",
+	"github.com/DigitLock/crypto-account-service/internal/tracker",
 	"github.com/DigitLock/crypto-account-service/internal/processorapi",
 	"github.com/DigitLock/crypto-account-service/internal/crs",
 }

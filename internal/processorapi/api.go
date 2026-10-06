@@ -21,6 +21,7 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/decision"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
+	"github.com/DigitLock/crypto-account-service/internal/returns"
 )
 
 // Error codes of SRS — Card Spend §2.1.1.
@@ -30,6 +31,10 @@ const (
 	codeAuthIDConflict  = "AUTH_ID_CONFLICT"
 	codeNotFound        = "NOT_FOUND"
 	codeInternal        = "INTERNAL"
+
+	codeReturnIDConflict   = "RETURN_ID_CONFLICT"
+	codeInProgress         = "AUTHORIZATION_IN_PROGRESS"
+	codeReturnExceedsDebit = "RETURN_EXCEEDS_DEBIT"
 )
 
 const tenantActive = "ACTIVE"
@@ -53,10 +58,16 @@ type Reader interface {
 	Authorization(ctx context.Context, tenantID uuid.UUID, authID string) (registry.Authorization, error)
 }
 
+// Returner accepts returns (package returns).
+type Returner interface {
+	Accept(ctx context.Context, req returns.Request) (returns.Result, error)
+}
+
 // Deps are the parts of the API.
 type Deps struct {
 	DB      repository.DBTX // role cas_card_auth: the processor credentials
 	Engine  Authorizer
+	Returns Returner
 	Reads   Reader
 	Metrics *Metrics
 	Logger  *slog.Logger
@@ -70,6 +81,7 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/authorizations", a.authorize)
 	mux.HandleFunc("GET /v1/authorizations/{auth_id}", a.getAuthorization)
+	mux.HandleFunc("POST /v1/authorizations/{auth_id}/returns", a.createReturn)
 	return mux
 }
 
@@ -162,6 +174,55 @@ func (a *api) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	writeDecision(w, req.AuthID, res.Decision)
 	a.Metrics.observe(start, res)
+}
+
+// returnResponse is the body of §2.1.3.
+type returnResponse struct {
+	ReturnID    string `json:"return_id"`
+	AuthID      string `json:"auth_id"`
+	Status      string `json:"status"`
+	TokenAmount string `json:"token_amount"`
+}
+
+// createReturn is POST /v1/authorizations/{auth_id}/returns (SRS — Card Spend §2.1.3, UC-2 steps 1 to 6).
+func (a *api) createReturn(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := a.authenticate(r)
+	switch {
+	case errors.Is(err, errUnauthenticated):
+		writeError(w, http.StatusUnauthorized, codeUnauthenticated, "unauthenticated")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, codeInternal, "internal error")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, codeInvalidRequest, fmt.Sprintf("the body must be a JSON object of at most %d bytes", MaxBody))
+		return
+	}
+	authID := r.PathValue("auth_id")
+	req, err := parseReturn(body, authID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, codeInvalidRequest, err.Error())
+		return
+	}
+	res, err := a.Returns.Accept(r.Context(), returns.Request{
+		TenantID: tenantID, AuthID: authID, ReturnID: req.ReturnID, Type: req.Type, Amount: req.Amount, Hash: req.Hash,
+	})
+	switch {
+	case errors.Is(err, returns.ErrReturnIDConflict):
+		writeError(w, http.StatusConflict, codeReturnIDConflict, "return_id is known with a different request")
+	case errors.Is(err, returns.ErrInProgress):
+		writeError(w, http.StatusConflict, codeInProgress, "the authorization is still being decided")
+	case errors.Is(err, returns.ErrExceedsDebit):
+		writeError(w, http.StatusUnprocessableEntity, codeReturnExceedsDebit, "amount is above the part not yet returned")
+	case err != nil:
+		a.Logger.ErrorContext(r.Context(), "accepting the return failed", "auth_id", authID, "return_id", req.ReturnID,
+			"error", decision.ErrorDetail(err))
+		writeError(w, http.StatusInternalServerError, codeInternal, "internal error")
+	default:
+		writeJSON(w, http.StatusOK, returnResponse{ReturnID: res.ReturnID, AuthID: res.AuthID, Status: res.Status, TokenAmount: res.TokenAmount})
+	}
 }
 
 // authorizeResponse is the body of §2.1.2.

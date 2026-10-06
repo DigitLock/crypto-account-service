@@ -157,3 +157,58 @@ func canonicalJSON(v any) ([]byte, error) {
 	}
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
+
+// returnTypes of a return request (§2.1.3).
+var returnTypes = map[string]bool{"REVERSAL": true, "REFUND": true}
+
+// returnRequest is a validated POST /v1/authorizations/{auth_id}/returns body.
+type returnRequest struct {
+	ReturnID string
+	Type     string
+	Amount   string // without trailing zeros; empty when omitted
+	Hash     []byte // request_hash
+}
+
+// parseReturn validates body and builds the normalized request and its hash. The auth_id of the path is part of the
+// normalized request: a return_id is one return of one authorization. Unknown fields are ignored.
+func parseReturn(body []byte, authID string) (returnRequest, error) {
+	var req returnRequest
+	if !validProcessorID(authID) {
+		return req, invalid("auth_id must be 1 to 64 printable ASCII characters")
+	}
+	fields, err := parseObject(body)
+	if err != nil {
+		return req, err
+	}
+	if req.ReturnID, err = stringField(fields, "return_id"); err != nil {
+		return req, err
+	}
+	if !validProcessorID(req.ReturnID) {
+		return req, invalid("return_id must be 1 to 64 printable ASCII characters")
+	}
+	if req.Type, err = stringField(fields, "type"); err != nil {
+		return req, err
+	}
+	if !returnTypes[req.Type] {
+		return req, invalid("type must be REVERSAL or REFUND")
+	}
+	normalized := map[string]any{"auth_id": authID, "return_id": req.ReturnID, "type": req.Type}
+	if _, ok := fields["amount"]; ok {
+		amount, err := stringField(fields, "amount")
+		if err != nil {
+			return req, err
+		}
+		if !amountPattern.MatchString(amount) || decision.TrimDecimal(amount) == "0" {
+			return req, invalid("amount must be a decimal greater than 0 with at most 14 digits before the point and 4 after it")
+		}
+		req.Amount = decision.TrimDecimal(amount)
+		normalized["amount"] = req.Amount
+	}
+	canonical, err := canonicalJSON(normalized)
+	if err != nil {
+		return req, invalid("the body cannot be normalized")
+	}
+	sum := sha256.Sum256(canonical)
+	req.Hash = sum[:]
+	return req, nil
+}

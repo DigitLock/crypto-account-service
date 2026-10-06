@@ -116,7 +116,7 @@ sequenceDiagram
 
 ##### Common rules
 
-- **Contract:** `api/openapi/card-auth.yaml`, OpenAPI 3.0.3. Frozen copy: `api/openapi/frozen/card-auth.yaml`; `make openapi-check` compares the two and runs `oasdiff breaking`. A change of the contract needs the owner's decision and an update of this SRS first. Changed once after the freeze of st3, by the owner's decisions D-17 … D-19 of 2026-10-06, before any consumer existed.
+- **Contract:** `api/openapi/card-auth.yaml`, OpenAPI 3.0.3. Frozen copy: `api/openapi/frozen/card-auth.yaml`; `make openapi-check` compares the two and runs `oasdiff breaking`. A change of the contract needs the owner's decision and an update of this SRS first. Changed after the freeze of st3, before any consumer existed: by the owner's decisions D-17 … D-19 of 2026-10-06, and by the `500` of `POST …/returns` that D-18 announced for st6 (S2 st6a, 2026-10-06, an added response only).
 - **Base path:** `/v1`. Media type: `application/json`. A request body above 16 KiB is `422`.
 - **Authorization:** HTTP Basic. One credential pair maps to one tenant. The pair is issued by `casctl processor issue <tenant>` and printed once: username = `key_id`, 12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters. Stored in `api_credentials` with `kind = PROCESSOR_BASIC` and the SHA-256 hash of the password bytes; verified in constant time (SRS — Core UC-105). `casctl processor list` and `revoke` as for service tokens. mTLS and request signing are out of MVP.
 - **TLS:** terminated in front of the service by the deployment (Deployment Guide). `card-auth` itself listens on plain HTTP; S2 runs it locally that way.
@@ -533,6 +533,16 @@ sequenceDiagram
 | 6 | Insert the return as `ACCEPTED`, increase `returned_amount`, respond | — |
 | 7 | Tracker: send `refund`; follow it to `CONFIRMED` | Retry, step 8 |
 | 8 | Refund reverted or not sent → `RETRYING`; repeat after `return_retry_interval`; alert | — |
+
+- **Rules of S2 st6a** (owner's acceptance, 2026-10-06):
+  - The normalized request of a return includes the `auth_id` of the path: the same `return_id` sent for another authorization is `409 RETURN_ID_CONFLICT`.
+  - A repeated `return_id` with the same body answers the return's current status (for example `CONFIRMED`), not the status of its first answer.
+  - A return worth 0 tokens — nothing left, or an amount that rounds down to 0 — is stored and answered as `NOTHING_TO_RETURN`.
+  - A return without `amount` records the remaining fiat amount on its row, so later fiat checks stay exact. Fiat arithmetic is integer, in units of 10⁻⁴.
+  - Two returns of one authorization are serialized by a lock on the authorization row: together they never exceed the debit.
+  - `CONFIRMED` is set when `refundUsed(refundId)` is true at the final block of the finality rule; a reverted `RefundAlreadyUsed` is read the same way and never sent again.
+  - Refunds and debits share one operator nonce sequence. A refund attempt that fails before its send leaves its slot `PLANNED`; the next attempt of the same return uses that slot, so no nonce is left unused. Unlike a debit slot (UC-3 row 9), a refund slot may be sent later: a refund has no deadline and its `refundId` makes it single-use on chain.
+  - `DEBIT_LOST` closes the open returns of the authorization — `ACCEPTED`, `RETRYING`, `SUBMITTED` — as `NOTHING_TO_RETURN` with token amount 0, and lowers `returned_amount` by their amounts (FR-14).
 
 ##### Preconditions
 - The treasury holds enough tokens and its allowance to the contract covers the return.

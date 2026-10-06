@@ -285,7 +285,9 @@ Filled in st10.
 |---|---|
 | st5a | T401, T402, T404 stored values, T405, T406, T407, T408, T409, T410, T411, T412 without the listener, T414 on a declined decision, T425 at step 4, T203 for the responses of st5a, T711 `401` after revocation; T521 in part: a declined authorization and every `404` |
 | st5b | T403, T404 response, T413, T415 – T424, T425 at step 10, T426, T319, T105 rest, T203 for the responses of st5b. Closed on 2026-10-06; T426 p95 of the approvals on Anvil in §5 when the run log is written |
-| st6 | T521 rest: returns and the tombstone |
+| st6a | T501, T502, T503, T504, T505, T506, T507, T508, T509, T519, T521 rest (returns and the tombstone), T522 for `returns_not_confirmed` and `treasury_refund_capacity`; also two concurrent partial returns above the remainder (exactly one accepted), the `500` of a return (D-18) and the FR-14 seam for `DEBIT_LOST` |
+| st6b | T510 – T518, T520, T522 rest: the debit side of UC-3; the stuck and released refunds |
 | st7 | T412: the listener never moves |
 
 - In st5a, "approved" in T408 and T409 reads "passes the step and reaches the Debit step"; the approval itself is checked in st5b.
+- Stage 6 is split by the owner's decision: st6a = UC-2 and the tracker loop that executes returns; st6b = the debit side of UC-3. In st6a, `CONFIRMED` of a return is read as `refundUsed(refundId)` at the final block of the finality rule (finality_confirmations blocks on top in mode `confirmations`, as T510 counts them).

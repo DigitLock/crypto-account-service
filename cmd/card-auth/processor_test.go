@@ -125,7 +125,7 @@ func TestT105_AuthorizationAndFailedSend(t *testing.T) {
 	}
 
 	logs := s.logs.String()
-	for _, want := range []string{`"msg":"authorization approved"`, `"msg":"debit send failed; treated as sent"`, `"level":"DEBUG"`} {
+	for _, want := range []string{`"msg":"authorization approved"`, `"msg":"operator transaction send failed; treated as sent"`, `"level":"DEBUG"`} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("the log has no %s", want)
 		}

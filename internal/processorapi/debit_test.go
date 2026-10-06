@@ -647,7 +647,7 @@ func TestT424_SendResultUnknown(t *testing.T) {
 	p.hangMethod, p.hangFor = "eth_sendRawTransaction", time.Second
 	p.mu.Unlock()
 	approvedWith(t, e.authorize(t, authReq("auth-424", "card_A", "5", "USD")), "5000000")
-	if !strings.Contains(e.logs.String(), "debit send failed; treated as sent") {
+	if !strings.Contains(e.logs.String(), "operator transaction send failed; treated as sent") {
 		t.Error("the send failure is not logged")
 	}
 	if logs := e.logs.String(); strings.Contains(logs, p.srv.URL) || strings.Contains(logs, strings.TrimPrefix(p.srv.URL, "http://")) {
@@ -658,7 +658,7 @@ func TestT424_SendResultUnknown(t *testing.T) {
 // S2-T425 — Req: §2.1.1. The failure at step 10.
 func TestT425_InternalErrorAtStep10(t *testing.T) {
 	e := newEnv(t, options{realDebit: true, noCRS: true, debitDB: func(p *pgxpool.Pool) decision.DB {
-		return failingDB{Pool: p, match: "InsertPlannedDebit"}
+		return failingDB{Pool: p, match: "InsertPlannedOperatorTx"}
 	}})
 	declinedWith(t, e.authorize(t, authReq("auth-425", "card_A", "5", "USD")), decision.StatusDeclined, decision.ReasonInternalError)
 	if txs := e.opTxs(t, "auth-425"); len(txs) != 0 {

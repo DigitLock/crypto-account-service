@@ -161,6 +161,8 @@ paths:
                     error:
                       code: RETURN_EXCEEDS_DEBIT
                       message: amount is above the part not yet returned
+        '500':
+          $ref: '#/components/responses/Internal'
   /v1/authorizations/{auth_id}:
     get:
       operationId: getAuthorization

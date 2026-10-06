@@ -45,54 +45,6 @@ func (q *Queries) FinishSubmittedAuthorization(ctx context.Context, arg FinishSu
 	return result.RowsAffected(), nil
 }
 
-const insertPlannedDebit = `-- name: InsertPlannedDebit :one
-
-INSERT INTO operator_txs (chain_id, operator_address, nonce, purpose, authorization_id, status)
-VALUES ($1, $2, $3, 'DEBIT', $4, 'PLANNED')
-RETURNING id
-`
-
-type InsertPlannedDebitParams struct {
-	ChainID         int64
-	OperatorAddress []byte
-	Nonce           int64
-	AuthorizationID *uuid.UUID
-}
-
-// Debit path of card-auth (SRS - Card Spend UC-1 steps 10 - 13), role cas_card_auth.
-// Step 10: the intent of a debit with its reserved nonce, written before anything is sent (FR-5).
-func (q *Queries) InsertPlannedDebit(ctx context.Context, arg InsertPlannedDebitParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, insertPlannedDebit,
-		arg.ChainID,
-		arg.OperatorAddress,
-		arg.Nonce,
-		arg.AuthorizationID,
-	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
-const markOperatorTxSent = `-- name: MarkOperatorTxSent :execrows
-UPDATE operator_txs
-SET tx_hash = $1, status = 'SENT'
-WHERE id = $2 AND status = 'PLANNED'
-`
-
-type MarkOperatorTxSentParams struct {
-	TxHash []byte
-	ID     uuid.UUID
-}
-
-// Step 11: the hash of the signed transaction, stored before it is sent.
-func (q *Queries) MarkOperatorTxSent(ctx context.Context, arg MarkOperatorTxSentParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markOperatorTxSent, arg.TxHash, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const setOperatorTxOutcome = `-- name: SetOperatorTxOutcome :exec
 UPDATE operator_txs
 SET status = $1, block_number = $2, block_hash = $3
@@ -119,6 +71,7 @@ func (q *Queries) SetOperatorTxOutcome(ctx context.Context, arg SetOperatorTxOut
 }
 
 const submitAuthorization = `-- name: SubmitAuthorization :execrows
+
 UPDATE authorizations
 SET status = 'DEBIT_SUBMITTED', valid_until = $1
 WHERE id = $2 AND status = 'RECEIVED'
@@ -129,6 +82,7 @@ type SubmitAuthorizationParams struct {
 	ID         uuid.UUID
 }
 
+// Debit path of card-auth (SRS - Card Spend UC-1 steps 10 - 13), role cas_card_auth.
 // Step 10: RECEIVED -> DEBIT_SUBMITTED with the on-chain expiry of the debit.
 func (q *Queries) SubmitAuthorization(ctx context.Context, arg SubmitAuthorizationParams) (int64, error) {
 	result, err := q.db.Exec(ctx, submitAuthorization, arg.ValidUntil, arg.ID)

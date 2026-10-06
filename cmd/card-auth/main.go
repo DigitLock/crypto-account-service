@@ -24,9 +24,12 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/debit"
 	"github.com/DigitLock/crypto-account-service/internal/decision"
 	"github.com/DigitLock/crypto-account-service/internal/health"
+	opqueue "github.com/DigitLock/crypto-account-service/internal/operator"
 	"github.com/DigitLock/crypto-account-service/internal/processorapi"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
+	"github.com/DigitLock/crypto-account-service/internal/returns"
 	"github.com/DigitLock/crypto-account-service/internal/signer"
+	"github.com/DigitLock/crypto-account-service/internal/tracker"
 	"github.com/DigitLock/crypto-account-service/migrations"
 )
 
@@ -120,14 +123,13 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		logger.Warn("CRS_ADDRESS is unset: every non-USD authorization is declined as RATE_UNAVAILABLE")
 	}
 	metrics := health.NewRegistry()
-	debitStep, err := debit.New(pool, reader, operator, debit.NewSignals(), debit.NewMetrics(metrics), debit.Config{
-		ChainID:          cfg.ChainID,
+	queue := opqueue.New(pool, reader, operator, cfg.ChainID, cfg.RPCReadTimeout, logger, time.Now)
+	debitStep, err := debit.New(pool, queue, debit.NewSignals(), debit.NewMetrics(metrics), debit.Config{
 		Controller:       cfg.ControllerAddress,
 		DecisionDeadline: cfg.DecisionDeadline,
 		DebitValidity:    cfg.DebitValidity,
 		GasLimit:         cfg.DebitGasLimit,
 		PollInterval:     cfg.ReceiptPollInterval,
-		CallTimeout:      cfg.RPCReadTimeout,
 	}, logger, time.Now)
 	if err != nil {
 		return err
@@ -152,6 +154,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		Handler: processorapi.NewHandler(processorapi.Deps{
 			DB:      pool,
 			Engine:  engine,
+			Returns: returns.New(pool, time.Now),
 			Reads:   registry.NewCards(pool, time.Now),
 			Metrics: processorapi.NewMetrics(metrics),
 			Logger:  logger,
@@ -161,9 +164,24 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 
 	logger.Info("card-auth starting", "config", cfg, "operator", operator.Address().Hex(), "token", symbol)
 
+	refunds, err := tracker.New(pool, queue, tracker.Config{
+		Controller:            cfg.ControllerAddress,
+		Token:                 cfg.TokenAddress,
+		RefundGasLimit:        cfg.RefundGasLimit,
+		Interval:              cfg.TrackerInterval,
+		RetryInterval:         cfg.ReturnRetryInterval,
+		FinalityMode:          cfg.FinalityMode,
+		FinalityTag:           cfg.FinalityTag,
+		FinalityConfirmations: cfg.FinalityConfirmations,
+	}, tracker.NewMetrics(metrics), logger, time.Now)
+	if err != nil {
+		return err
+	}
+
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
 	go reader.Probe(probeCtx)
+	go refunds.Run(probeCtx)
 
 	errc := make(chan error, 2)
 	serve := func(name string, srv *http.Server, ln net.Listener) {

@@ -52,6 +52,7 @@ var operations = []operation{
 			"401": {"UNAUTHENTICATED"},
 			"409": {"AUTHORIZATION_IN_PROGRESS", "RETURN_ID_CONFLICT"},
 			"422": {"INVALID_REQUEST", "RETURN_EXCEEDS_DEBIT"},
+			"500": {"INTERNAL"},
 		},
 	},
 	{

@@ -211,7 +211,7 @@ func TestT104_Health(t *testing.T) {
 			}
 		}
 		// Only the routes of the processor API exist on the HTTP port.
-		for _, path := range []string{"/", "/healthz", "/metrics", "/v1/authorizations/a/returns"} {
+		for _, path := range []string{"/", "/healthz", "/metrics", "/v1/authorizations/a/returns/b"} {
 			if status, _ := get(t, s.httpURL+path); status != http.StatusNotFound {
 				t.Errorf("GET %s on the HTTP port = %d, want 404", path, status)
 			}

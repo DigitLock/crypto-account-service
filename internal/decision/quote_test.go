@@ -73,7 +73,7 @@ func TestT405_NoFloatInTheDecisionPath(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..")
 	var files []string
-	for _, dir := range []string{"decision", "processorapi", "crs", "chain", "debit"} {
+	for _, dir := range []string{"decision", "processorapi", "crs", "chain", "debit", "operator", "returns", "tracker"} {
 		matches, err := filepath.Glob(filepath.Join(root, dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
@@ -82,8 +82,8 @@ func TestT405_NoFloatInTheDecisionPath(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	for _, f := range files {
-		// Prometheus takes latencies as float64: metrics.go holds no amount and no rate.
-		if strings.HasSuffix(f, "_test.go") || strings.HasSuffix(f, filepath.Join("processorapi", "metrics.go")) {
+		// Prometheus takes float64: a metrics.go holds no amount, rate or fee that is computed further.
+		if strings.HasSuffix(f, "_test.go") || filepath.Base(f) == "metrics.go" {
 			continue
 		}
 		src, err := os.ReadFile(f)

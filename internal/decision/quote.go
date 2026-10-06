@@ -115,3 +115,13 @@ func ceilDiv(num, den *big.Int) *big.Int {
 func pow10(n int) *big.Int {
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
 }
+
+// Units returns a plain decimal as an integer of 10^-scale units, exactly: Units("25.4", 4) = 254000. An error when
+// s is not a plain non-negative decimal or has more than scale fractional digits.
+func Units(s string, scale int) (*big.Int, error) {
+	d, ok := parseDecimal(s)
+	if !ok || d.scale > scale {
+		return nil, errors.New("not a plain decimal of at most the given scale")
+	}
+	return d.unscaled.Mul(d.unscaled, pow10(scale-d.scale)), nil
+}
