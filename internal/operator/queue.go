@@ -210,10 +210,14 @@ func (qu *Queue) SendWithFloor(ctx context.Context, slot Slot, c Call, previous 
 	sctx, cancel := context.WithTimeout(ctx, qu.callTimeout)
 	err = ep.Client.SendTransaction(sctx, signed)
 	cancel()
-	if err != nil {
+	switch {
+	case err != nil && errors.Is(ctx.Err(), context.Canceled):
+		// Shutdown: the failure is the cancellation itself and is not logged, as in the tracker and the listener.
+		// The send is still treated as sent; the hash is stored for the tracker.
+	case err != nil:
 		qu.logger.WarnContext(ctx, "operator transaction send failed; treated as sent", "purpose", c.Purpose,
 			"endpoint", ep.Name, "nonce", slot.Nonce, "tx_hash", hash.Hex(), "error", qu.reader.Describe(err, qu.callTimeout))
-	} else {
+	default:
 		qu.logger.DebugContext(ctx, "operator transaction sent", "purpose", c.Purpose, "endpoint", ep.Name,
 			"nonce", slot.Nonce, "tx_hash", hash.Hex())
 	}

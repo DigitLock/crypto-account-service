@@ -11,7 +11,7 @@ import (
 const signerPackage = "github.com/DigitLock/crypto-account-service/internal/signer"
 
 // cardAuthPackages run only in card-auth: the decision engine, the Debit step, the operator queue, returns, the
-// tracker, the processor API and the CRS client.
+// tracker, the processor API, the CRS client and the chain listener.
 var cardAuthPackages = []string{
 	"github.com/DigitLock/crypto-account-service/internal/decision",
 	"github.com/DigitLock/crypto-account-service/internal/debit",
@@ -20,6 +20,7 @@ var cardAuthPackages = []string{
 	"github.com/DigitLock/crypto-account-service/internal/tracker",
 	"github.com/DigitLock/crypto-account-service/internal/processorapi",
 	"github.com/DigitLock/crypto-account-service/internal/crs",
+	"github.com/DigitLock/crypto-account-service/internal/listener",
 }
 
 // S2-T709 — Req: ADR-3. Only card-auth signs: server and every package it uses must not import the signer.

@@ -80,6 +80,9 @@ Needs Go 1.27 and PostgreSQL 16; `buf`, `sqlc`, `migrate` and `gitleaks` on the 
 | Fake source for a demo, with `ENABLE_FAKE_SOURCE=true` | `make casctl ARGS="source add-fake"` |
 | Server: gRPC 50053, health and metrics 8091 | `make run` |
 | Checks before a commit | `make check`, `make sqlc-check`, `make proto-check`, `make secrets` |
+| Processor simulator against a running `card-auth`, test networks only | `go run ./cmd/casctl sim authorize --auth-id a-1 --card-ref card_A --amount 25.40 --currency USD`; also `sim return`, `sim get` |
+
+- `casctl sim` plays the processor through the API of `card-auth` ([SRS — Card Spend](docs/srs/card-spend.md) §2.1.1) and never opens the database. It reads `CASCTL_CARD_AUTH_URL`, `CASCTL_PROCESSOR_USERNAME` and `CASCTL_PROCESSOR_PASSWORD` and never prints the password. Output: one JSON line per answer, `{"status": …, "body": …}`; exit code 0 for any answer of the API, 4xx included, not 0 for a transport error or a 5xx. `authorize --repeat N --parallel P` sends the same request N times, P at a time.
 
 ## Related services
 

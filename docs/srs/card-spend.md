@@ -148,6 +148,8 @@ sequenceDiagram
 | `NOT_FOUND` | `404` | Unknown `auth_id` in the status query |
 | `INTERNAL` | `500` | Internal failure of a status query or a return: the database cannot be read. The message carries no internal detail (D-18) |
 
+- **Processor simulator:** `casctl sim authorize | return | get`, test networks only (owner's decision, 2026-10-06). It plays the processor through this API and never opens the database. Environment: `CASCTL_CARD_AUTH_URL`, `CASCTL_PROCESSOR_USERNAME`, `CASCTL_PROCESSOR_PASSWORD`; the password is never printed. Output: one JSON line per answer, with the HTTP status. `authorize` takes `--repeat N` and `--parallel P` to send the same request N times, P at a time.
+
 #### 2.1.2 Authorize
 
 ##### Description

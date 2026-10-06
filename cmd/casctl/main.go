@@ -1,5 +1,6 @@
 // Command casctl manages tenants, service tokens and processor credentials of CAS (SRS — Core UC-105).
-// It connects with the owner role through CASCTL_DATABASE_URL only.
+// It connects with the owner role through CASCTL_DATABASE_URL only. The group sim plays the processor against the
+// API of card-auth (SRS — Card Spend §2.1.1) and never opens the database.
 package main
 
 import (
@@ -87,11 +88,11 @@ func safeError(err error) error {
 func (a *app) rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "casctl",
-		Short:         "Manage tenants, service tokens and processor credentials of CAS",
+		Short:         "Manage tenants, service tokens and processor credentials of CAS; simulate the processor",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd())
+	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd(), a.simCmd())
 	return root
 }
 
