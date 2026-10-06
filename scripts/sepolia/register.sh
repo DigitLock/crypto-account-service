@@ -14,7 +14,8 @@
 # 600), never to the output. The token reaches buf curl on its standard input, not on its command line.
 # Needs: go, buf, jq, cast, perl; deploy.sh done; server running (make run); CASCTL_DATABASE_URL (owner role) in the
 #   environment file. buf curl takes the schema from the frozen image proto/frozen/cas_v1.json: no reflection needed.
-# Variables: CAS_SEPOLIA_KEYS (required); CAS_SEPOLIA_RPC_URL (default https://sepolia.base.org);
+# Variables: CAS_SEPOLIA_KEYS (required); CAS_SEPOLIA_RPC_URL (default CARD_AUTH_RPC_URL of the
+#   environment file when set, else https://sepolia.base.org);
 #   CAS_SEPOLIA_REHEARSAL=1 for a rehearsal on a local Anvil with chain ID 84532; CAS_ENV_FILE (default .env of the
 #   repository); CAS_BIN_DIR (default bin/); CAS_GRPC_ADDR (default 127.0.0.1:50053); CAS_TENANT (default
 #   sepolia-demo); CAS_OWNER_REF (default owner-a); CAS_CARD_REF (default card_A); CAS_CARD_DAILY_LIMIT in USDC
@@ -23,8 +24,8 @@
 . "$(dirname "$0")/lib.sh"
 
 need go buf jq
-RPC=$(rpc_url)
-start_checks CAS_SEPOLIA_RPC_URL "$RPC"
+select_rpc
+start_checks "$RPC_NAME" "$RPC"
 
 USER_ADDRESS=$(deployment USER)
 tenant=${CAS_TENANT:-sepolia-demo}

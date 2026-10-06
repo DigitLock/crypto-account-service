@@ -235,7 +235,12 @@ func TestRehearsal_BaseSepoliaScripts(t *testing.T) {
 	}
 
 	r.must(t, "setup.sh")
-	again := r.must(t, "setup.sh")
+	// Without CAS_SEPOLIA_RPC_URL the scripts take CARD_AUTH_RPC_URL of the environment file (S2 st9b f).
+	again := runScript(t, r.out, "setup.sh", without(r.env, "CAS_SEPOLIA_RPC_URL"))
+	t.Logf("setup.sh on CARD_AUTH_RPC_URL: exit %d in %s\n%s", again.code, again.took.Round(time.Millisecond), again.out)
+	if again.code != 0 {
+		t.Fatalf("setup.sh on CARD_AUTH_RPC_URL of the environment file failed with exit %d", again.code)
+	}
 	for _, step := range []string{"1. mint", "2. approve", "4. refund allowance"} {
 		if !strings.Contains(again.out, step+": ") || !strings.Contains(again.out, "nothing sent") {
 			t.Errorf("the second setup.sh sent step %q again", step)
@@ -368,19 +373,27 @@ func TestRehearsal_Refusals(t *testing.T) {
 		name string
 		env  []string
 		want string
+		only []string // the scripts of the case; empty: every script
 	}{
-		{"CAS_SEPOLIA_KEYS unset", rehearsal("", local.RPCURL, localEnv), "CAS_SEPOLIA_KEYS is not set"},
-		{"keys file missing", rehearsal(filepath.Join(dir, "none.env"), local.RPCURL, localEnv), "does not exist"},
-		{"keys file inside the repository", rehearsal(inRepo, local.RPCURL, localEnv), "inside the repository working tree"},
-		{"keys file readable by others", rehearsal(readable, local.RPCURL, localEnv), "has mode 0644"},
-		{"chain ID 1", rehearsal(good, mainnet.RPCURL, mainnetEnv), "answers chain ID 1: only 84532"},
+		{"CAS_SEPOLIA_KEYS unset", rehearsal("", local.RPCURL, localEnv), "CAS_SEPOLIA_KEYS is not set", nil},
+		{"keys file missing", rehearsal(filepath.Join(dir, "none.env"), local.RPCURL, localEnv), "does not exist", nil},
+		{"keys file inside the repository", rehearsal(inRepo, local.RPCURL, localEnv), "inside the repository working tree", nil},
+		{"keys file readable by others", rehearsal(readable, local.RPCURL, localEnv), "has mode 0644", nil},
+		{"chain ID 1", rehearsal(good, mainnet.RPCURL, mainnetEnv), "answers chain ID 1: only 84532", nil},
 		{"public URL in a rehearsal", with(baseEnv(), "CAS_SEPOLIA_REHEARSAL=1", "CAS_SEPOLIA_KEYS="+good,
-			"CAS_ENV_FILE="+envFile("https://sepolia.base.org")), "is not a local URL"},
+			"CAS_ENV_FILE="+envFile("https://sepolia.base.org")), "is not a local URL", nil},
+		{"no RPC variable and no environment file in a rehearsal: the public endpoint", with(baseEnv(), "CAS_SEPOLIA_REHEARSAL=1",
+			"CAS_SEPOLIA_KEYS="+good, "CAS_ENV_FILE="+filepath.Join(dir, "no-env")), "the public endpoint is not a local URL",
+			[]string{"deploy.sh", "setup.sh", "register.sh"}},
 		{"local URL without the rehearsal switch", with(baseEnv(), "CAS_SEPOLIA_KEYS="+good, "CAS_SEPOLIA_RPC_URL="+local.RPCURL,
-			"CAS_ENV_FILE="+localEnv), "is a local URL"},
+			"CAS_ENV_FILE="+localEnv), "is a local URL", nil},
 	}
 	for _, c := range cases {
-		for _, script := range scripts {
+		run := scripts
+		if len(c.only) > 0 {
+			run = c.only
+		}
+		for _, script := range run {
 			res := runScript(t, nil, script, c.env)
 			if res.code == 0 || !strings.Contains(res.out, c.want) {
 				t.Errorf("%s, %s: exit %d, want a refusal with %q:\n%s", c.name, script, res.code, c.want, res.out)

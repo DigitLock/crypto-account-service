@@ -11,7 +11,8 @@
 # Prints every transaction hash with its explorer link and the resulting values.
 # Needs: cast, perl; deploy.sh done (cas-sepolia-deployment.env next to the keys file); ETH of USER, ADMIN and
 #   TREASURY for gas.
-# Variables: CAS_SEPOLIA_KEYS (required); CAS_SEPOLIA_RPC_URL (default https://sepolia.base.org);
+# Variables: CAS_SEPOLIA_KEYS (required); CAS_SEPOLIA_RPC_URL (default CARD_AUTH_RPC_URL of the
+#   environment file when set, else https://sepolia.base.org);
 #   CAS_SEPOLIA_REHEARSAL=1 for a rehearsal on a local Anvil with chain ID 84532. Amounts in USDC, decimals allowed:
 #   CAS_SETUP_MINT (default 100), CAS_SETUP_ALLOWANCE (100), CAS_SETUP_DAILY_LIMIT (50),
 #   CAS_SETUP_REFUND_ALLOWANCE (100). The defaults cover T805 (5 USD) and T806 (30 × 1 USD) in one UTC day: 35 of
@@ -20,8 +21,8 @@
 . "$(dirname "$0")/lib.sh"
 
 need jq
-RPC=$(rpc_url)
-start_checks CAS_SEPOLIA_RPC_URL "$RPC"
+select_rpc
+start_checks "$RPC_NAME" "$RPC"
 
 TOKEN=$(deployment TOKEN)
 CONTROLLER=$(deployment CONTROLLER)

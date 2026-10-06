@@ -253,6 +253,17 @@ func with(env []string, extra ...string) []string {
 	return append(append([]string{}, env...), extra...)
 }
 
+// without returns env without the variable name.
+func without(env []string, name string) []string {
+	var out []string
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, name+"=") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // gitStatus returns the status of the working tree, ignored files left out.
 func gitStatus(t *testing.T) string {
 	t.Helper()

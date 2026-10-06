@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -156,7 +157,7 @@ func (qu *Queue) SendWithFloor(ctx context.Context, slot Slot, c Call, previous 
 		err = errors.Join(err, b.Error)
 	}
 	if err != nil {
-		return common.Hash{}, fmt.Errorf("fees: %s: %s", ep.Name, qu.reader.Describe(err, qu.callTimeout))
+		return common.Hash{}, fmt.Errorf("fees: %s: %w", ep.Name, qu.reader.DescribeErr(err, qu.callTimeout))
 	}
 	if block == nil || block.BaseFee == nil {
 		return common.Hash{}, fmt.Errorf("fees: %s: the pending block has no base fee", ep.Name)
@@ -226,14 +227,24 @@ func (qu *Queue) SendWithFloor(ctx context.Context, slot Slot, c Call, previous 
 
 // Receipt reads the receipt of hash on the current endpoint: nil when there is none yet or the read fails.
 func (qu *Queue) Receipt(ctx context.Context, hash common.Hash) *types.Receipt {
+	r, _ := qu.ReceiptErr(ctx, hash)
+	return r
+}
+
+// ReceiptErr is Receipt that reports a failed read: nil and no error when the node has no receipt yet, nil and the
+// error when the read failed (a rate limit among them, chain.IsRateLimit).
+func (qu *Queue) ReceiptErr(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
 	ep := qu.reader.Endpoint()
 	rctx, cancel := context.WithTimeout(ctx, qu.callTimeout)
 	defer cancel()
 	r, err := ep.Client.TransactionReceipt(rctx, hash)
-	if err != nil {
-		return nil
+	if errors.Is(err, ethereum.NotFound) {
+		return nil, nil
 	}
-	return r
+	if err != nil {
+		return nil, fmt.Errorf("receipt: %s: %w", ep.Name, qu.reader.DescribeErr(err, qu.callTimeout))
+	}
+	return r, nil
 }
 
 // NonceCount is the operator's transaction count at the latest block: a slot below it is used on chain.
@@ -243,7 +254,7 @@ func (qu *Queue) NonceCount(ctx context.Context) (uint64, error) {
 	defer cancel()
 	n, err := ep.Client.NonceAt(cctx, qu.signer.Address(), nil)
 	if err != nil {
-		return 0, fmt.Errorf("transaction count: %s: %s", ep.Name, qu.reader.Describe(err, qu.callTimeout))
+		return 0, fmt.Errorf("transaction count: %s: %w", ep.Name, qu.reader.DescribeErr(err, qu.callTimeout))
 	}
 	return n, nil
 }
@@ -283,7 +294,7 @@ func (qu *Queue) BlockHash(ctx context.Context, number uint64) (common.Hash, err
 		Hash common.Hash `json:"hash"`
 	}
 	if err := ep.Client.Client().CallContext(cctx, &head, "eth_getBlockByNumber", hexutil.EncodeUint64(number), false); err != nil {
-		return common.Hash{}, fmt.Errorf("block %d: %s: %s", number, ep.Name, qu.reader.Describe(err, qu.callTimeout))
+		return common.Hash{}, fmt.Errorf("block %d: %s: %w", number, ep.Name, qu.reader.DescribeErr(err, qu.callTimeout))
 	}
 	if head == nil {
 		return common.Hash{}, nil
@@ -298,7 +309,7 @@ func (qu *Queue) Head(ctx context.Context) (number, timestamp uint64, err error)
 	defer cancel()
 	h, err := ep.Client.HeaderByNumber(cctx, nil)
 	if err != nil {
-		return 0, 0, fmt.Errorf("latest block: %s: %s", ep.Name, qu.reader.Describe(err, qu.callTimeout))
+		return 0, 0, fmt.Errorf("latest block: %s: %w", ep.Name, qu.reader.DescribeErr(err, qu.callTimeout))
 	}
 	return h.Number.Uint64(), h.Time, nil
 }
@@ -310,7 +321,7 @@ func (qu *Queue) Balance(ctx context.Context) (*big.Int, error) {
 	defer cancel()
 	b, err := ep.Client.BalanceAt(cctx, qu.signer.Address(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("operator balance: %s: %s", ep.Name, qu.reader.Describe(err, qu.callTimeout))
+		return nil, fmt.Errorf("operator balance: %s: %w", ep.Name, qu.reader.DescribeErr(err, qu.callTimeout))
 	}
 	return b, nil
 }
@@ -322,7 +333,7 @@ func (qu *Queue) BlockTime(ctx context.Context, number *big.Int) (uint64, error)
 	defer cancel()
 	h, err := ep.Client.HeaderByNumber(cctx, number)
 	if err != nil {
-		return 0, fmt.Errorf("block %s: %s: %s", number, ep.Name, qu.reader.Describe(err, qu.callTimeout))
+		return 0, fmt.Errorf("block %s: %s: %w", number, ep.Name, qu.reader.DescribeErr(err, qu.callTimeout))
 	}
 	return h.Time, nil
 }

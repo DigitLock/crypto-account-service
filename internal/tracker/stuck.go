@@ -51,20 +51,23 @@ func (t *Tracker) stuckPass(ctx context.Context) {
 	if len(rows) == 0 {
 		return
 	}
-	count, err := t.queue.NonceCount(ctx)
+	count, err := t.nonceCount(ctx)
 	if err != nil {
-		t.failed(ctx, slog.LevelWarn, "tracker: stuck transactions not checked", "error", err.Error())
+		t.rowFailed(slog.LevelWarn, "tracker: stuck transactions not checked", err)
 		return
 	}
-	_, chainTime, err := t.queue.Head(ctx)
+	_, chainTime, err := t.head(ctx)
 	if err != nil {
-		t.failed(ctx, slog.LevelWarn, "tracker: stuck transactions not checked", "error", err.Error())
+		t.rowFailed(slog.LevelWarn, "tracker: stuck transactions not checked", err)
 		return
 	}
 	for _, row := range rows {
+		if t.limited() {
+			return
+		}
 		if err := t.unmined(ctx, row, count, chainTime); err != nil {
-			t.failed(ctx, slog.LevelWarn, "tracker: a stuck operator transaction was not handled", "nonce", row.Nonce,
-				"purpose", row.Purpose, "error", err.Error())
+			t.rowFailed(slog.LevelWarn, "tracker: a stuck operator transaction was not handled", err, "nonce", row.Nonce,
+				"purpose", row.Purpose)
 		}
 	}
 }
@@ -81,14 +84,18 @@ func (t *Tracker) unmined(ctx context.Context, row repository.ListUnminedOperato
 		}
 		_, err := t.queue.Send(ctx, slot, t.releaseCall(), nil)
 		t.sent(row.ID)
-		if err == nil {
+		if err = t.check(err); err == nil {
 			t.logger.InfoContext(ctx, "planned debit slot released", "nonce", row.Nonce)
 		}
 		return err
 	}
 
 	hash := common.BytesToHash(row.TxHash)
-	if r := t.queue.Receipt(ctx, hash); r != nil {
+	r, err := t.receipt(ctx, hash)
+	if err != nil {
+		return err
+	}
+	if r != nil {
 		if row.Purpose == operator.PurposeRelease {
 			return t.setTx(ctx, row.ID, txReleased, r)
 		}
@@ -156,7 +163,7 @@ func (t *Tracker) replace(ctx context.Context, slot operator.Slot, hash common.H
 	}
 	newHash, err := t.queue.SendWithFloor(ctx, slot, call, &hash, floor)
 	t.sent(slot.ID)
-	if err != nil {
+	if err = t.check(err); err != nil {
 		return err
 	}
 	t.logger.WarnContext(ctx, msg, "nonce", slot.Nonce, "purpose", call.Purpose, "old_tx_hash", hash.Hex(), "tx_hash", newHash.Hex())
@@ -172,7 +179,11 @@ func (t *Tracker) releaseCall() operator.Call {
 // before its replacement or release did.
 func (t *Tracker) resolveUsedSlot(ctx context.Context, row repository.ListUnminedOperatorTxsRow) error {
 	for _, h := range row.ReplacedHashes {
-		r := t.queue.Receipt(ctx, common.BytesToHash(h))
+		r, err := t.receipt(ctx, common.BytesToHash(h))
+		if err != nil {
+			// A rate limit is no evidence of a nonce used outside card-auth.
+			return err
+		}
 		if r == nil {
 			continue
 		}

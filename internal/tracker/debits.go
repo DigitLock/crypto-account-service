@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -13,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/DigitLock/crypto-account-service/internal/config"
 	"github.com/DigitLock/crypto-account-service/internal/debit"
 	"github.com/DigitLock/crypto-account-service/internal/decision"
 	"github.com/DigitLock/crypto-account-service/internal/operator"
@@ -45,7 +45,8 @@ func LateDebitReturnID(chainAuthID []byte) string {
 	return "LATE_DEBIT:" + common.Bytes2Hex(chainAuthID)
 }
 
-// debitPass runs the rows of every authorization that is not final.
+// debitPass runs the rows of every authorization that is not final. APPROVED rows go last, in descending order of
+// the block of their debit: the reorg check of the highest block covers the lower ones (budget.go).
 func (t *Tracker) debitPass(ctx context.Context) {
 	rows, err := repository.New(t.db).ListAuthorizationsToTrack(ctx, repository.ListAuthorizationsToTrackParams{
 		ChainID: t.chainID(), OperatorAddress: t.operator(),
@@ -54,10 +55,44 @@ func (t *Tracker) debitPass(ctx context.Context) {
 		t.failed(ctx, slog.LevelError, "tracker: list the authorizations failed", "error", decision.ErrorDetail(err))
 		return
 	}
+	notMoved := func(a repository.ListAuthorizationsToTrackRow, err error) {
+		t.rowFailed(slog.LevelWarn, "tracker: an authorization was not moved", err, "tenant_id", a.TenantID.String(),
+			"auth_id", a.AuthID, "status", a.Status)
+	}
+	type approvedRow struct {
+		a     repository.ListAuthorizationsToTrackRow
+		txs   []repository.ListAuthorizationTxsRow
+		block int64
+	}
+	var approved []approvedRow
 	for _, a := range rows {
-		if err := t.trackAuthorization(ctx, a); err != nil {
-			t.failed(ctx, slog.LevelWarn, "tracker: an authorization was not moved", "tenant_id", a.TenantID.String(),
-				"auth_id", a.AuthID, "status", a.Status, "error", err.Error())
+		if t.limited() {
+			return
+		}
+		if a.Status != decision.StatusApproved {
+			if err := t.trackAuthorization(ctx, a); err != nil {
+				notMoved(a, err)
+			}
+			continue
+		}
+		txs, err := repository.New(t.db).ListAuthorizationTxs(ctx, &a.ID)
+		if err != nil {
+			notMoved(a, dbErr(err))
+			continue
+		}
+		block := int64(-1)
+		if cur := currentTx(txs); cur != nil {
+			block = blockOf(cur.BlockNumber)
+		}
+		approved = append(approved, approvedRow{a: a, txs: txs, block: block})
+	}
+	sort.SliceStable(approved, func(i, j int) bool { return approved[i].block > approved[j].block })
+	for _, r := range approved {
+		if t.limited() {
+			return
+		}
+		if err := t.approved(ctx, r.a, r.txs); err != nil {
+			notMoved(r.a, err)
 		}
 	}
 }
@@ -84,7 +119,11 @@ func (t *Tracker) trackAuthorization(ctx context.Context, a repository.ListAutho
 	case decision.StatusTimedOut:
 		return t.timedOut(ctx, a)
 	case decision.StatusApproved:
-		return t.approved(ctx, a)
+		txs, err := repository.New(t.db).ListAuthorizationTxs(ctx, &a.ID)
+		if err != nil {
+			return dbErr(err)
+		}
+		return t.approved(ctx, a, txs)
 	case decision.StatusLateDebit:
 		// Row 5.
 		status, err := repository.New(t.db).GetLateDebitReturnStatus(ctx, a.ID)
@@ -140,14 +179,18 @@ func (t *Tracker) timedOut(ctx context.Context, a repository.ListAuthorizationsT
 	}
 	// Row 6: the debit reverted, or the chain is past validUntil and the debit is not on it.
 	if cur := currentTx(txs); cur != nil && cur.TxHash != nil {
-		if r := t.queue.Receipt(ctx, common.BytesToHash(cur.TxHash)); r != nil && r.Status != types.ReceiptStatusSuccessful {
+		r, err := t.receipt(ctx, common.BytesToHash(cur.TxHash))
+		if err != nil {
+			return err
+		}
+		if r != nil && r.Status != types.ReceiptStatusSuccessful {
 			if err := t.setTx(ctx, cur.ID, txReverted, r); err != nil {
 				return err
 			}
 			return t.declineTimedOut(ctx, a)
 		}
 	}
-	_, ts, err := t.queue.Head(ctx)
+	_, ts, err := t.head(ctx)
 	if err != nil {
 		return err
 	}
@@ -162,12 +205,8 @@ func (t *Tracker) declineTimedOut(ctx context.Context, a repository.ListAuthoriz
 	return t.move(ctx, a, decision.StatusDeclined, moveArgs{reason: decision.ReasonTimeout}, nil)
 }
 
-// approved is rows 1, 2, 3 and 10 and the reorg check for an APPROVED authorization.
-func (t *Tracker) approved(ctx context.Context, a repository.ListAuthorizationsToTrackRow) error {
-	txs, err := repository.New(t.db).ListAuthorizationTxs(ctx, &a.ID)
-	if err != nil {
-		return dbErr(err)
-	}
+// approved is rows 1, 2, 3 and 10 and the reorg check for an APPROVED authorization with its operator transactions.
+func (t *Tracker) approved(ctx context.Context, a repository.ListAuthorizationsToTrackRow, txs []repository.ListAuthorizationTxsRow) error {
 	cur := currentTx(txs)
 	if cur == nil {
 		return errors.New("an APPROVED authorization without a debit transaction")
@@ -182,9 +221,9 @@ func (t *Tracker) approved(ctx context.Context, a repository.ListAuthorizationsT
 		return t.notExecuted(ctx, a, txs, cur, "released unmined")
 	case cur.Status == txSent:
 		// A resubmission in flight (row 2); stuck.go replaces or releases it.
-		r := t.queue.Receipt(ctx, common.BytesToHash(cur.TxHash))
-		if r == nil {
-			return nil
+		r, err := t.receipt(ctx, common.BytesToHash(cur.TxHash))
+		if err != nil || r == nil {
+			return err
 		}
 		if r.Status == types.ReceiptStatusSuccessful {
 			return t.setTx(ctx, cur.ID, txIncluded, r)
@@ -194,25 +233,35 @@ func (t *Tracker) approved(ctx context.Context, a repository.ListAuthorizationsT
 		}
 		return t.reverted(ctx, a, txs, cur, r)
 	case cur.Status == txReverted:
-		r := t.queue.Receipt(ctx, common.BytesToHash(cur.TxHash))
-		if r == nil {
-			return nil
+		r, err := t.receipt(ctx, common.BytesToHash(cur.TxHash))
+		if err != nil || r == nil {
+			return err
 		}
 		return t.reverted(ctx, a, txs, cur, r)
 	case cur.Status == txIncluded && cur.BlockNumber != nil:
-		onChain, err := t.queue.BlockHash(ctx, uint64(*cur.BlockNumber))
+		block := uint64(*cur.BlockNumber)
+		final, ok, err := t.finalNumber(ctx)
 		if err != nil {
 			return err
 		}
-		if onChain == common.BytesToHash(cur.BlockHash) {
-			// Row 1 (FR-19): final by the finality rule of the network, counted from the sealed block.
-			final, err := t.isFinal(ctx, uint64(*cur.BlockNumber))
-			if err != nil || !final {
+		if !ok || block > final {
+			// Not final: no chain call for finality; only the shared reorg check (S2 st9b b, c).
+			same, err := t.unchanged(ctx, block, cur.BlockHash)
+			if err != nil || same {
 				return err
 			}
-			return t.move(ctx, a, decision.StatusDebitConfirmed, moveArgs{}, func(q *repository.Queries) error {
-				return q.SetOperatorTxStatus(ctx, repository.SetOperatorTxStatusParams{ID: cur.ID, Status: txConfirmed})
-			})
+		} else {
+			// Row 1 (FR-19): final by the finality rule of the network, counted from the sealed block. The check right
+			// before the row is set final reads its block.
+			onChain, err := t.blockHash(ctx, block)
+			if err != nil {
+				return err
+			}
+			if onChain == common.BytesToHash(cur.BlockHash) {
+				return t.move(ctx, a, decision.StatusDebitConfirmed, moveArgs{}, func(q *repository.Queries) error {
+					return q.SetOperatorTxStatus(ctx, repository.SetOperatorTxStatusParams{ID: cur.ID, Status: txConfirmed})
+				})
+			}
 		}
 		// ADR-10: the stored block is no longer on the chain. The state is read again before anything is decided.
 		t.logger.WarnContext(ctx, "reorg: the block of an approved debit changed", "auth_id", a.AuthID,
@@ -220,7 +269,11 @@ func (t *Tracker) approved(ctx context.Context, a repository.ListAuthorizationsT
 	}
 
 	// Row 10, reorg, row 2: the receipt is read again.
-	if r := t.queue.Receipt(ctx, common.BytesToHash(cur.TxHash)); r != nil && r.Status == types.ReceiptStatusSuccessful {
+	r, err := t.receipt(ctx, common.BytesToHash(cur.TxHash))
+	if err != nil {
+		return err
+	}
+	if r != nil && r.Status == types.ReceiptStatusSuccessful {
 		return t.setBlock(ctx, cur.ID, r)
 	}
 	debited, err := t.debited(ctx, a.ChainAuthID)
@@ -247,7 +300,7 @@ func (t *Tracker) resubmit(ctx context.Context, a repository.ListAuthorizationsT
 	if err != nil {
 		return err
 	}
-	count, err := t.queue.NonceCount(ctx)
+	count, err := t.nonceCount(ctx)
 	if err != nil {
 		return err
 	}
@@ -270,7 +323,7 @@ func (t *Tracker) resubmit(ctx context.Context, a repository.ListAuthorizationsT
 		hash, err = t.queue.Send(ctx, slot, call, nil)
 		t.sent(slot.ID)
 	}
-	if err != nil {
+	if err := t.check(err); err != nil {
 		return err
 	}
 	t.logger.WarnContext(ctx, "approved debit dropped; resubmitted with the same authId", "tenant_id", a.TenantID.String(),
@@ -283,7 +336,7 @@ func (t *Tracker) resubmit(ctx context.Context, a repository.ListAuthorizationsT
 // refused it and the debit is lost. The revert reason is not decoded.
 func (t *Tracker) reverted(ctx context.Context, a repository.ListAuthorizationsToTrackRow, txs []repository.ListAuthorizationTxsRow,
 	cur *repository.ListAuthorizationTxsRow, r *types.Receipt) error {
-	ts, err := t.queue.BlockTime(ctx, r.BlockNumber)
+	ts, err := t.blockTime(ctx, r.BlockNumber)
 	if err != nil {
 		return err // a preconfirmed block without a header yet: the next cycle reads it
 	}
@@ -341,7 +394,10 @@ func (t *Tracker) resolveDebit(ctx context.Context, txs []repository.ListAuthori
 			if h == nil {
 				continue
 			}
-			r := t.queue.Receipt(ctx, common.BytesToHash(h))
+			r, err := t.receipt(ctx, common.BytesToHash(h))
+			if err != nil {
+				return err
+			}
 			if r == nil || r.Status != types.ReceiptStatusSuccessful {
 				continue
 			}
@@ -356,31 +412,14 @@ func (t *Tracker) resolveDebit(ctx context.Context, txs []repository.ListAuthori
 	return nil
 }
 
-// isFinal applies the finality rule of the network to a sealed block (row 1, SRS — EVM Connector §2.1.1).
-func (t *Tracker) isFinal(ctx context.Context, block uint64) (bool, error) {
-	if t.cfg.FinalityMode == config.FinalityModeTag {
-		final, _, err := t.finalBlock(ctx)
-		if err != nil {
-			return false, err
-		}
-		h, err := t.queue.Reader().Endpoint().Client.HeaderByNumber(ctx, final)
-		if err != nil {
-			return false, fmt.Errorf("finalized block: %s", t.describe(err))
-		}
-		return h.Number.Uint64() >= block, nil
-	}
-	latest, _, err := t.queue.Head(ctx)
-	if err != nil {
-		return false, err
-	}
-	return latest >= block+uint64(t.cfg.FinalityConfirmations), nil
-}
-
 // debited reads debited of authorizations(authId) at the latest block.
 func (t *Tracker) debited(ctx context.Context, chainAuthID []byte) (*big.Int, error) {
+	if t.limited() {
+		return nil, errRateLimited
+	}
 	a, err := t.controller().Authorizations(t.opts(ctx, nil), [32]byte(chainAuthID))
 	if err != nil {
-		return nil, fmt.Errorf("authorizations(authId): %s", t.describe(err))
+		return nil, t.rpcErr("authorizations(authId)", err)
 	}
 	return a.Debited, nil
 }

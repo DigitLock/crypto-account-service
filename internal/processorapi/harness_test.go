@@ -86,6 +86,7 @@ type options struct {
 	// Returns: the treasury gives the controller no allowance; finality_confirmations (default 2).
 	noRefundAllowance bool
 	confirmations     int
+	finalityTag       bool // finality by the tag finalized: on Anvil the latest block − 64
 	// The chain listener: started when wsURL is set, with listenerSubscription (default logs).
 	wsURL                string
 	listenerSubscription string
@@ -260,11 +261,15 @@ func (e *env) newDebitStep(t *testing.T, o options, deadline time.Duration, logg
 	if !o.noRefundAllowance {
 		e.chain.ApproveRefunds(t, usdc(t, "1000000"))
 	}
+	finality := config.FinalityModeConfirmations
+	if o.finalityTag {
+		finality = config.FinalityModeTag
+	}
 	e.tracker, err = tracker.New(e.cardAuth, e.queue, tracker.Config{
 		Controller: e.chain.Controller, Token: e.chain.Token, RefundGasLimit: config.DefaultRefundGasLimit,
 		DebitGasLimit: config.DefaultDebitGasLimit, DebitValidity: 4 * time.Second, FeeBumpPercent: 25,
-		Interval: time.Second, RetryInterval: 30 * time.Second, FinalityMode: config.FinalityModeConfirmations,
-		FinalityConfirmations: or(o.confirmations, 2),
+		Interval: time.Second, RetryInterval: 30 * time.Second, FinalityMode: finality,
+		FinalityTag: config.FinalityTagFinalized, FinalityConfirmations: or(o.confirmations, 2),
 	}, tracker.NewMetrics(e.metrics), logger, e.clock.Now)
 	if err != nil {
 		t.Fatal(err)
@@ -729,7 +734,7 @@ type rpcProxy struct {
 	target string
 
 	mu       sync.Mutex
-	mode     string // "", "error", "delay"
+	mode     string // "", "error", "delay", "429": every request answered with HTTP 429
 	delay    time.Duration
 	requests []proxied
 	// Faults of one method: answered with a JSON-RPC error; relayed, then answered after a delay; receipts with
@@ -786,6 +791,9 @@ func (p *rpcProxy) serve(w http.ResponseWriter, r *http.Request) {
 		mode = "error"
 	}
 	switch mode {
+	case "429":
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
 	case "error":
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(jsonRPCErrors(body))

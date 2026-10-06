@@ -189,6 +189,41 @@ func (c *Client) describeWithin(err error, timeout time.Duration) string {
 	return s
 }
 
+// DescribedError is an RPC error as text without a URL. Unwrap gives the cause, so errors.Is and errors.As still
+// see a rate limit or a timeout; Error never quotes the cause.
+type DescribedError struct {
+	text  string
+	cause error
+}
+
+func (e *DescribedError) Error() string { return e.text }
+
+func (e *DescribedError) Unwrap() error { return e.cause }
+
+// rateLimitCodes are JSON-RPC error codes of a rate limit: -32005 "limit exceeded" of EIP-1474, and 429, which some
+// providers put into the JSON-RPC body.
+var rateLimitCodes = []int{-32005, 429}
+
+// IsRateLimit reports whether err is a rate-limit answer of an endpoint: HTTP 429, a JSON-RPC error of a rate-limit
+// code, or a JSON-RPC error whose message names a rate limit (SRS — Card Spend UC-3, rules of S2 st9b).
+func IsRateLimit(err error) bool {
+	var (
+		httpErr rpc.HTTPError
+		rpcErr  rpc.Error
+	)
+	if errors.As(err, &httpErr) && httpErr.StatusCode == 429 {
+		return true
+	}
+	if errors.As(err, &rpcErr) {
+		if slices.Contains(rateLimitCodes, rpcErr.ErrorCode()) {
+			return true
+		}
+		msg := strings.ToLower(rpcErr.Error())
+		return strings.Contains(msg, "rate limit") || strings.Contains(msg, "too many requests")
+	}
+	return false
+}
+
 // OperatorNonce returns the transaction count of the operator at the pending block tag, from the primary
 // endpoint. A failure is a StartCheckError without a URL.
 func (c *Client) OperatorNonce(ctx context.Context, operator common.Address) (uint64, error) {

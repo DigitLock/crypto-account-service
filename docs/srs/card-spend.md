@@ -620,6 +620,13 @@ N/A — background worker; no interaction between systems beyond RPC reads and t
   - the tracker handles only the rows of its own chain and operator key: operator transactions of this chain and key; authorizations of this chain, or with no chain yet (`RECEIVED`); returns of this chain. An authorization or return with a slot of another chain or key is never touched. Before the operator key is changed, every authorization and return of the old key must be final (Deployment Guide)
   - the time of the last send and the fees of the last send live in the memory of the process: after a restart the age of a pending transaction counts from the reservation of its slot, and a return that just failed may be retried at once (backlog)
 
+- **Rules of S2 st9b** (owner's decision, 2026-10-06, after the live run on Base Sepolia: the tracker sent 60–90 calls per cycle and drew HTTP 429). The decision path uses the same endpoint, so the reads of a tracker cycle are bounded:
+  - the final block number is read once per cycle and shared by every row: the block of `finality_tag` in mode `tag`, the latest block − `finality_confirmations` in mode `confirmations`. The latest block is read once per cycle as well
+  - a row whose stored `block_number` is above the final block makes no chain call for finality in that cycle; debits and refunds alike. A row without a block (preconfirmed) has its receipt read only; a sealed receipt stores the block, and finality applies to it in the same cycle
+  - reorg check (ADR-10): at most one read per distinct block number per cycle, only for rows not yet final. The rows go in descending order of their block: when the highest stored block still has its stored hash, the lower stored blocks of the cycle are taken as unchanged, as a block commits to its ancestors. The check right before a row is set final reads its block
+  - a rate-limit answer of the endpoint — HTTP 429, JSON-RPC error `-32005` or `429`, or a message naming a rate limit — ends the cycle at once: no further chain call, one WARN line for the cycle, no row moves on the missing answer. A rate limit is no evidence of a nonce used outside `card-auth`. The next cycle runs on its schedule
+  - failures of the same kind across rows in one cycle are logged once, with the attributes of the first row and the number of rows (`rows`)
+
 ##### Preconditions
 - At least one authorization or return is not in a final state.
 
@@ -898,6 +905,7 @@ All parameters come from the environment of `card-auth`; the variable names are 
   - transactions are EIP-1559: `maxPriorityFeePerGas` from `eth_maxPriorityFeePerGas`, `maxFeePerGas` = 2 × base fee of the pending block + the tip; a replacement raises both by `fee_bump_percent` on the same nonce (ADR-10);
   - fallback endpoint: after `rpc_fallback_after` consecutive failures of the primary, reads and sends go to `rpc_fallback_url`; every tracker cycle probes the primary with `eth_chainId` and switches back on success. No retry inside the read budget of step 9: a failed read is `CHAIN_UNAVAILABLE`. The fallback has no WebSocket; the listener stays on the primary;
   - the fallback counter counts the failures of the step-9 read only; fee reads, sends and receipt polls use the current endpoint and do not count;
+  - the reads of the tracker are bounded per cycle: the final block and the latest block once, at most one block per distinct block number for the reorg check, no finality read for a row above the final block; a rate-limit answer ends the cycle (UC-3, rules of S2 st9b);
   - start checks, the service does not start otherwise: `eth_chainId` of the primary and of the fallback equals `chain_id` and is in the allow-list; `token()` of the controller equals `token_address`; `decimals()` of the token equals `token_decimals`; `symbol()` of the token is read and kept in memory: it is the `token` stored with every quote and answered with an approval (D-10); `next_nonce` of the operator is compared with its transaction count at the pending block tag: a missing `operator_accounts` row is created with that count; a lower `next_nonce` is raised to it and logged; a higher one is kept.
 - **Audit log:**
   - `authorization_events`: every status change;

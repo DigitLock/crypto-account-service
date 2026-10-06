@@ -68,13 +68,18 @@ func (t *Tracker) updateMetrics(ctx context.Context) {
 	} else {
 		t.metrics.pending.Set(t.now().Sub(oldest).Seconds())
 	}
+	if t.limited() {
+		return // the chain reads wait for the next cycle (budget.go)
+	}
 	if wei, err := t.queue.Balance(ctx); err != nil {
-		t.failed(ctx, slog.LevelWarn, "tracker: the operator balance not read", "error", err.Error())
+		if err := t.check(err); !t.limited() {
+			t.failed(ctx, slog.LevelWarn, "tracker: the operator balance not read", "error", err.Error())
+		}
 	} else {
 		f, _ := new(big.Float).SetInt(wei).Float64()
 		t.metrics.gasBalance.Set(f)
 	}
-	if t.treasury == ([20]byte{}) {
+	if t.limited() || t.treasury == ([20]byte{}) {
 		return
 	}
 	token, err := bindings.NewMockUSDCCaller(t.cfg.Token, t.queue.Reader().Endpoint().Client)
@@ -83,12 +88,16 @@ func (t *Tracker) updateMetrics(ctx context.Context) {
 	}
 	balance, err := token.BalanceOf(t.opts(ctx, nil), t.treasury)
 	if err != nil {
-		t.failed(ctx, slog.LevelWarn, "tracker: treasury balance read failed", "error", t.describe(err))
+		if err := t.rpcErr("treasury balance", err); !t.limited() {
+			t.failed(ctx, slog.LevelWarn, "tracker: treasury balance read failed", "error", err.Error())
+		}
 		return
 	}
 	allowance, err := token.Allowance(t.opts(ctx, nil), t.treasury, t.cfg.Controller)
 	if err != nil {
-		t.failed(ctx, slog.LevelWarn, "tracker: treasury allowance read failed", "error", t.describe(err))
+		if err := t.rpcErr("treasury allowance", err); !t.limited() {
+			t.failed(ctx, slog.LevelWarn, "tracker: treasury allowance read failed", "error", err.Error())
+		}
 		return
 	}
 	capacity := balance

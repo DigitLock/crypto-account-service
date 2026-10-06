@@ -82,6 +82,11 @@ func (r *Reader) Describe(err error, timeout time.Duration) string {
 	return r.client.describeWithin(err, timeout)
 }
 
+// DescribeErr is Describe as an error that keeps its cause for errors.Is and errors.As (DescribedError).
+func (r *Reader) DescribeErr(err error, timeout time.Duration) error {
+	return &DescribedError{text: r.Describe(err, timeout), cause: err}
+}
+
 // endpoint returns the endpoint reads go to now and whether it is the primary.
 func (r *Reader) endpoint() (Endpoint, bool) {
 	if r.OnFallback() {

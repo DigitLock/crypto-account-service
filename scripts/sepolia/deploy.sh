@@ -11,14 +11,15 @@
 #   5. prints addresses, transaction hashes and explorer links, and writes them to cas-sepolia-deployment.env
 #      next to the keys file. forge output goes to cas-sepolia-forge/ there, never into the repository.
 # Needs: forge, cast, jq, perl; ETH of DEPLOYER for gas. Refuses to run when the deployment file exists.
-# Variables: CAS_SEPOLIA_KEYS (required); CAS_SEPOLIA_RPC_URL (default https://sepolia.base.org);
+# Variables: CAS_SEPOLIA_KEYS (required); CAS_SEPOLIA_RPC_URL (default CARD_AUTH_RPC_URL of the
+#   environment file when set, else https://sepolia.base.org);
 #   CAS_SEPOLIA_REHEARSAL=1 for a rehearsal on a local Anvil with chain ID 84532.
 
 . "$(dirname "$0")/lib.sh"
 
 need forge jq
-RPC=$(rpc_url)
-start_checks CAS_SEPOLIA_RPC_URL "$RPC"
+select_rpc
+start_checks "$RPC_NAME" "$RPC"
 [ ! -e "$DEPLOYMENT_FILE" ] || die "cas-sepolia-deployment.env exists next to the keys file: move it away to deploy again"
 
 for role in DEPLOYER ADMIN OPERATOR TREASURY USER; do

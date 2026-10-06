@@ -8,6 +8,10 @@
 #   URL is refused, so a local Anvil can never pass for Base Sepolia.
 # - A key or a URL is never printed. forge and cast take a private key only as an argument (--private-key): it is
 #   passed inside the script process only, never typed on a command line of the shell.
+# - The RPC of deploy.sh, setup.sh and register.sh: CAS_SEPOLIA_RPC_URL, else CARD_AUTH_RPC_URL of the environment
+#   file, else https://sepolia.base.org (select_rpc).
+# - The RPC of deploy.sh, setup.sh and register.sh: CAS_SEPOLIA_RPC_URL, else CARD_AUTH_RPC_URL of the environment
+#   file, else https://sepolia.base.org (select_rpc). The URL is never printed.
 # - Files written next to the keys file: cas-sepolia-deployment.env (addresses and hashes, no secret),
 #   cas-sepolia-credentials.env (processor pair and service token, mode 600), cas-sepolia-forge/ (forge output).
 # Needs bash 3.2 or later and perl (path and mode checks, timing, redaction).
@@ -215,8 +219,27 @@ chain_call() {
 # same_address A B is true when A and B are the same address, whatever the letter case.
 same_address() { [ "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" ]; }
 
-# rpc_url prints the RPC URL of forge and cast: CAS_SEPOLIA_RPC_URL or the public endpoint.
-rpc_url() { printf '%s' "${CAS_SEPOLIA_RPC_URL:-$PUBLIC_RPC_URL}"; }
+# select_rpc sets RPC, the URL of forge and cast, and RPC_NAME, where it comes from (S2 st9b f): CAS_SEPOLIA_RPC_URL;
+# else CARD_AUTH_RPC_URL of the environment file, when the file sets it; else the public endpoint. The public endpoint
+# is load-balanced: a nonce read right after a transaction may be stale (Deployment Guide §10).
+select_rpc() {
+	local file=${CAS_ENV_FILE:-$REPO_ROOT/.env} value=""
+	if [ -n "${CAS_SEPOLIA_RPC_URL:-}" ]; then
+		RPC=$CAS_SEPOLIA_RPC_URL
+		RPC_NAME=CAS_SEPOLIA_RPC_URL
+		return
+	fi
+	if [ -f "$file" ]; then
+		value=$(env_value CARD_AUTH_RPC_URL)
+	fi
+	if [ -n "$value" ]; then
+		RPC=$value
+		RPC_NAME=CARD_AUTH_RPC_URL
+	else
+		RPC=$PUBLIC_RPC_URL
+		RPC_NAME="the public endpoint"
+	fi
+}
 
 # tx_link and address_link print an explorer link, or a note in a rehearsal.
 tx_link() {

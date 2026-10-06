@@ -1,6 +1,6 @@
 # Deployment Guide — Base Sepolia
 
-- **Version:** 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal. Values of Base Sepolia are placeholders until S2 st9b.
+- **Version:** 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal. Values of Base Sepolia are placeholders until S2 st9b.
 - **Status:** Draft.
 - **Parents:** [SRS — Card Spend](srs/card-spend.md) §3.1, §3.2; [SRS — Core](srs/core.md) UC-105, `CreateConnection`, `RegisterCard`, §3.2; [test plan S2](test-plan-s2.md) phase 8.
 
@@ -88,8 +88,9 @@ CREATE ROLE cas_card_auth LOGIN PASSWORD '…';
 
 - `set -euo pipefail`, never `set -x`.
 - Order of the checks: the chain ID of its RPC first — only 84532 is accepted — then the keys file.
+- RPC of `deploy.sh`, `setup.sh` and `register.sh`: `CAS_SEPOLIA_RPC_URL` when set; else `CARD_AUTH_RPC_URL` of the environment file when it is set (Alchemy); else the public `https://sepolia.base.org`. Messages name the variable the URL came from; the URL itself is never printed. `run-card-auth.sh` and `measure.sh` use `CARD_AUTH_RPC_URL`.
 - The keys file is refused when `CAS_SEPOLIA_KEYS` is unset, when the file is missing, when it lies inside the repository working tree, and when group or others have any permission on it.
-- A local RPC URL (`localhost`, `127.*`, `[::1]`) is refused; only the rehearsal switch `CAS_SEPOLIA_REHEARSAL=1` allows it, and then only local URLs are accepted (§8).
+- A local RPC URL (`localhost`, `127.*`, `[::1]`) is refused; only the rehearsal switch `CAS_SEPOLIA_REHEARSAL=1` allows it, and then only local URLs are accepted (§11).
 - No key, no URL with an API key, no password and no connection string is printed. `forge` and `cast` take a private key only as the argument `--private-key`: the script passes it from a variable, so it never enters the shell history, but it is visible in the process list of the machine while that command runs.
 - Output is safe to paste into a chat: addresses, transaction hashes, explorer links on `sepolia.basescan.org`, amounts, timings, the RPC provider by name.
 - Files written next to the keys file:
@@ -103,7 +104,7 @@ CREATE ROLE cas_card_auth LOGIN PASSWORD '…';
 | Variable | Default | Scripts |
 |---|---|---|
 | `CAS_SEPOLIA_KEYS` | — (required) | all |
-| `CAS_SEPOLIA_RPC_URL` | `https://sepolia.base.org` | `deploy.sh`, `setup.sh`, `register.sh` |
+| `CAS_SEPOLIA_RPC_URL` | `CARD_AUTH_RPC_URL` of the environment file when set, else `https://sepolia.base.org` | `deploy.sh`, `setup.sh`, `register.sh` |
 | `CAS_SEPOLIA_FALLBACK_URL` | `https://sepolia.base.org` | `run-card-auth.sh` |
 | `CAS_ENV_FILE` | `.env` of the repository | `register.sh`, `run-card-auth.sh`, `measure.sh` |
 | `CAS_BIN_DIR` | `bin/` | `register.sh`, `run-card-auth.sh`, `measure.sh` |
@@ -201,6 +202,8 @@ go run ./cmd/casctl sim get --auth-id t805-1
 | `is a local URL` / `is not a local URL` | A local URL without the rehearsal switch, or a public one with it | Unset `CAS_SEPOLIA_REHEARSAL` for Base Sepolia |
 | `card-auth` stops at start, a message names `CARD_AUTH_CHAIN_ID` or the RPC | Start check of SRS §3.2: `eth_chainId` of the primary or the fallback, `token()`, `decimals()` | The message names the variable; no value is printed |
 | `insufficient funds`, a transaction of `setup.sh` failed | The sender has no ETH | Faucet (§3); rerun the script: it continues |
+| `replacement transaction underpriced`, a transaction of `setup.sh` or `deploy.sh` failed on the public endpoint | `https://sepolia.base.org` is load-balanced: a nonce read right after a transaction may come from a node that has not seen it, so `cast` reuses a pending nonce | Run the scripts on Alchemy: leave `CAS_SEPOLIA_RPC_URL` unset with `CARD_AUTH_RPC_URL` in `.env`, or set it; rerun: `setup.sh` sends only what is missing |
+| `card-auth` log: `tracker: the endpoint answered with a rate limit; the cycle ended`, error `HTTP 429` | The rate limit of the provider | One line per cycle; the next cycle runs on its schedule (SRS — Card Spend UC-3, rules of S2 st9b); decisions on the same endpoint may answer `CHAIN_UNAVAILABLE` while the limit lasts. Check the Alchemy dashboard; a longer `CARD_AUTH_TRACKER_INTERVAL` lowers the load |
 | Declines `INSUFFICIENT_FUNDS`, `INSUFFICIENT_ALLOWANCE` or `LIMIT_EXCEEDED` | Wallet state, or the daily limit of the wallet or the card | `setup.sh` with higher amounts; the card limit with `UpdateCard` |
 | `chain_listener_connected` 0, signals only from `polling` | Listener down: WebSocket closed, chain ID of `CARD_AUTH_RPC_WS_URL` wrong (`ALERT:` line) | Polling continues, decisions go on (FR-23); the listener reconnects with backoff up to 30 s |
 | Log: `chain reads moved to the fallback endpoint` | `CARD_AUTH_RPC_FALLBACK_AFTER` consecutive failures of the primary read | Reads and sends use `https://sepolia.base.org`; every tracker cycle probes the primary; `chain reads back on the primary endpoint` when it answers. The listener stays on the primary |
