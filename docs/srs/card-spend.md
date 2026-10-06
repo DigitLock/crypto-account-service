@@ -598,7 +598,7 @@ N/A — background worker; no interaction between systems beyond RPC reads and t
 |---|---|---|
 | 1 | `APPROVED`, debit block is final | Set `DEBIT_CONFIRMED` |
 | 2 | `APPROVED`, receipt disappeared (dropped preconfirmation or reorg) | Read `authorizations(authId)`. Debited > 0 → keep waiting. Debited = 0 → send a new debit with the same `authId` and a new `validUntil`, in the same nonce slot if it is still free, otherwise with the next nonce. |
-| 3 | Resubmitted debit reverted | Set `DEBIT_LOST`; alert; the amount is reported as issuer exposure; open returns of the authorization become `NOTHING_TO_RETURN` |
+| 3 | Resubmitted debit failed | Not executed only because its `validUntil` passed — released unmined, or reverted in a block whose timestamp is past `validUntil` — and `authorizations(authId)` shows 0: back to row 2, a new resubmission with a new `validUntil`; alert on every attempt (D-23). Reverted by the contract before `validUntil` (allowance, balance, limit, pause): set `DEBIT_LOST`; alert; the amount is reported as issuer exposure; open returns of the authorization become `NOTHING_TO_RETURN` |
 | 4 | `TIMED_OUT`, debit succeeded before `validUntil` | Set `LATE_DEBIT`; create a full return of type `LATE_DEBIT` (UC-2); alert |
 | 5 | `LATE_DEBIT`, return confirmed | Set `LATE_DEBIT_REFUNDED` |
 | 6 | `TIMED_OUT`, debit reverted, or the latest block timestamp is past `validUntil` and `authorizations(authId)` shows 0 | Set `DECLINED / TIMEOUT` |
@@ -606,7 +606,17 @@ N/A — background worker; no interaction between systems beyond RPC reads and t
 | 8 | Transaction not mined, `validUntil` passed | Replace with a zero-value self-transfer to release the nonce |
 | 9 | Service start; a `PLANNED` slot | For every non-final authorization and return: read on-chain state first, then continue from the matching row. A `PLANNED` slot without a hash is never sent as a debit, whatever `validUntil` says: the tracker fills its nonce at once with a zero-value transfer of the operator to itself (purpose `RELEASE`, status `RELEASED` at inclusion) and sets the authorization from `TIMED_OUT` to `DECLINED / TIMEOUT` (D-22). A debit sent after the answer can only become a late debit, and an unfilled nonce blocks every later operator transaction |
 | 10 | Receipt or log with a zero `blockHash` | Preconfirmed: an inclusion signal, but `block_number` and `block_hash` are stored only from a sealed receipt. Finality (row 1) counts from the sealed block |
-| 11 | `DEBIT_SUBMITTED` and `deadline_at` passed: the process stopped, or its write failed, before storing the outcome (D-21) | Set `TIMED_OUT` with `decline_reason` `TIMEOUT` — the processor was told `DECLINED / TIMEOUT` or nothing — then continue as for any `TIMED_OUT`: rows 4–8, and row 9 for a `PLANNED` slot |
+| 11 | `DEBIT_SUBMITTED` and `deadline_at` passed: the process stopped, or its write failed, before storing the outcome (D-21) | Set `TIMED_OUT` with `decline_reason` `TIMEOUT` — the processor was told `DECLINED / TIMEOUT` or nothing — then continue as for any `TIMED_OUT`: rows 4–8, and row 9 for a `PLANNED` slot. Applies once `deadline_at` is more than the 2 s of the detached outcome write in the past, so the tracker never races a request still storing its own outcome |
+| 12 | `RECEIVED` and `deadline_at` passed: a decline write of UC-1 steps 5–9a that failed (owner's decision of 2026-10-06) | Set `DECLINED / TIMEOUT`; nothing was reserved or sent. Like row 11, it applies once `deadline_at` is more than the 2 s of the detached outcome write (D-21) in the past, so the tracker never races a request still storing its own outcome |
+
+- **Rules of S2 st6b** (owner's acceptance, 2026-10-06):
+  - a debit counts as stuck (row 7) when unmined longer than `tracker_interval` since its last send; a refund, longer than `tracker_interval` × 3
+  - a replacement pays both fees at least `fee_bump_percent` above the transaction it replaces, or the market fees when higher; the replaced fees are read from the node, or from the last send of this process when the node no longer holds the transaction
+  - a `PLANNED` debit slot is released only when its authorization is no longer `RECEIVED` or `DEBIT_SUBMITTED` within the deadline and the 2 s of the outcome write
+  - the `return_id` of a `LATE_DEBIT` return is `LATE_DEBIT:` followed by the 64 hex characters of `chain_auth_id`: deterministic, so a restart creates no second return, and longer than any processor's `return_id`
+  - a nonce used on chain by a transaction that is none of the row's hashes means the operator key was used outside `card-auth`: an alert, the row is left for manual handling (Deployment Guide)
+  - the tracker handles only the rows of its own chain and operator key: operator transactions of this chain and key; authorizations of this chain, or with no chain yet (`RECEIVED`); returns of this chain. An authorization or return with a slot of another chain or key is never touched. Before the operator key is changed, every authorization and return of the old key must be final (Deployment Guide)
+  - the time of the last send and the fees of the last send live in the memory of the process: after a restart the age of a pending transaction counts from the reservation of its slot, and a return that just failed may be retried at once (backlog)
 
 ##### Preconditions
 - At least one authorization or return is not in a final state.

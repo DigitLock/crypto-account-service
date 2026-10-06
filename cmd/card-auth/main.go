@@ -167,6 +167,9 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	refunds, err := tracker.New(pool, queue, tracker.Config{
 		Controller:            cfg.ControllerAddress,
 		Token:                 cfg.TokenAddress,
+		DebitGasLimit:         cfg.DebitGasLimit,
+		DebitValidity:         cfg.DebitValidity,
+		FeeBumpPercent:        cfg.FeeBumpPercent,
 		RefundGasLimit:        cfg.RefundGasLimit,
 		Interval:              cfg.TrackerInterval,
 		RetryInterval:         cfg.ReturnRetryInterval,

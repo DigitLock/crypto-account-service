@@ -587,6 +587,7 @@ func (e *env) newTracker(t *testing.T) *tracker.Tracker {
 	t.Helper()
 	tr, err := tracker.New(e.cardAuth, e.queue, tracker.Config{
 		Controller: e.chain.Controller, Token: e.chain.Token, RefundGasLimit: config.DefaultRefundGasLimit,
+		DebitGasLimit: config.DefaultDebitGasLimit, DebitValidity: 4 * time.Second, FeeBumpPercent: 25,
 		Interval: time.Second, RetryInterval: 30 * time.Second, FinalityMode: config.FinalityModeConfirmations,
 		FinalityConfirmations: 2,
 	}, tracker.NewMetrics(prometheus.NewRegistry()), e.log, e.clock.Now)

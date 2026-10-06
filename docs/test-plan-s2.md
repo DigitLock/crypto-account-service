@@ -37,7 +37,7 @@
 | 2 | Contracts of the APIs | st3 | 8 |
 | 3 | Schema, roles, card registry | st4 | 19 |
 | 4 | Decision on Anvil | st5a, st5b (§7) | 27 |
-| 5 | Returns and tracker | st6 | 22 |
+| 5 | Returns and tracker | st6a, st6b (§7) | 25 |
 | 6 | Chain listener | st7 | 8 |
 | 7 | Processor CLI and hard tests | st8 | 10 |
 | 8 | Base Sepolia | st9 | 9 |
@@ -146,12 +146,15 @@
 | S2-T514 | Expired after timeout | T423 `TIMED_OUT` | Move the chain time past `validUntil`; mine; tick | The debit reverts `AuthExpired` or stays unmined with `authorizations(authId)` 0: `DECLINED / TIMEOUT`; `operator_txs` `REVERTED` or released (T516) | UC-3 row 6 | — |
 | S2-T515 | Stuck before `validUntil` | Base fee raised above the sent fee cap; mining on | Tick | Replacement with the same nonce, both fee fields +25 %; old hash in `replaced_hashes`; `operator_tx_pending_seconds` grows then resets | UC-3 row 7, FR-20 | — |
 | S2-T516 | Release after `validUntil` | Debit unmined past `validUntil` | Tick | A zero-value self-transfer with the same nonce; row `purpose` `RELEASE`, status `RELEASED`; the next authorization uses the next nonce and mines | UC-3 row 8, FR-20 | — |
-| S2-T517 | FR-16 restart between send and receipt | Debit sent, process killed before the signal | Start; tick | On-chain state read first: `debited > 0` → `APPROVED` without a second send; `debited = 0` and not expired → wait; expired → T514 | UC-3 row 9, FR-16, EC-18 | — |
+| S2-T517 | FR-16 restart between send and receipt | Debit sent, process stopped before storing the outcome: the row stays `DEBIT_SUBMITTED` | Start a new tracker past `deadline_at`; tick | On-chain state read first, nothing sent at start. Row 11 first: `TIMED_OUT / TIMEOUT` (D-21). Then `debited > 0` → `LATE_DEBIT` with its automatic return (row 4), never `APPROVED`: the processor was told `TIMEOUT` or nothing; `debited = 0` and not expired → wait; expired → T514 | UC-3 rows 9 and 11, FR-16, EC-18, D-21 | — |
 | S2-T518 | `PLANNED` slot never sent | T418 state: a `PLANNED` slot without a hash, the authorization `TIMED_OUT`; once with `validUntil` not reached, once passed; then the same after a restart, with the authorization left `DEBIT_SUBMITTED` | Tick; start and tick; authorize once more | In every case no debit is sent for the slot: a zero-value self-transfer of the operator fills its nonce at once, row `purpose` `RELEASE`, status `RELEASED` at inclusion; the authorization ends `DECLINED / TIMEOUT` (after `TIMED_OUT` by UC-3 row 11 when it was `DEBIT_SUBMITTED`); the next authorization takes the next nonce and mines; never two transactions for one nonce | UC-3 rows 9 and 11, FR-16, FR-20, D-22 | — |
 | S2-T519 | Restart with an open return | Return `SUBMITTED`, process killed | Start; tick | `refundUsed(refundId)` read first; `true` → `INCLUDED`/`CONFIRMED` without a second send; `false` → resent | FR-16, FR-13 | — |
 | S2-T520 | Reorg detection | T403 approved | Change the hash of the stored block by `evm_revert` and re-mining | The tracker notices the changed `block_hash` and re-reads the state before any decision | ADR-10 | — |
 | S2-T521 | `GET /v1/authorizations/{auth_id}` | Authorizations of T502 and T507 | `GET` each; `GET` an unknown ID; as tenant B `GET` A's ID | Body of §2.1.4 with `returns` and `history`; the tombstone as §2.1.4 states; `404`; `404` | §2.1.4, FR-116, FR-105 | — |
 | S2-T522 | Tracker metrics | Scenario of this phase | Read `/metrics` | `returns_not_confirmed`, `operator_tx_pending_seconds`, `operator_gas_balance`, `treasury_refund_capacity`, `late_debits_total`, `debits_lost_total` with the expected values | §2.5.1 | — |
+| S2-T523 | Stuck debit replaced | T511 resubmission pending; base fee raised above its fee cap before its `validUntil` | Tick after `tracker_interval` | Replacement in the same nonce, both fee fields +25 % at least; the old hash in `replaced_hashes`; then it mines, `DEBIT_CONFIRMED`, one `Debited` | UC-3 row 7, FR-20, rules of S2 st6b | — |
+| S2-T524 | Resubmission past `validUntil` | T511 resubmission kept unmined until past its `validUntil` | Tick until it mines | Released in its nonce (`RELEASE`, `RELEASED`); `authorizations(authId)` read as 0; resubmitted again in the next nonce with a new `validUntil`; mines. `APPROVED` throughout, then `DEBIT_CONFIRMED`; exactly one `Debited`; an alert per attempt; no `DEBIT_LOST`, `debits_lost_total` 0 | UC-3 rows 2, 3, 8, D-23 | — |
+| S2-T525 | Nonce used outside `card-auth` | T423 `TIMED_OUT`, its debit pending | The operator key fills the same nonce outside `card-auth`; four ticks | One alert at Error level: the operator key was used outside `card-auth`; the row left as it is; next_nonce equal to the chain's count | Rules of S2 st6b | — |
 
 ### Phase 6 — Chain listener (st7)
 
@@ -286,7 +289,7 @@ Filled in st10.
 | st5a | T401, T402, T404 stored values, T405, T406, T407, T408, T409, T410, T411, T412 without the listener, T414 on a declined decision, T425 at step 4, T203 for the responses of st5a, T711 `401` after revocation; T521 in part: a declined authorization and every `404` |
 | st5b | T403, T404 response, T413, T415 – T424, T425 at step 10, T426, T319, T105 rest, T203 for the responses of st5b. Closed on 2026-10-06; T426 p95 of the approvals on Anvil in §5 when the run log is written |
 | st6a | T501, T502, T503, T504, T505, T506, T507, T508, T509, T519, T521 rest (returns and the tombstone), T522 for `returns_not_confirmed` and `treasury_refund_capacity`; also two concurrent partial returns above the remainder (exactly one accepted), the `500` of a return (D-18) and the FR-14 seam for `DEBIT_LOST` |
-| st6b | T510 – T518, T520, T522 rest: the debit side of UC-3; the stuck and released refunds |
+| st6b | T510, T511, T512 (`DEBIT_LOST` only for a revert before `validUntil`, D-23), T513, T514, T515, T516, T517, T518, T520, T523, T524, T525, T522 rest (`late_debits_total`, `debits_lost_total`, `operator_tx_pending_seconds`, `operator_gas_balance`); also UC-3 row 12. Closed on 2026-10-06; every scenario ends with next_nonce equal to the operator's count on chain, no `PLANNED` slot, no gap |
 | st7 | T412: the listener never moves |
 
 - In st5a, "approved" in T408 and T409 reads "passes the step and reaches the Debit step"; the approval itself is checked in st5b.

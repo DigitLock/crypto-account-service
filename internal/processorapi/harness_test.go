@@ -255,6 +255,7 @@ func (e *env) newDebitStep(t *testing.T, o options, deadline time.Duration, logg
 	}
 	e.tracker, err = tracker.New(e.cardAuth, e.queue, tracker.Config{
 		Controller: e.chain.Controller, Token: e.chain.Token, RefundGasLimit: config.DefaultRefundGasLimit,
+		DebitGasLimit: config.DefaultDebitGasLimit, DebitValidity: 4 * time.Second, FeeBumpPercent: 25,
 		Interval: time.Second, RetryInterval: 30 * time.Second, FinalityMode: config.FinalityModeConfirmations,
 		FinalityConfirmations: or(o.confirmations, 2),
 	}, tracker.NewMetrics(e.metrics), logger, e.clock.Now)
@@ -621,10 +622,24 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// failingDB fails every statement whose SQL contains match with a database error.
+// failingDB fails every statement whose SQL contains one of the "|"-separated parts of match with a database error,
+// while on is nil or true.
 type failingDB struct {
 	*pgxpool.Pool
 	match string
+	on    *atomic.Bool
+}
+
+func (d failingDB) fails(sql string) bool {
+	if d.on != nil && !d.on.Load() {
+		return false
+	}
+	for _, m := range strings.Split(d.match, "|") {
+		if strings.Contains(sql, m) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d failingDB) Begin(ctx context.Context) (pgx.Tx, error) {
@@ -632,33 +647,47 @@ func (d failingDB) Begin(ctx context.Context) (pgx.Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return failingTx{Tx: tx, match: d.match}, nil
+	return failingTx{Tx: tx, d: d}, nil
 }
 
 func (d failingDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.Contains(sql, d.match) {
+	if d.fails(sql) {
 		return errRow{}
 	}
 	return d.Pool.QueryRow(ctx, sql, args...)
 }
 
+func (d failingDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if d.fails(sql) {
+		return pgconn.CommandTag{}, injected
+	}
+	return d.Pool.Exec(ctx, sql, args...)
+}
+
 type failingTx struct {
 	pgx.Tx
-	match string
+	d failingDB
 }
 
 func (tx failingTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.Contains(sql, tx.match) {
+	if tx.d.fails(sql) {
 		return errRow{}
 	}
 	return tx.Tx.QueryRow(ctx, sql, args...)
 }
 
+func (tx failingTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if tx.d.fails(sql) {
+		return pgconn.CommandTag{}, injected
+	}
+	return tx.Tx.Exec(ctx, sql, args...)
+}
+
+var injected = &pgconn.PgError{Code: "08006", Message: "injected failure"}
+
 type errRow struct{}
 
-func (errRow) Scan(...any) error {
-	return &pgconn.PgError{Code: "08006", Message: "injected failure"}
-}
+func (errRow) Scan(...any) error { return injected }
 
 // rpcProxy stands between card-auth and Anvil: it records every request and can fail or delay them.
 type rpcProxy struct {

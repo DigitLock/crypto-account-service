@@ -1,8 +1,8 @@
-// Package tracker is the background worker of card-auth (SRS — Card Spend UC-3). This first loop executes the
-// returns of UC-2: it sends refund through the operator queue, follows each refund to CONFIRMED by the finality rule
-// of the network, retries a failed one after return_retry_interval (FR-14), and on start reads the chain before it
-// sends anything again (FR-16). The debit side of UC-3 — finality of debits, late and lost debits, stuck
-// transactions — is S2 st6b.
+// Package tracker is the background worker of card-auth (SRS — Card Spend UC-3). Every tracker_interval it follows
+// the debits to finality (rows 1 to 6, 10 to 12, debits.go), replaces or releases stuck operator transactions (rows 7
+// to 9, stuck.go), and executes the returns of UC-2: it sends refund through the operator queue, follows each refund to
+// CONFIRMED by the finality rule of the network and retries a failed one after return_retry_interval (FR-14). On start
+// it reads the chain before it sends anything again (FR-16).
 //
 // One card-auth instance runs one tracker (§3.2). It runs only in card-auth (ADR-3).
 package tracker
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -51,6 +52,9 @@ type DB interface {
 type Config struct {
 	Controller            common.Address
 	Token                 common.Address
+	DebitGasLimit         uint64        // debit_gas_limit, of a resubmitted or replaced debit
+	DebitValidity         time.Duration // debit_validity: validUntil of a resubmitted debit
+	FeeBumpPercent        int           // fee_bump_percent of a replacement
 	RefundGasLimit        uint64        // refund_gas_limit
 	Interval              time.Duration // tracker_interval
 	RetryInterval         time.Duration // return_retry_interval
@@ -69,6 +73,12 @@ type Tracker struct {
 	now      func() time.Time
 	abi      *abi.ABI
 	treasury common.Address
+
+	mu          sync.Mutex
+	lastSent    map[uuid.UUID]time.Time // slot → last send by this process (stuck.go)
+	lastAttempt map[uuid.UUID]time.Time // return → last attempt by this process
+
+	foreignNonce map[uuid.UUID]bool // slots used on chain outside card-auth, alerted once
 }
 
 // New returns a tracker. now is the clock of the retry interval and of created_at.
@@ -77,7 +87,8 @@ func New(db DB, queue *operator.Queue, cfg Config, metrics *Metrics, logger *slo
 	if err != nil {
 		return nil, fmt.Errorf("tracker: controller ABI: %w", err)
 	}
-	return &Tracker{db: db, queue: queue, cfg: cfg, metrics: metrics, logger: logger, now: now, abi: a}, nil
+	return &Tracker{db: db, queue: queue, cfg: cfg, metrics: metrics, logger: logger, now: now, abi: a,
+		lastSent: map[uuid.UUID]time.Time{}, lastAttempt: map[uuid.UUID]time.Time{}, foreignNonce: map[uuid.UUID]bool{}}, nil
 }
 
 // Run starts the tracker and runs a cycle every tracker_interval until ctx ends.
@@ -107,7 +118,7 @@ func (t *Tracker) Start(ctx context.Context) error {
 	}
 	t.treasury = treasury
 
-	rows, err := repository.New(t.db).ListReturnsInFlight(ctx)
+	rows, err := repository.New(t.db).ListReturnsInFlight(ctx, repository.ListReturnsInFlightParams{ChainID: t.chainID(), OperatorAddress: t.operator()})
 	if err != nil {
 		return fmt.Errorf("list the returns in flight: %s", decision.ErrorDetail(err))
 	}
@@ -117,6 +128,9 @@ func (t *Tracker) Start(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("return %s: %w", r.ID, err))
 		}
 	}
+	// Row 9 for the debits (FR-16, EC-18): every non-final authorization by its on-chain state and receipts, before the
+	// first cycle sends anything.
+	t.debitPass(ctx)
 	return errors.Join(errs...)
 }
 
@@ -157,20 +171,26 @@ func (t *Tracker) restart(ctx context.Context, r repository.ListReturnsInFlightR
 // Cycle runs one tracker cycle: send the due returns, follow the returns in flight, update the metrics. Failures
 // are logged; the next cycle tries again.
 func (t *Tracker) Cycle(ctx context.Context) {
+	t.debitPass(ctx)
+	t.stuckPass(ctx)
+
 	q := repository.New(t.db)
 	due, err := q.ListReturnsToSend(ctx, repository.ListReturnsToSendParams{
-		DueBefore: t.now().Add(-t.cfg.RetryInterval), PageLimit: pageSize,
+		DueBefore: t.now().Add(-t.cfg.RetryInterval), PageLimit: pageSize, ChainID: t.chainID(), OperatorAddress: t.operator(),
 	})
 	if err != nil {
 		t.logger.ErrorContext(ctx, "tracker: list the returns to send failed", "error", decision.ErrorDetail(err))
 	}
 	for _, r := range due {
+		if !t.due(r.ID) {
+			continue
+		}
 		if err := t.attempt(ctx, r.ID, r.ChainAuthID, r.ChainRefundID, r.TokenAmount); err != nil {
 			t.logger.ErrorContext(ctx, "tracker: sending a refund failed", "return_row_id", r.ID.String(), "error", err.Error())
 		}
 	}
 
-	inFlight, err := q.ListReturnsInFlight(ctx)
+	inFlight, err := q.ListReturnsInFlight(ctx, repository.ListReturnsInFlightParams{ChainID: t.chainID(), OperatorAddress: t.operator()})
 	if err != nil {
 		t.logger.ErrorContext(ctx, "tracker: list the returns in flight failed", "error", decision.ErrorDetail(err))
 	}
@@ -186,6 +206,9 @@ func (t *Tracker) Cycle(ctx context.Context) {
 // earlier attempt that was never sent is used again, so no nonce is left unused — the return SUBMITTED with
 // attempts + 1, then the hash stored and the transaction sent. A failure before the send makes it RETRYING.
 func (t *Tracker) attempt(ctx context.Context, id uuid.UUID, chainAuthID, chainRefundID []byte, tokenAmount string) error {
+	t.mu.Lock()
+	t.lastAttempt[id] = t.now()
+	t.mu.Unlock()
 	var slot operator.Slot
 	var skip bool
 	err := pgx.BeginFunc(ctx, t.db, func(tx pgx.Tx) error {
@@ -217,7 +240,9 @@ func (t *Tracker) attempt(ctx context.Context, id uuid.UUID, chainAuthID, chainR
 	if skip {
 		return nil
 	}
-	if _, err := t.queue.Send(ctx, slot, t.refundCall(chainAuthID, chainRefundID, tokenAmount), nil); err != nil {
+	_, err = t.queue.Send(ctx, slot, t.refundCall(chainAuthID, chainRefundID, tokenAmount), nil)
+	t.sent(slot.ID)
+	if err != nil {
 		// Nothing was sent: the slot stays PLANNED and is used by the next attempt (step 8, EC-12).
 		t.logger.WarnContext(ctx, "refund not sent; retrying", "return_row_id", id.String(), "nonce", slot.Nonce, "error", err.Error())
 		return t.setStatus(ctx, id, returns.StatusRetrying, 0, returns.StatusSubmitted)
@@ -251,8 +276,7 @@ func (t *Tracker) follow(ctx context.Context, r repository.ListReturnsInFlightRo
 				// Another transaction of this return landed, a replaced hash of the slot among them.
 				return t.included(ctx, r, nil)
 			}
-			t.stuck(ctx, r)
-			return nil
+			return nil // not mined yet: stuck.go replaces it after tracker_interval × 3
 		}
 		if receipt.Status == types.ReceiptStatusSuccessful {
 			return t.included(ctx, r, receipt)
@@ -273,6 +297,9 @@ func (t *Tracker) follow(ctx context.Context, r repository.ListReturnsInFlightRo
 		return t.setStatus(ctx, r.ID, returns.StatusRetrying, 0, returns.StatusSubmitted)
 
 	case returns.StatusIncluded:
+		if moved, err := t.refundReorg(ctx, r); moved || err != nil {
+			return err
+		}
 		block, final, err := t.finalBlock(ctx)
 		if err != nil || !final {
 			return err
@@ -292,10 +319,41 @@ func (t *Tracker) follow(ctx context.Context, r repository.ListReturnsInFlightRo
 	return nil
 }
 
-// stuck is the seam for st6b: a refund without a receipt and not on chain — replacement with a higher fee on the same
-// nonce (UC-3 row 7), release of the nonce (row 8). Until then it is only waited for.
-func (t *Tracker) stuck(ctx context.Context, r repository.ListReturnsInFlightRow) {
-	t.logger.DebugContext(ctx, "refund not mined yet", "return_row_id", r.ID.String(), "nonce", r.Nonce)
+// due reports whether a return listed as due was last attempted by this process at least return_retry_interval ago:
+// an attempt that failed before its send reuses an old PLANNED slot, whose created_at would make it due at once.
+func (t *Tracker) due(id uuid.UUID) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	last, ok := t.lastAttempt[id]
+	return !ok || !t.now().Before(last.Add(t.cfg.RetryInterval))
+}
+
+// refundReorg is the reorg check of an INCLUDED refund (ADR-10): when its stored block is no longer on the chain, the
+// receipt is read again; without one, refundUsed decides: still used → INCLUDED without a block; not used → sent again.
+func (t *Tracker) refundReorg(ctx context.Context, r repository.ListReturnsInFlightRow) (bool, error) {
+	if r.BlockNumber == nil {
+		return false, nil
+	}
+	onChain, err := t.queue.BlockHash(ctx, uint64(*r.BlockNumber))
+	if err != nil || onChain == common.BytesToHash(r.BlockHash) {
+		return false, err
+	}
+	t.logger.WarnContext(ctx, "reorg: the block of an included refund changed", "return_row_id", r.ID.String(),
+		"block_number", *r.BlockNumber)
+	if receipt := t.queue.Receipt(ctx, common.BytesToHash(r.TxHash)); receipt != nil && receipt.Status == types.ReceiptStatusSuccessful {
+		return true, t.setBlock(ctx, r.TxID, receipt)
+	}
+	used, err := t.refundUsed(ctx, r.ChainRefundID, nil)
+	if err != nil {
+		return true, err
+	}
+	if used {
+		return true, dbErr(repository.New(t.db).SetOperatorTxBlock(ctx, repository.SetOperatorTxBlockParams{ID: r.TxID}))
+	}
+	if err := t.setStatus(ctx, r.ID, returns.StatusRetrying, 0, returns.StatusIncluded); err != nil {
+		return true, err
+	}
+	return true, t.attempt(ctx, r.ID, r.ChainAuthID, r.ChainRefundID, r.TokenAmount)
 }
 
 // included sets SUBMITTED → INCLUDED; with a receipt its transaction INCLUDED, the block only from a sealed receipt
@@ -374,6 +432,15 @@ func (t *Tracker) opts(ctx context.Context, block *big.Int) *bind.CallOpts {
 func (t *Tracker) describe(err error) string {
 	return t.queue.Reader().Describe(err, t.cfg.Interval)
 }
+
+// chainID and operator scope every query of the tracker: rows of another chain or another operator key are never
+// touched (the database may hold them after a key rotation, or from another deployment).
+func (t *Tracker) chainID() *int64 {
+	id := int64(t.queue.ChainID())
+	return &id
+}
+
+func (t *Tracker) operator() []byte { return t.queue.Address().Bytes() }
 
 // CloseOpenReturns is the exception of FR-14 for a DEBIT_LOST authorization (UC-3 row 3): its open returns close as
 // NOTHING_TO_RETURN — no tokens were debited — and returned_amount drops by their amounts. Called by the debit side

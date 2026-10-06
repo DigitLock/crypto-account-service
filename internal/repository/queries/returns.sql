@@ -49,32 +49,42 @@ SET returned_amount = returned_amount + sqlc.arg(amount)::text::numeric
 WHERE id = sqlc.arg(id);
 
 -- name: ListReturnsToSend :many
--- Tracker: ACCEPTED returns, and RETRYING returns whose last attempt is return_retry_interval old.
+-- Tracker: ACCEPTED returns, and RETRYING returns whose last attempt is return_retry_interval old, of this chain and
+-- operator.
 SELECT r.id, r.chain_refund_id, r.token_amount::text AS token_amount, a.chain_auth_id
 FROM returns r
 JOIN authorizations a ON a.id = r.authorization_id
 LEFT JOIN LATERAL (
     SELECT max(t.created_at) AS last_attempt FROM operator_txs t WHERE t.return_row_id = r.id
 ) l ON true
-WHERE r.status = 'ACCEPTED'
-   OR (r.status = 'RETRYING' AND (l.last_attempt IS NULL OR l.last_attempt <= sqlc.arg(due_before)::timestamptz))
+WHERE (r.status = 'ACCEPTED'
+   OR (r.status = 'RETRYING' AND (l.last_attempt IS NULL OR l.last_attempt <= sqlc.arg(due_before)::timestamptz)))
+  AND a.chain_id = sqlc.arg(chain_id)
+  AND NOT EXISTS (
+      SELECT 1 FROM operator_txs o
+      WHERE o.return_row_id = r.id AND (o.chain_id <> sqlc.arg(chain_id) OR o.operator_address <> sqlc.arg(operator_address)))
 ORDER BY r.created_at, r.id
 LIMIT sqlc.arg(page_limit);
 
 -- name: ListReturnsInFlight :many
--- Tracker: SUBMITTED and INCLUDED returns with the current transaction of their latest slot.
+-- Tracker: SUBMITTED and INCLUDED returns of this chain and operator with the current transaction of their latest slot.
 SELECT r.id, r.status, r.chain_refund_id, r.token_amount::text AS token_amount, a.chain_auth_id,
        COALESCE(t.id, '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS tx_id,
-       t.tx_hash, COALESCE(t.nonce, -1)::bigint AS nonce, COALESCE(t.status, '')::text AS tx_status
+       t.tx_hash, COALESCE(t.nonce, -1)::bigint AS nonce, COALESCE(t.status, '')::text AS tx_status,
+       t.block_number, t.block_hash
 FROM returns r
 JOIN authorizations a ON a.id = r.authorization_id
 LEFT JOIN LATERAL (
-    SELECT o.id, o.tx_hash, o.nonce, o.status FROM operator_txs o
+    SELECT o.id, o.tx_hash, o.nonce, o.status, o.block_number, o.block_hash FROM operator_txs o
     WHERE o.return_row_id = r.id AND o.purpose = 'REFUND'
     ORDER BY o.created_at DESC, o.nonce DESC
     LIMIT 1
 ) t ON true
 WHERE r.status IN ('SUBMITTED', 'INCLUDED')
+  AND a.chain_id = sqlc.arg(chain_id)
+  AND NOT EXISTS (
+      SELECT 1 FROM operator_txs o
+      WHERE o.return_row_id = r.id AND (o.chain_id <> sqlc.arg(chain_id) OR o.operator_address <> sqlc.arg(operator_address)))
 ORDER BY r.created_at, r.id;
 
 -- name: LockReturnToSend :one
@@ -107,7 +117,10 @@ WHERE id = sqlc.arg(id);
 
 -- name: CountReturnsNotConfirmed :one
 -- returns_not_confirmed (SRS - Card Spend §2.5.1).
-SELECT count(*) FROM returns WHERE status IN ('ACCEPTED', 'SUBMITTED', 'INCLUDED', 'RETRYING');
+SELECT count(*)
+FROM returns r
+JOIN authorizations a ON a.id = r.authorization_id
+WHERE r.status IN ('ACCEPTED', 'SUBMITTED', 'INCLUDED', 'RETRYING') AND a.chain_id = sqlc.arg(chain_id);
 
 -- name: CloseOpenReturns :one
 -- FR-14: the open returns of a DEBIT_LOST authorization close as NOTHING_TO_RETURN with no tokens; returned_amount

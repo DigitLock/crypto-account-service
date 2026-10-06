@@ -16,6 +16,10 @@ import (
 type Metrics struct {
 	notConfirmed prometheus.Gauge
 	capacity     prometheus.Gauge
+	lateDebits   prometheus.Counter
+	debitsLost   prometheus.Counter
+	pending      prometheus.Gauge
+	gasBalance   prometheus.Gauge
 }
 
 // NewMetrics registers the metrics in reg.
@@ -30,17 +34,44 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "min(treasury balance, treasury allowance to the controller), base units of the token.",
 		}),
 	}
-	reg.MustRegister(m.notConfirmed, m.capacity)
+	m.lateDebits = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "late_debits_total", Help: "Debits that landed after a decline (UC-3 row 4).",
+	})
+	m.debitsLost = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "debits_lost_total", Help: "Approved debits that were dropped and could not be repeated (UC-3 row 3).",
+	})
+	m.pending = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "operator_tx_pending_seconds", Help: "Age of the oldest operator transaction not mined; 0 when none.",
+	})
+	m.gasBalance = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "operator_gas_balance", Help: "Native balance of the operator, wei.",
+	})
+	reg.MustRegister(m.notConfirmed, m.capacity, m.lateDebits, m.debitsLost, m.pending, m.gasBalance)
 	return m
 }
 
 // updateMetrics reads both gauges; a failed read keeps the last value and is logged.
 func (t *Tracker) updateMetrics(ctx context.Context) {
-	n, err := repository.New(t.db).CountReturnsNotConfirmed(ctx)
+	n, err := repository.New(t.db).CountReturnsNotConfirmed(ctx, t.chainID())
 	if err != nil {
 		t.logger.WarnContext(ctx, "tracker: count the returns not confirmed failed", "error", decision.ErrorDetail(err))
 	} else {
 		t.metrics.notConfirmed.Set(float64(n))
+	}
+	if oldest, err := repository.New(t.db).OldestUnminedOperatorTx(ctx, repository.OldestUnminedOperatorTxParams{
+		ChainID: int64(t.queue.ChainID()), OperatorAddress: t.operator(),
+	}); err != nil {
+		t.logger.WarnContext(ctx, "tracker: the oldest unmined transaction not read", "error", decision.ErrorDetail(err))
+	} else if oldest.Unix() == 0 {
+		t.metrics.pending.Set(0)
+	} else {
+		t.metrics.pending.Set(t.now().Sub(oldest).Seconds())
+	}
+	if wei, err := t.queue.Balance(ctx); err != nil {
+		t.logger.WarnContext(ctx, "tracker: the operator balance not read", "error", err.Error())
+	} else {
+		f, _ := new(big.Float).SetInt(wei).Float64()
+		t.metrics.gasBalance.Set(f)
 	}
 	if t.treasury == ([20]byte{}) {
 		return

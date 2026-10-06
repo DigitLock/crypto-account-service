@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -55,12 +56,19 @@ type Queue struct {
 	callTimeout time.Duration // one fee read or send: rpc_read_timeout
 	logger      *slog.Logger
 	now         func() time.Time
+
+	mu   sync.Mutex
+	fees map[uuid.UUID]Fees // slot → the fees of its last send by this process
 }
 
 // New returns the queue of the operator of signer on chainID.
 func New(db DB, reader *chain.Reader, s signer.Signer, chainID uint64, callTimeout time.Duration, logger *slog.Logger, now func() time.Time) *Queue {
-	return &Queue{db: db, reader: reader, signer: s, chainID: chainID, callTimeout: callTimeout, logger: logger, now: now}
+	return &Queue{db: db, reader: reader, signer: s, chainID: chainID, callTimeout: callTimeout, logger: logger, now: now,
+		fees: map[uuid.UUID]Fees{}}
 }
+
+// ChainID is the chain of the queue.
+func (qu *Queue) ChainID() uint64 { return qu.chainID }
 
 // Address is the operator's address.
 func (qu *Queue) Address() common.Address { return qu.signer.Address() }
@@ -113,6 +121,27 @@ type pendingBlock struct {
 // Fees (§3.2, ADR-10): the tip of eth_maxPriorityFeePerGas; maxFeePerGas = 2 × base fee of the pending block + the
 // tip; the gas limit is fixed, no eth_estimateGas.
 func (qu *Queue) Send(ctx context.Context, slot Slot, c Call, previous *common.Hash) (common.Hash, error) {
+	return qu.SendWithFloor(ctx, slot, c, previous, nil)
+}
+
+// Fees are the two fee fields of an EIP-1559 transaction, in wei.
+type Fees struct {
+	Tip, Cap *big.Int
+}
+
+// Bumped returns both fees raised by percent, rounded up: the floor of a replacement in the same slot (ADR-10).
+func (f Fees) Bumped(percent int) Fees {
+	up := func(v *big.Int) *big.Int {
+		n := new(big.Int).Mul(v, big.NewInt(int64(100+percent)))
+		n.Add(n, big.NewInt(99))
+		return n.Quo(n, big.NewInt(100))
+	}
+	return Fees{Tip: up(f.Tip), Cap: up(f.Cap)}
+}
+
+// SendWithFloor is Send with fees at least floor: a replacement pays the bumped fees of the transaction it replaces
+// when they are above the fees of the market.
+func (qu *Queue) SendWithFloor(ctx context.Context, slot Slot, c Call, previous *common.Hash, floor *Fees) (common.Hash, error) {
 	ep := qu.reader.Endpoint()
 	var tip hexutil.Big
 	var block *pendingBlock
@@ -135,6 +164,17 @@ func (qu *Queue) Send(ctx context.Context, slot Slot, c Call, previous *common.H
 	tipCap := (*big.Int)(&tip)
 	feeCap := new(big.Int).Mul((*big.Int)(block.BaseFee), big.NewInt(2))
 	feeCap.Add(feeCap, tipCap)
+	if floor != nil {
+		if floor.Tip.Cmp(tipCap) > 0 {
+			tipCap = floor.Tip
+		}
+		if floor.Cap.Cmp(feeCap) > 0 {
+			feeCap = floor.Cap
+		}
+		if tipCap.Cmp(feeCap) > 0 {
+			feeCap = tipCap
+		}
+	}
 
 	to := c.To
 	chainID := new(big.Int).SetUint64(qu.chainID)
@@ -146,14 +186,19 @@ func (qu *Queue) Send(ctx context.Context, slot Slot, c Call, previous *common.H
 		return common.Hash{}, err
 	}
 	hash := signed.Hash()
+	qu.mu.Lock()
+	qu.fees[slot.ID] = Fees{Tip: new(big.Int).Set(tipCap), Cap: new(big.Int).Set(feeCap)}
+	qu.mu.Unlock()
 
 	// The hash is stored before the send: a restart finds every hash that may be on the network.
 	q := repository.New(qu.db)
 	var n int64
 	if previous == nil {
-		n, err = q.MarkOperatorTxSent(ctx, repository.MarkOperatorTxSentParams{ID: slot.ID, TxHash: hash.Bytes()})
+		n, err = q.MarkOperatorTxSent(ctx, repository.MarkOperatorTxSentParams{ID: slot.ID, TxHash: hash.Bytes(), Purpose: c.Purpose})
 	} else {
-		n, err = q.ReplaceOperatorTxHash(ctx, repository.ReplaceOperatorTxHashParams{ID: slot.ID, TxHash: hash.Bytes(), OldHash: previous.Bytes()})
+		n, err = q.ReplaceOperatorTxHash(ctx, repository.ReplaceOperatorTxHashParams{
+			ID: slot.ID, TxHash: hash.Bytes(), OldHash: previous.Bytes(), Purpose: c.Purpose,
+		})
 	}
 	if err != nil || n != 1 {
 		if err == nil {
@@ -197,4 +242,83 @@ func (qu *Queue) NonceCount(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("transaction count: %s: %s", ep.Name, qu.reader.Describe(err, qu.callTimeout))
 	}
 	return n, nil
+}
+
+// SentFees returns the fees of the last send of a slot by this process, nil when it sent none.
+func (qu *Queue) SentFees(id uuid.UUID) *Fees {
+	qu.mu.Lock()
+	defer qu.mu.Unlock()
+	f, ok := qu.fees[id]
+	if !ok {
+		return nil
+	}
+	return &f
+}
+
+// PendingFees returns the fees of a transaction the node still knows, nil when it knows none.
+func (qu *Queue) PendingFees(ctx context.Context, hash common.Hash) *Fees {
+	ep := qu.reader.Endpoint()
+	var tx *struct {
+		Tip *hexutil.Big `json:"maxPriorityFeePerGas"`
+		Cap *hexutil.Big `json:"maxFeePerGas"`
+	}
+	cctx, cancel := context.WithTimeout(ctx, qu.callTimeout)
+	defer cancel()
+	if err := ep.Client.Client().CallContext(cctx, &tx, "eth_getTransactionByHash", hash); err != nil || tx == nil || tx.Tip == nil || tx.Cap == nil {
+		return nil
+	}
+	return &Fees{Tip: (*big.Int)(tx.Tip), Cap: (*big.Int)(tx.Cap)}
+}
+
+// BlockHash returns the hash of the block number on chain now; zero when the chain has no such block.
+func (qu *Queue) BlockHash(ctx context.Context, number uint64) (common.Hash, error) {
+	ep := qu.reader.Endpoint()
+	cctx, cancel := context.WithTimeout(ctx, qu.callTimeout)
+	defer cancel()
+	var head *struct {
+		Hash common.Hash `json:"hash"`
+	}
+	if err := ep.Client.Client().CallContext(cctx, &head, "eth_getBlockByNumber", hexutil.EncodeUint64(number), false); err != nil {
+		return common.Hash{}, fmt.Errorf("block %d: %s: %s", number, ep.Name, qu.reader.Describe(err, qu.callTimeout))
+	}
+	if head == nil {
+		return common.Hash{}, nil
+	}
+	return head.Hash, nil
+}
+
+// Head returns the number and timestamp of the latest block.
+func (qu *Queue) Head(ctx context.Context) (number, timestamp uint64, err error) {
+	ep := qu.reader.Endpoint()
+	cctx, cancel := context.WithTimeout(ctx, qu.callTimeout)
+	defer cancel()
+	h, err := ep.Client.HeaderByNumber(cctx, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("latest block: %s: %s", ep.Name, qu.reader.Describe(err, qu.callTimeout))
+	}
+	return h.Number.Uint64(), h.Time, nil
+}
+
+// Balance returns the native balance of the operator in wei.
+func (qu *Queue) Balance(ctx context.Context) (*big.Int, error) {
+	ep := qu.reader.Endpoint()
+	cctx, cancel := context.WithTimeout(ctx, qu.callTimeout)
+	defer cancel()
+	b, err := ep.Client.BalanceAt(cctx, qu.signer.Address(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("operator balance: %s: %s", ep.Name, qu.reader.Describe(err, qu.callTimeout))
+	}
+	return b, nil
+}
+
+// BlockTime returns the timestamp of block number; an error when the chain has no header for it yet.
+func (qu *Queue) BlockTime(ctx context.Context, number *big.Int) (uint64, error) {
+	ep := qu.reader.Endpoint()
+	cctx, cancel := context.WithTimeout(ctx, qu.callTimeout)
+	defer cancel()
+	h, err := ep.Client.HeaderByNumber(cctx, number)
+	if err != nil {
+		return 0, fmt.Errorf("block %s: %s: %s", number, ep.Name, qu.reader.Describe(err, qu.callTimeout))
+	}
+	return h.Time, nil
 }

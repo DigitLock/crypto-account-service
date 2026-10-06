@@ -55,12 +55,15 @@ func (q *Queries) CloseOpenReturns(ctx context.Context, authorizationID uuid.UUI
 }
 
 const countReturnsNotConfirmed = `-- name: CountReturnsNotConfirmed :one
-SELECT count(*) FROM returns WHERE status IN ('ACCEPTED', 'SUBMITTED', 'INCLUDED', 'RETRYING')
+SELECT count(*)
+FROM returns r
+JOIN authorizations a ON a.id = r.authorization_id
+WHERE r.status IN ('ACCEPTED', 'SUBMITTED', 'INCLUDED', 'RETRYING') AND a.chain_id = $1
 `
 
 // returns_not_confirmed (SRS - Card Spend §2.5.1).
-func (q *Queries) CountReturnsNotConfirmed(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countReturnsNotConfirmed)
+func (q *Queries) CountReturnsNotConfirmed(ctx context.Context, chainID *int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countReturnsNotConfirmed, chainID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -191,18 +194,28 @@ func (q *Queries) InsertTombstone(ctx context.Context, arg InsertTombstoneParams
 const listReturnsInFlight = `-- name: ListReturnsInFlight :many
 SELECT r.id, r.status, r.chain_refund_id, r.token_amount::text AS token_amount, a.chain_auth_id,
        COALESCE(t.id, '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS tx_id,
-       t.tx_hash, COALESCE(t.nonce, -1)::bigint AS nonce, COALESCE(t.status, '')::text AS tx_status
+       t.tx_hash, COALESCE(t.nonce, -1)::bigint AS nonce, COALESCE(t.status, '')::text AS tx_status,
+       t.block_number, t.block_hash
 FROM returns r
 JOIN authorizations a ON a.id = r.authorization_id
 LEFT JOIN LATERAL (
-    SELECT o.id, o.tx_hash, o.nonce, o.status FROM operator_txs o
+    SELECT o.id, o.tx_hash, o.nonce, o.status, o.block_number, o.block_hash FROM operator_txs o
     WHERE o.return_row_id = r.id AND o.purpose = 'REFUND'
     ORDER BY o.created_at DESC, o.nonce DESC
     LIMIT 1
 ) t ON true
 WHERE r.status IN ('SUBMITTED', 'INCLUDED')
+  AND a.chain_id = $1
+  AND NOT EXISTS (
+      SELECT 1 FROM operator_txs o
+      WHERE o.return_row_id = r.id AND (o.chain_id <> $1 OR o.operator_address <> $2))
 ORDER BY r.created_at, r.id
 `
+
+type ListReturnsInFlightParams struct {
+	ChainID         *int64
+	OperatorAddress []byte
+}
 
 type ListReturnsInFlightRow struct {
 	ID            uuid.UUID
@@ -214,11 +227,13 @@ type ListReturnsInFlightRow struct {
 	TxHash        []byte
 	Nonce         int64
 	TxStatus      string
+	BlockNumber   *int64
+	BlockHash     []byte
 }
 
-// Tracker: SUBMITTED and INCLUDED returns with the current transaction of their latest slot.
-func (q *Queries) ListReturnsInFlight(ctx context.Context) ([]ListReturnsInFlightRow, error) {
-	rows, err := q.db.Query(ctx, listReturnsInFlight)
+// Tracker: SUBMITTED and INCLUDED returns of this chain and operator with the current transaction of their latest slot.
+func (q *Queries) ListReturnsInFlight(ctx context.Context, arg ListReturnsInFlightParams) ([]ListReturnsInFlightRow, error) {
+	rows, err := q.db.Query(ctx, listReturnsInFlight, arg.ChainID, arg.OperatorAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -236,6 +251,8 @@ func (q *Queries) ListReturnsInFlight(ctx context.Context) ([]ListReturnsInFligh
 			&i.TxHash,
 			&i.Nonce,
 			&i.TxStatus,
+			&i.BlockNumber,
+			&i.BlockHash,
 		); err != nil {
 			return nil, err
 		}
@@ -254,15 +271,21 @@ JOIN authorizations a ON a.id = r.authorization_id
 LEFT JOIN LATERAL (
     SELECT max(t.created_at) AS last_attempt FROM operator_txs t WHERE t.return_row_id = r.id
 ) l ON true
-WHERE r.status = 'ACCEPTED'
-   OR (r.status = 'RETRYING' AND (l.last_attempt IS NULL OR l.last_attempt <= $1::timestamptz))
+WHERE (r.status = 'ACCEPTED'
+   OR (r.status = 'RETRYING' AND (l.last_attempt IS NULL OR l.last_attempt <= $1::timestamptz)))
+  AND a.chain_id = $2
+  AND NOT EXISTS (
+      SELECT 1 FROM operator_txs o
+      WHERE o.return_row_id = r.id AND (o.chain_id <> $2 OR o.operator_address <> $3))
 ORDER BY r.created_at, r.id
-LIMIT $2
+LIMIT $4
 `
 
 type ListReturnsToSendParams struct {
-	DueBefore time.Time
-	PageLimit int32
+	DueBefore       time.Time
+	ChainID         *int64
+	OperatorAddress []byte
+	PageLimit       int32
 }
 
 type ListReturnsToSendRow struct {
@@ -272,9 +295,15 @@ type ListReturnsToSendRow struct {
 	ChainAuthID   []byte
 }
 
-// Tracker: ACCEPTED returns, and RETRYING returns whose last attempt is return_retry_interval old.
+// Tracker: ACCEPTED returns, and RETRYING returns whose last attempt is return_retry_interval old, of this chain and
+// operator.
 func (q *Queries) ListReturnsToSend(ctx context.Context, arg ListReturnsToSendParams) ([]ListReturnsToSendRow, error) {
-	rows, err := q.db.Query(ctx, listReturnsToSend, arg.DueBefore, arg.PageLimit)
+	rows, err := q.db.Query(ctx, listReturnsToSend,
+		arg.DueBefore,
+		arg.ChainID,
+		arg.OperatorAddress,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
