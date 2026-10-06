@@ -38,7 +38,7 @@
 | 3 | Schema, roles, card registry | st4 | 19 |
 | 4 | Decision on Anvil | st5a, st5b (§7) | 27 |
 | 5 | Returns and tracker | st6a, st6b (§7) | 25 |
-| 6 | Chain listener | st7 | 8 |
+| 6 | Chain listener | st7 | 9 |
 | 7 | Processor CLI and hard tests | st8 | 10 |
 | 8 | Base Sepolia | st9 | 9 |
 | 9 | CI and repository | st2, st10 | 6 |
@@ -168,6 +168,7 @@
 | S2-T606 | Reconnect | T605 | Start the fake server again | Reconnect with backoff and jitter; resubscribe; `chain_listener_connected` 1; ping answered | ADR-13 common rules | — |
 | S2-T607 | No `rpc_ws_url` | Variable unset | Start; authorize | Starts; metric 0; decisions by polling; one log line | §3.2 Reliability | — |
 | S2-T608 | Nothing stored from a log | T602 | Compare the row with the receipt data | `tx_hash`, block and amount of the row come from the receipt read, not from the log payload; the log only signals | ADR-13 | — |
+| S2-T609 | Chain ID of the WebSocket endpoint | Fake WebSocket server answers `eth_chainId` 84532; `chain_id` 31337; `pendingLogs`, then `logs` | Start; authorize; then the fake answers 31337 | `eth_chainId` before any `eth_subscribe`; on 84532 an Error log with `ALERT:`, the endpoint by its variable name and both chain IDs, no part of the URL; no `eth_subscribe`; `chain_listener_connected` 0; the service runs and the authorization is decided by polling; the listener retries with the backoff; on 31337 it subscribes once and the metric is 1 | §3.2 Reliability, ADR-13 | — |
 
 ### Phase 7 — Processor CLI and hard tests (st8)
 
@@ -290,7 +291,7 @@ Filled in st10.
 | st5b | T403, T404 response, T413, T415 – T424, T425 at step 10, T426, T319, T105 rest, T203 for the responses of st5b. Closed on 2026-10-06; T426 p95 of the approvals on Anvil in §5 when the run log is written |
 | st6a | T501, T502, T503, T504, T505, T506, T507, T508, T509, T519, T521 rest (returns and the tombstone), T522 for `returns_not_confirmed` and `treasury_refund_capacity`; also two concurrent partial returns above the remainder (exactly one accepted), the `500` of a return (D-18) and the FR-14 seam for `DEBIT_LOST` |
 | st6b | T510, T511, T512 (`DEBIT_LOST` only for a revert before `validUntil`, D-23), T513, T514, T515, T516, T517, T518, T520, T523, T524, T525, T522 rest (`late_debits_total`, `debits_lost_total`, `operator_tx_pending_seconds`, `operator_gas_balance`); also UC-3 row 12. Closed on 2026-10-06; every scenario ends with next_nonce equal to the operator's count on chain, no `PLANNED` slot, no gap |
-| st7 | T412: the listener never moves |
+| st7 | T601, T602, T603, T604, T605, T606, T607, T608, T609, each of T601–T606, T608 and T609 for `pendingLogs` and `logs`; T412 rest: the listener never moves. Also: a log with `removed` true is ignored; one end-to-end run on the `logs` subscription of Anvil, decided by the subscription, the block filled later by the tracker; no part of the WebSocket URL path in the log of any listener test. Every scenario with a decision ends with next_nonce equal to the operator's count on chain, no `PLANNED` slot, no gap. The reconnect backoff is a constant of `internal/listener` (§3.2 Reliability). Follow-up of 2026-10-06: the tracker and the listener log no failure at shutdown (a cancelled context ends the cycle quietly); T105 passed 20 of 20 runs alone |
 
 - In st5a, "approved" in T408 and T409 reads "passes the step and reaches the Debit step"; the approval itself is checked in st5b.
 - Stage 6 is split by the owner's decision: st6a = UC-2 and the tracker loop that executes returns; st6b = the debit side of UC-3. In st6a, `CONFIRMED` of a return is read as `refundUsed(refundId)` at the final block of the finality rule (finality_confirmations blocks on top in mode `confirmations`, as T510 counts them).

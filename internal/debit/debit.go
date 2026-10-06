@@ -60,6 +60,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		Help: "Inclusion signals that decided a debit, by source: subscription or polling.",
 	}, []string{"source"})}
 	m.signals.WithLabelValues(SourcePolling)
+	m.signals.WithLabelValues(SourceSubscription)
 	reg.MustRegister(m.signals)
 	return m
 }
@@ -124,27 +125,20 @@ func (s *Step) Debit(ctx context.Context, a decision.Checked) (decision.Decision
 
 	// Step 12.
 	go s.poll(waitCtx, a.ChainAuthID, hash)
-	for {
-		select {
-		case <-waitCtx.Done():
-			// Step 13.
-			log.InfoContext(ctx, "no inclusion signal by the deadline", "tx_hash", hash.Hex())
-			return s.finish(ctx, log, a, txID, timedOut)
-		case sig := <-signals:
-			receipt := sig.Receipt
-			if receipt == nil {
-				if receipt = s.receipt(waitCtx, hash); receipt == nil {
-					// A signal without a readable receipt decides nothing; polling goes on.
-					continue
-				}
-			}
-			s.metrics.signals.WithLabelValues(sig.Source).Inc()
-			o := outcome{status: decision.StatusApproved, txStatus: txIncluded, receipt: receipt, hash: hash}
-			if receipt.Status != types.ReceiptStatusSuccessful {
-				o = outcome{status: decision.StatusDeclined, reason: decision.ReasonDebitReverted, txStatus: txReverted, receipt: receipt}
-			}
-			return s.finish(ctx, log, a, txID, o)
+	select {
+	case <-waitCtx.Done():
+		// Step 13.
+		log.InfoContext(ctx, "no inclusion signal by the deadline", "tx_hash", hash.Hex())
+		return s.finish(ctx, log, a, txID, timedOut)
+	case sig := <-signals:
+		// The first signal decides; a later one finds no waiting debit (FR-23). A log of the listener carries no
+		// receipt: APPROVED with the hash and amounts of the sent debit, no block (ADR-13).
+		s.metrics.signals.WithLabelValues(sig.Source).Inc()
+		o := outcome{status: decision.StatusApproved, txStatus: txIncluded, receipt: sig.Receipt, hash: hash}
+		if sig.Receipt != nil && sig.Receipt.Status != types.ReceiptStatusSuccessful {
+			o = outcome{status: decision.StatusDeclined, reason: decision.ReasonDebitReverted, txStatus: txReverted, receipt: sig.Receipt}
 		}
+		return s.finish(ctx, log, a, txID, o)
 	}
 }
 
@@ -210,7 +204,7 @@ func (s *Step) receipt(ctx context.Context, hash common.Hash) *types.Receipt {
 type outcome struct {
 	status, reason string
 	txStatus       string         // empty: operator_txs unchanged (TIMED_OUT keeps SENT or PLANNED)
-	receipt        *types.Receipt // of INCLUDED and REVERTED
+	receipt        *types.Receipt // of INCLUDED and REVERTED; nil for INCLUDED by a log of the listener
 	hash           common.Hash
 }
 
@@ -317,8 +311,9 @@ func (s *Step) write(ctx context.Context, tx pgx.Tx, a decision.Checked, txID uu
 	}
 	if o.txStatus != "" {
 		p := repository.SetOperatorTxOutcomeParams{ID: txID, Status: o.txStatus}
-		// Block number and hash only from a sealed receipt: a preconfirmed one carries a zero hash.
-		if o.receipt.BlockHash != (common.Hash{}) && o.receipt.BlockNumber != nil && o.receipt.BlockNumber.IsInt64() {
+		// Block number and hash only from a sealed receipt: a preconfirmed one carries a zero hash, a log of the
+		// listener none at all (UC-3 row 10).
+		if o.receipt != nil && o.receipt.BlockHash != (common.Hash{}) && o.receipt.BlockNumber != nil && o.receipt.BlockNumber.IsInt64() {
 			number := o.receipt.BlockNumber.Int64()
 			p.BlockNumber, p.BlockHash = &number, o.receipt.BlockHash.Bytes()
 		}

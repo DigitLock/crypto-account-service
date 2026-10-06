@@ -91,10 +91,19 @@ func New(db DB, queue *operator.Queue, cfg Config, metrics *Metrics, logger *slo
 		lastSent: map[uuid.UUID]time.Time{}, lastAttempt: map[uuid.UUID]time.Time{}, foreignNonce: map[uuid.UUID]bool{}}, nil
 }
 
+// failed logs a failed read or write of the start or of a cycle at level. When ctx has ended (shutdown), the failure
+// is the cancellation itself: nothing is logged and the cycle ends quietly. A failure while ctx is alive is logged.
+func (t *Tracker) failed(ctx context.Context, level slog.Level, msg string, args ...any) {
+	if ctx.Err() != nil {
+		return
+	}
+	t.logger.Log(ctx, level, msg, args...)
+}
+
 // Run starts the tracker and runs a cycle every tracker_interval until ctx ends.
 func (t *Tracker) Run(ctx context.Context) {
 	if err := t.Start(ctx); err != nil {
-		t.logger.ErrorContext(ctx, "tracker start failed; the cycles go on", "error", err.Error())
+		t.failed(ctx, slog.LevelError, "tracker start failed; the cycles go on", "error", err.Error())
 	}
 	ticker := time.NewTicker(t.cfg.Interval)
 	defer ticker.Stop()
@@ -169,7 +178,7 @@ func (t *Tracker) restart(ctx context.Context, r repository.ListReturnsInFlightR
 }
 
 // Cycle runs one tracker cycle: send the due returns, follow the returns in flight, update the metrics. Failures
-// are logged; the next cycle tries again.
+// are logged, except at shutdown (failed); the next cycle tries again.
 func (t *Tracker) Cycle(ctx context.Context) {
 	t.debitPass(ctx)
 	t.stuckPass(ctx)
@@ -179,24 +188,24 @@ func (t *Tracker) Cycle(ctx context.Context) {
 		DueBefore: t.now().Add(-t.cfg.RetryInterval), PageLimit: pageSize, ChainID: t.chainID(), OperatorAddress: t.operator(),
 	})
 	if err != nil {
-		t.logger.ErrorContext(ctx, "tracker: list the returns to send failed", "error", decision.ErrorDetail(err))
+		t.failed(ctx, slog.LevelError, "tracker: list the returns to send failed", "error", decision.ErrorDetail(err))
 	}
 	for _, r := range due {
 		if !t.due(r.ID) {
 			continue
 		}
 		if err := t.attempt(ctx, r.ID, r.ChainAuthID, r.ChainRefundID, r.TokenAmount); err != nil {
-			t.logger.ErrorContext(ctx, "tracker: sending a refund failed", "return_row_id", r.ID.String(), "error", err.Error())
+			t.failed(ctx, slog.LevelError, "tracker: sending a refund failed", "return_row_id", r.ID.String(), "error", err.Error())
 		}
 	}
 
 	inFlight, err := q.ListReturnsInFlight(ctx, repository.ListReturnsInFlightParams{ChainID: t.chainID(), OperatorAddress: t.operator()})
 	if err != nil {
-		t.logger.ErrorContext(ctx, "tracker: list the returns in flight failed", "error", decision.ErrorDetail(err))
+		t.failed(ctx, slog.LevelError, "tracker: list the returns in flight failed", "error", decision.ErrorDetail(err))
 	}
 	for _, r := range inFlight {
 		if err := t.follow(ctx, r); err != nil {
-			t.logger.WarnContext(ctx, "tracker: following a refund failed", "return_row_id", r.ID.String(), "error", err.Error())
+			t.failed(ctx, slog.LevelWarn, "tracker: following a refund failed", "return_row_id", r.ID.String(), "error", err.Error())
 		}
 	}
 	t.updateMetrics(ctx)
@@ -244,7 +253,7 @@ func (t *Tracker) attempt(ctx context.Context, id uuid.UUID, chainAuthID, chainR
 	t.sent(slot.ID)
 	if err != nil {
 		// Nothing was sent: the slot stays PLANNED and is used by the next attempt (step 8, EC-12).
-		t.logger.WarnContext(ctx, "refund not sent; retrying", "return_row_id", id.String(), "nonce", slot.Nonce, "error", err.Error())
+		t.failed(ctx, slog.LevelWarn, "refund not sent; retrying", "return_row_id", id.String(), "nonce", slot.Nonce, "error", err.Error())
 		return t.setStatus(ctx, id, returns.StatusRetrying, 0, returns.StatusSubmitted)
 	}
 	return nil

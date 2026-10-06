@@ -24,6 +24,7 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/debit"
 	"github.com/DigitLock/crypto-account-service/internal/decision"
 	"github.com/DigitLock/crypto-account-service/internal/health"
+	"github.com/DigitLock/crypto-account-service/internal/listener"
 	opqueue "github.com/DigitLock/crypto-account-service/internal/operator"
 	"github.com/DigitLock/crypto-account-service/internal/processorapi"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
@@ -124,7 +125,22 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}
 	metrics := health.NewRegistry()
 	queue := opqueue.New(pool, reader, operator, cfg.ChainID, cfg.RPCReadTimeout, logger, time.Now)
-	debitStep, err := debit.New(pool, queue, debit.NewSignals(), debit.NewMetrics(metrics), debit.Config{
+	signals := debit.NewSignals()
+	listenerMetrics := listener.NewMetrics(metrics)
+	// Unset CARD_AUTH_RPC_WS_URL: no listener, decisions by receipt polling (§3.2 Reliability).
+	var chainListener *listener.Listener
+	if cfg.RPCWSURL.Value() != "" {
+		if chainListener, err = listener.New(cfg.RPCWSURL, listener.Config{
+			Subscription: cfg.ListenerSubscription,
+			Controller:   cfg.ControllerAddress,
+			ChainID:      cfg.ChainID,
+		}, signals, listenerMetrics, logger); err != nil {
+			return err
+		}
+	} else {
+		logger.Info("CARD_AUTH_RPC_WS_URL is unset: no chain listener, decisions by receipt polling")
+	}
+	debitStep, err := debit.New(pool, queue, signals, debit.NewMetrics(metrics), debit.Config{
 		Controller:       cfg.ControllerAddress,
 		DecisionDeadline: cfg.DecisionDeadline,
 		DebitValidity:    cfg.DebitValidity,
@@ -185,6 +201,9 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	defer stopProbe()
 	go reader.Probe(probeCtx)
 	go refunds.Run(probeCtx)
+	if chainListener != nil {
+		go chainListener.Run(probeCtx)
+	}
 
 	errc := make(chan error, 2)
 	serve := func(name string, srv *http.Server, ln net.Listener) {

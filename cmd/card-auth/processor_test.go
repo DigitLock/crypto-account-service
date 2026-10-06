@@ -22,34 +22,8 @@ import (
 // LOG_LEVEL=debug. The RPC URL carries a path like a provider API key; neither the key, nor a URL, nor its host,
 // nor the database URL appears in the log. The decisions are counted on the health port.
 func TestT105_AuthorizationAndFailedSend(t *testing.T) {
-	owner := testdb.Open(t)
-	testdb.Clean(t)
 	c := testchain.Start(t)
-	wallet := c.NewWallet(t)
-	hundred, err := decision.TokenAmount("100", "", 0, testchain.TokenDecimals)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Mint(t, wallet, hundred)
-	c.Approve(t, wallet, hundred)
-	c.SetDailyLimit(t, wallet, hundred)
-
-	reg := registry.New(owner)
-	tenant, err := reg.CreateTenant(t.Context(), "tenant-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pair, err := reg.IssueProcessorCredential(t.Context(), "tenant-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := owner.Exec(t.Context(), `WITH conn AS (
-			INSERT INTO connections (tenant_id, owner_ref, source_id, external_account)
-			VALUES ($1, 'owner-a', (SELECT id FROM sources WHERE code = 'anvil'), $2) RETURNING id)
-		INSERT INTO cards (tenant_id, card_ref, owner_ref, connection_id, status, daily_limit)
-		SELECT $1, 'card_A', 'owner-a', id, 'ACTIVE', 200000000 FROM conn`, tenant.ID, wallet.Hex()); err != nil {
-		t.Fatal(err)
-	}
+	pair := seedCardA(t, c)
 
 	// The proxy stands for a provider: its path holds a key, and it can refuse eth_sendRawTransaction.
 	var failSend atomic.Bool
@@ -145,4 +119,39 @@ func TestT105_AuthorizationAndFailedSend(t *testing.T) {
 			t.Errorf("the log contains a secret, a URL or a host")
 		}
 	}
+}
+
+// seedCardA prepares the database and the chain for authorizations of tenant A: a wallet with 100 USDC, allowance
+// and wallet daily limit 100 USDC, card_A of tenant A on it with a daily limit of 200 USDC. It returns the Basic
+// pair of tenant A.
+func seedCardA(t *testing.T, c *testchain.Chain) registry.IssuedPair {
+	t.Helper()
+	owner := testdb.Open(t)
+	testdb.Clean(t)
+	wallet := c.NewWallet(t)
+	hundred, err := decision.TokenAmount("100", "", 0, testchain.TokenDecimals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Mint(t, wallet, hundred)
+	c.Approve(t, wallet, hundred)
+	c.SetDailyLimit(t, wallet, hundred)
+
+	reg := registry.New(owner)
+	tenant, err := reg.CreateTenant(t.Context(), "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := reg.IssueProcessorCredential(t.Context(), "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(t.Context(), `WITH conn AS (
+			INSERT INTO connections (tenant_id, owner_ref, source_id, external_account)
+			VALUES ($1, 'owner-a', (SELECT id FROM sources WHERE code = 'anvil'), $2) RETURNING id)
+		INSERT INTO cards (tenant_id, card_ref, owner_ref, connection_id, status, daily_limit)
+		SELECT $1, 'card_A', 'owner-a', id, 'ACTIVE', 200000000 FROM conn`, tenant.ID, wallet.Hex()); err != nil {
+		t.Fatal(err)
+	}
+	return pair
 }

@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"log/slog"
 	"math/big"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -54,21 +55,21 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 func (t *Tracker) updateMetrics(ctx context.Context) {
 	n, err := repository.New(t.db).CountReturnsNotConfirmed(ctx, t.chainID())
 	if err != nil {
-		t.logger.WarnContext(ctx, "tracker: count the returns not confirmed failed", "error", decision.ErrorDetail(err))
+		t.failed(ctx, slog.LevelWarn, "tracker: count the returns not confirmed failed", "error", decision.ErrorDetail(err))
 	} else {
 		t.metrics.notConfirmed.Set(float64(n))
 	}
 	if oldest, err := repository.New(t.db).OldestUnminedOperatorTx(ctx, repository.OldestUnminedOperatorTxParams{
 		ChainID: int64(t.queue.ChainID()), OperatorAddress: t.operator(),
 	}); err != nil {
-		t.logger.WarnContext(ctx, "tracker: the oldest unmined transaction not read", "error", decision.ErrorDetail(err))
+		t.failed(ctx, slog.LevelWarn, "tracker: the oldest unmined transaction not read", "error", decision.ErrorDetail(err))
 	} else if oldest.Unix() == 0 {
 		t.metrics.pending.Set(0)
 	} else {
 		t.metrics.pending.Set(t.now().Sub(oldest).Seconds())
 	}
 	if wei, err := t.queue.Balance(ctx); err != nil {
-		t.logger.WarnContext(ctx, "tracker: the operator balance not read", "error", err.Error())
+		t.failed(ctx, slog.LevelWarn, "tracker: the operator balance not read", "error", err.Error())
 	} else {
 		f, _ := new(big.Float).SetInt(wei).Float64()
 		t.metrics.gasBalance.Set(f)
@@ -82,12 +83,12 @@ func (t *Tracker) updateMetrics(ctx context.Context) {
 	}
 	balance, err := token.BalanceOf(t.opts(ctx, nil), t.treasury)
 	if err != nil {
-		t.logger.WarnContext(ctx, "tracker: treasury balance read failed", "error", t.describe(err))
+		t.failed(ctx, slog.LevelWarn, "tracker: treasury balance read failed", "error", t.describe(err))
 		return
 	}
 	allowance, err := token.Allowance(t.opts(ctx, nil), t.treasury, t.cfg.Controller)
 	if err != nil {
-		t.logger.WarnContext(ctx, "tracker: treasury allowance read failed", "error", t.describe(err))
+		t.failed(ctx, slog.LevelWarn, "tracker: treasury allowance read failed", "error", t.describe(err))
 		return
 	}
 	capacity := balance

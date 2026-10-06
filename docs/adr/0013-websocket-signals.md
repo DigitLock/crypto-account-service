@@ -45,6 +45,7 @@ Option 3.
 - A `Debited` log with the awaited `authId` is the inclusion signal for the decision (ADR-12). A preconfirmed log carries a zero `blockHash`; nothing of it is stored, the receipt read fills the row.
 - Receipt polling runs beside it: it is the fallback and the only way to see a reverted debit. On Flashblocks the receipt itself is preconfirmed: both paths see the debit before the block is sealed.
 - Final statuses still come from the tracker's reads.
+- No renewal ahead of a lifetime limit, unlike Binance: a connection the provider closes is reconnected at once with backoff, and receipt polling covers the gap. The `chainId` of the WebSocket endpoint is checked on every connect (SRS — Card Spend §3.2). Updated 2026-10-06, S2 st7.
 
 ## Trade-offs
 

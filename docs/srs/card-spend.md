@@ -906,6 +906,9 @@ All parameters come from the environment of `card-auth`; the variable names are 
   - fail-closed (FR-9);
   - restart-safe: intent before send (FR-5), chain before resend (FR-16);
   - the chain listener is optional at run time: without it decisions use receipt polling (FR-23);
+  - the chain listener checks `eth_chainId` of `rpc_ws_url` on every connect: a value other than `chain_id` is an alert, no subscription is made and the listener retries as after a failed connect; the service still starts, as the listener is optional;
+  - the chain listener reconnects with exponential backoff: first delay 1 s, doubled per failed attempt, at most 30 s, up to half of the delay taken off at random; a successful subscription resets it; dial, `eth_chainId` and `eth_subscribe` time out after 10 s. These are constants of the code, not variables of §3.1, until a network needs other values (owner's decision, 2026-10-06);
+  - the connection is not renewed ahead of time: a connection the provider closes is reconnected by the backoff above, and receipt polling covers the gap. A connection that dies silently is found by the WebSocket ping of the RPC client (every 30 s when idle, 30 s for the answer);
   - a late or lost debit never needs manual action to detect (FR-17, FR-18).
 - **Security:**
   - the operator key is read from the environment, used only for signing, never logged;

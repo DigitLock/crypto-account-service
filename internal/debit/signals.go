@@ -13,16 +13,17 @@ const (
 	SourceSubscription = "subscription"
 )
 
-// Signal is an inclusion signal for one debit. Receipt is set when the source read it (polling); a signal without
-// a receipt (the chain listener of st7) makes the step read the receipt itself: the row is written only from a
-// receipt, never from a log (ADR-13).
+// Signal is an inclusion signal for one debit. Polling sets Receipt: a successful one approves, a reverted one
+// declines as DEBIT_REVERTED. The chain listener sets none: its Debited log of the authId approves at once, with
+// the operator transaction INCLUDED and no block (UC-1 step 12, ADR-12, ADR-13). Nothing of the log is stored; the
+// tracker fills the block from the sealed receipt (UC-3 row 10).
 type Signal struct {
 	Source  string
 	Receipt *types.Receipt
 }
 
-// Signals routes inclusion signals to the debit waiting for them, by the authId of the contract. Polling delivers
-// into it now; the chain listener of st7 delivers into it too.
+// Signals routes inclusion signals to the debit waiting for them, by the authId of the contract. Receipt polling
+// and the chain listener deliver into it; the first signal decides (FR-23).
 type Signals struct {
 	mu      sync.Mutex
 	waiting map[common.Hash]chan Signal

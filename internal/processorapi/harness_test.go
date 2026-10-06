@@ -34,6 +34,7 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/crs/crstest"
 	"github.com/DigitLock/crypto-account-service/internal/debit"
 	"github.com/DigitLock/crypto-account-service/internal/decision"
+	"github.com/DigitLock/crypto-account-service/internal/listener"
 	opqueue "github.com/DigitLock/crypto-account-service/internal/operator"
 	"github.com/DigitLock/crypto-account-service/internal/processorapi"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
@@ -85,6 +86,9 @@ type options struct {
 	// Returns: the treasury gives the controller no allowance; finality_confirmations (default 2).
 	noRefundAllowance bool
 	confirmations     int
+	// The chain listener: started when wsURL is set, with listenerSubscription (default logs).
+	wsURL                string
+	listenerSubscription string
 }
 
 // env is a running processor API with its tenant A, card_A and wallet.
@@ -104,6 +108,7 @@ type env struct {
 	queue    *opqueue.Queue
 	tracker  *tracker.Tracker
 	log      *slog.Logger
+	inbox    *debit.Signals
 
 	tenantA uuid.UUID
 	pairA   registry.IssuedPair
@@ -242,7 +247,9 @@ func (e *env) newDebitStep(t *testing.T, o options, deadline time.Duration, logg
 		db = o.debitDB(e.cardAuth)
 	}
 	e.queue = opqueue.New(db, e.reader, operator, testchain.ChainID, or(o.readTimeout, 500*time.Millisecond), logger, e.clock.Now)
-	step, err := debit.New(db, e.queue, debit.NewSignals(), debit.NewMetrics(e.metrics), debit.Config{
+	e.inbox = debit.NewSignals()
+	e.startListener(t, o, logger)
+	step, err := debit.New(db, e.queue, e.inbox, debit.NewMetrics(e.metrics), debit.Config{
 		Controller: e.chain.Controller, DecisionDeadline: deadline,
 		DebitValidity: or(o.debitValidity, 4*time.Second), GasLimit: config.DefaultDebitGasLimit,
 		PollInterval: or(o.pollInterval, 50*time.Millisecond),
@@ -266,6 +273,33 @@ func (e *env) newDebitStep(t *testing.T, o options, deadline time.Duration, logg
 		t.Fatal(err)
 	}
 	return step
+}
+
+// startListener registers chain_listener_connected, as card-auth does with or without a listener, and runs the
+// chain listener when o.wsURL is set. It stops on cleanup.
+func (e *env) startListener(t *testing.T, o options, logger *slog.Logger) {
+	t.Helper()
+	m := listener.NewMetrics(e.metrics)
+	if o.wsURL == "" {
+		return
+	}
+	l, err := listener.New(vault.NewSecret(o.wsURL), listener.Config{
+		Subscription: or(o.listenerSubscription, config.SubscriptionLogs), Controller: e.chain.Controller,
+		ChainID: testchain.ChainID,
+	}, e.inbox, m, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lctx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		l.Run(lctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		stop()
+		<-done
+	})
 }
 
 func or[T comparable](v, def T) T {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"time"
 
@@ -50,12 +51,12 @@ func (t *Tracker) debitPass(ctx context.Context) {
 		ChainID: t.chainID(), OperatorAddress: t.operator(),
 	})
 	if err != nil {
-		t.logger.ErrorContext(ctx, "tracker: list the authorizations failed", "error", decision.ErrorDetail(err))
+		t.failed(ctx, slog.LevelError, "tracker: list the authorizations failed", "error", decision.ErrorDetail(err))
 		return
 	}
 	for _, a := range rows {
 		if err := t.trackAuthorization(ctx, a); err != nil {
-			t.logger.WarnContext(ctx, "tracker: an authorization was not moved", "tenant_id", a.TenantID.String(),
+			t.failed(ctx, slog.LevelWarn, "tracker: an authorization was not moved", "tenant_id", a.TenantID.String(),
 				"auth_id", a.AuthID, "status", a.Status, "error", err.Error())
 		}
 	}

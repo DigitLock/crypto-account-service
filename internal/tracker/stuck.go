@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -44,7 +45,7 @@ func (t *Tracker) stuckPass(ctx context.Context) {
 		ChainID: int64(t.queue.ChainID()), OperatorAddress: t.operator(),
 	})
 	if err != nil {
-		t.logger.ErrorContext(ctx, "tracker: list the unmined operator transactions failed", "error", decision.ErrorDetail(err))
+		t.failed(ctx, slog.LevelError, "tracker: list the unmined operator transactions failed", "error", decision.ErrorDetail(err))
 		return
 	}
 	if len(rows) == 0 {
@@ -52,17 +53,17 @@ func (t *Tracker) stuckPass(ctx context.Context) {
 	}
 	count, err := t.queue.NonceCount(ctx)
 	if err != nil {
-		t.logger.WarnContext(ctx, "tracker: stuck transactions not checked", "error", err.Error())
+		t.failed(ctx, slog.LevelWarn, "tracker: stuck transactions not checked", "error", err.Error())
 		return
 	}
 	_, chainTime, err := t.queue.Head(ctx)
 	if err != nil {
-		t.logger.WarnContext(ctx, "tracker: stuck transactions not checked", "error", err.Error())
+		t.failed(ctx, slog.LevelWarn, "tracker: stuck transactions not checked", "error", err.Error())
 		return
 	}
 	for _, row := range rows {
 		if err := t.unmined(ctx, row, count, chainTime); err != nil {
-			t.logger.WarnContext(ctx, "tracker: a stuck operator transaction was not handled", "nonce", row.Nonce,
+			t.failed(ctx, slog.LevelWarn, "tracker: a stuck operator transaction was not handled", "nonce", row.Nonce,
 				"purpose", row.Purpose, "error", err.Error())
 		}
 	}

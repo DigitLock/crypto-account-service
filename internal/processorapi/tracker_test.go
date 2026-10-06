@@ -1,6 +1,7 @@
 package processorapi_test
 
 import (
+	"context"
 	"math/big"
 	"strings"
 	"sync/atomic"
@@ -722,4 +723,31 @@ func TestTrackerTouchesOnlyItsOwnRows(t *testing.T) {
 	if v := e.gauge(t, "operator_tx_pending_seconds"); v != 0 {
 		t.Errorf("operator_tx_pending_seconds = %v: it counts another key's rows", v)
 	}
+}
+
+// The tracker at shutdown (owner's decision of 2026-10-06, S2 st7): with its context alive a failed read is logged;
+// with its context cancelled the start and the cycle fail by the cancellation and log no warning or error.
+func TestTrackerQuietAtShutdown(t *testing.T) {
+	c := testchain.Start(t)
+	p := newRPCProxy(t, c.RPCURL)
+	e := newEnv(t, options{chain: c, rpcURL: p.srv.URL, realDebit: true, noCRS: true})
+	approvedWith(t, e.authorize(t, authReq("auth-quiet", "card_A", "1", "USD")), "1000000")
+
+	p.set("error", 0)
+	before := len(e.logs.String())
+	e.tracker.Cycle(ctx)
+	if tail := e.logs.String()[before:]; !strings.Contains(tail, "tracker: the operator balance not read") {
+		t.Errorf("a failed read with the context alive is not logged:\n%s", tail)
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	before = len(e.logs.String())
+	e.tracker.Cycle(cancelled)
+	e.tracker.Run(cancelled)
+	if tail := e.logs.String()[before:]; strings.Contains(tail, `"level":"WARN"`) || strings.Contains(tail, `"level":"ERROR"`) {
+		t.Errorf("the tracker logged a failure at shutdown:\n%s", tail)
+	}
+	p.set("", 0)
+	e.noNonceGap(t)
 }
