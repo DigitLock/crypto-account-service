@@ -31,13 +31,14 @@ LEFT JOIN LATERAL (
 WHERE a.id = $1;
 
 -- name: InsertReceivedAuthorization :one
--- Step 4. A concurrent insert of the same auth_id is no row: the caller reads the winner's row.
+-- Step 4. A concurrent insert of the same auth_id is no row: the caller reads the winner's row. No conflict target:
+-- chain_auth_id is unique too and derived from (tenant_id, auth_id), so a racing insert may meet either index first.
 INSERT INTO authorizations (tenant_id, auth_id, chain_auth_id, request_hash, fiat_amount, fiat_currency, merchant,
                             status, received_at, deadline_at)
 VALUES (sqlc.arg(tenant_id), sqlc.arg(auth_id), sqlc.arg(chain_auth_id), sqlc.arg(request_hash),
         sqlc.arg(fiat_amount)::text::numeric, sqlc.arg(fiat_currency), sqlc.arg(merchant), 'RECEIVED',
         sqlc.arg(received_at), sqlc.arg(deadline_at))
-ON CONFLICT (tenant_id, auth_id) DO NOTHING
+ON CONFLICT DO NOTHING
 RETURNING id;
 
 -- name: InsertAuthorizationEvent :exec

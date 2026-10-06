@@ -38,6 +38,13 @@ const (
 // MinGasLimit is the gas of a plain transfer; a gas limit of a contract call must exceed it.
 const MinGasLimit = 21000
 
+// Defaults of CARD_AUTH_DEBIT_GAS_LIMIT and CARD_AUTH_REFUND_GAS_LIMIT: the gas measured on Anvil, maximum of cold
+// and warm storage, + 25 %, rounded up to a thousand (SRS — Card Spend §3.1; internal/debit gas test).
+const (
+	DefaultDebitGasLimit  uint64 = 176000
+	DefaultRefundGasLimit uint64 = 145000
+)
+
 // CardAuth is the parsed environment of card-auth (SRS — Card Spend §3.1).
 // The operator key, CARD_AUTH_DATABASE_URL and every RPC URL are held as vault.Secret values:
 // no method prints them, and LogValue omits them.
@@ -56,6 +63,7 @@ type CardAuth struct {
 
 	DecisionDeadline      time.Duration
 	DebitValidity         time.Duration
+	MinSendWindow         time.Duration // min_send_window: no debit is sent with less time left (D-20)
 	RPCReadTimeout        time.Duration
 	ReceiptPollInterval   time.Duration
 	QuoteBufferBPS        int
@@ -67,8 +75,8 @@ type CardAuth struct {
 	RPCFallbackAfter      int
 	FeeBumpPercent        int
 	ListenerSubscription  string
-	DebitGasLimit         uint64 // 0: unset
-	RefundGasLimit        uint64 // 0: unset
+	DebitGasLimit         uint64
+	RefundGasLimit        uint64
 
 	CRSAddress string
 
@@ -103,6 +111,7 @@ func LoadCardAuth(getenv func(string) string) (CardAuth, error) {
 
 		DecisionDeadline:      p.duration("CARD_AUTH_DECISION_DEADLINE", 2500*time.Millisecond),
 		DebitValidity:         p.duration("CARD_AUTH_DEBIT_VALIDITY", 4*time.Second),
+		MinSendWindow:         p.duration("CARD_AUTH_MIN_SEND_WINDOW", 500*time.Millisecond),
 		RPCReadTimeout:        p.duration("CARD_AUTH_RPC_READ_TIMEOUT", 500*time.Millisecond),
 		ReceiptPollInterval:   p.duration("CARD_AUTH_RECEIPT_POLL_INTERVAL", 200*time.Millisecond),
 		QuoteBufferBPS:        p.integer("CARD_AUTH_QUOTE_BUFFER_BPS", 100, 0, 10000),
@@ -114,8 +123,8 @@ func LoadCardAuth(getenv func(string) string) (CardAuth, error) {
 		RPCFallbackAfter:      p.integer("CARD_AUTH_RPC_FALLBACK_AFTER", 3, 1, 1<<31-1),
 		FeeBumpPercent:        p.integer("CARD_AUTH_FEE_BUMP_PERCENT", 25, 10, 1<<31-1),
 		ListenerSubscription:  p.oneOf("CARD_AUTH_LISTENER_SUBSCRIPTION", SubscriptionPendingLogs, SubscriptionPendingLogs, SubscriptionLogs),
-		DebitGasLimit:         uint64(p.integer("CARD_AUTH_DEBIT_GAS_LIMIT", 0, MinGasLimit+1, math.MaxInt64)),
-		RefundGasLimit:        uint64(p.integer("CARD_AUTH_REFUND_GAS_LIMIT", 0, MinGasLimit+1, math.MaxInt64)),
+		DebitGasLimit:         uint64(p.integer("CARD_AUTH_DEBIT_GAS_LIMIT", int(DefaultDebitGasLimit), MinGasLimit+1, math.MaxInt64)),
+		RefundGasLimit:        uint64(p.integer("CARD_AUTH_REFUND_GAS_LIMIT", int(DefaultRefundGasLimit), MinGasLimit+1, math.MaxInt64)),
 
 		CRSAddress: p.getenv("CRS_ADDRESS"),
 
@@ -134,6 +143,9 @@ func LoadCardAuth(getenv func(string) string) (CardAuth, error) {
 	if cfg.DebitValidity < cfg.DecisionDeadline+time.Second {
 		p.fail("CARD_AUTH_DEBIT_VALIDITY", "must be at least CARD_AUTH_DECISION_DEADLINE + 1s")
 	}
+	if cfg.MinSendWindow >= cfg.DecisionDeadline {
+		p.fail("CARD_AUTH_MIN_SEND_WINDOW", "must be below CARD_AUTH_DECISION_DEADLINE")
+	}
 	if cfg.ChainID != 0 && !slices.Contains(cfg.EVMAllowedChainIDs, cfg.ChainID) {
 		p.fail("CARD_AUTH_CHAIN_ID", "must be in EVM_ALLOWED_CHAIN_IDS")
 	}
@@ -149,12 +161,6 @@ func LoadCardAuth(getenv func(string) string) (CardAuth, error) {
 
 // LogValue implements slog.LogValuer. The operator key, CARD_AUTH_DATABASE_URL and the RPC URLs are omitted.
 func (c CardAuth) LogValue() slog.Value {
-	gas := func(key string, limit uint64) slog.Attr {
-		if limit == 0 {
-			return slog.String(key, "unset")
-		}
-		return slog.Uint64(key, limit)
-	}
 	return slog.GroupValue(
 		slog.Uint64("CARD_AUTH_CHAIN_ID", c.ChainID),
 		slog.String("CARD_AUTH_CONTROLLER_ADDRESS", c.ControllerAddress.Hex()),
@@ -163,6 +169,7 @@ func (c CardAuth) LogValue() slog.Value {
 		slog.String("EVM_ALLOWED_CHAIN_IDS", joinUint(c.EVMAllowedChainIDs)),
 		duration("CARD_AUTH_DECISION_DEADLINE", c.DecisionDeadline),
 		duration("CARD_AUTH_DEBIT_VALIDITY", c.DebitValidity),
+		duration("CARD_AUTH_MIN_SEND_WINDOW", c.MinSendWindow),
 		duration("CARD_AUTH_RPC_READ_TIMEOUT", c.RPCReadTimeout),
 		duration("CARD_AUTH_RECEIPT_POLL_INTERVAL", c.ReceiptPollInterval),
 		slog.Int("CARD_AUTH_QUOTE_BUFFER_BPS", c.QuoteBufferBPS),
@@ -174,8 +181,8 @@ func (c CardAuth) LogValue() slog.Value {
 		slog.Int("CARD_AUTH_RPC_FALLBACK_AFTER", c.RPCFallbackAfter),
 		slog.Int("CARD_AUTH_FEE_BUMP_PERCENT", c.FeeBumpPercent),
 		slog.String("CARD_AUTH_LISTENER_SUBSCRIPTION", c.ListenerSubscription),
-		gas("CARD_AUTH_DEBIT_GAS_LIMIT", c.DebitGasLimit),
-		gas("CARD_AUTH_REFUND_GAS_LIMIT", c.RefundGasLimit),
+		slog.Uint64("CARD_AUTH_DEBIT_GAS_LIMIT", c.DebitGasLimit),
+		slog.Uint64("CARD_AUTH_REFUND_GAS_LIMIT", c.RefundGasLimit),
 		slog.String("CRS_ADDRESS", c.CRSAddress),
 		slog.Int("CARD_AUTH_HTTP_PORT", c.HTTPPort),
 		slog.Int("CARD_AUTH_HEALTH_PORT", c.HealthPort),

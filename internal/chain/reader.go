@@ -71,7 +71,18 @@ func (r *Reader) OnFallback() bool {
 	return r.client.Fallback != nil && r.failures.Load() >= int64(r.cfg.FallbackAfter)
 }
 
-// endpoint returns the endpoint reads go to now.
+// Endpoint returns the endpoint reads and sends go to now (SRS — Card Spend §3.2 Chain access).
+func (r *Reader) Endpoint() Endpoint {
+	ep, _ := r.endpoint()
+	return ep
+}
+
+// Describe turns an error of a call bounded by timeout into text without a URL.
+func (r *Reader) Describe(err error, timeout time.Duration) string {
+	return r.client.describeWithin(err, timeout)
+}
+
+// endpoint returns the endpoint reads go to now and whether it is the primary.
 func (r *Reader) endpoint() (Endpoint, bool) {
 	if r.OnFallback() {
 		return *r.client.Fallback, false

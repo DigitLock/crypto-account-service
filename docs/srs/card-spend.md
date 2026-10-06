@@ -409,10 +409,11 @@ See §2.1.1.
 | 7 | Quote. USD: `amount × 10^decimals`. Other: `amount × rate × (1 + buffer)`, rounded up to a base unit. `rate` = USD per one unit of the authorization currency, as CRS serves it (§2.1.2) | `CURRENCY_NOT_SUPPORTED`, `RATE_UNAVAILABLE` |
 | 8 | Card daily limit: today's token amounts of the card's approved authorizations (`APPROVED`, `DEBIT_CONFIRMED`, `DEBIT_LOST`) + this amount ≤ limit. Day = UTC day, as in the contract | `LIMIT_EXCEEDED` |
 | 9 | Read on-chain with the `pending` block tag, the four reads in one batch: balance, allowance, remaining wallet daily limit, pause flag | `CHAIN_UNAVAILABLE`, `INSUFFICIENT_FUNDS`, `INSUFFICIENT_ALLOWANCE`, `LIMIT_EXCEEDED`, `PROGRAM_PAUSED` |
+| 9a | Time left before step 10: if `deadline_at` − now < `min_send_window`, decline at once. No nonce is reserved, no `operator_txs` row is written, nothing is sent; the status is `DECLINED`, nothing was submitted (D-20). A debit sent without the time for its signal could only become a late debit | `TIMEOUT` |
 | 10 | In one database transaction: reserve the next operator nonce, store the debit intent, set `DEBIT_SUBMITTED` | `INTERNAL_ERROR` |
-| 11 | Sign and send `debit` with `validUntil = received_at + debit_validity`, rounded down to a whole second; fees by §3.2 | Send result unknown → treat as sent |
+| 11 | Sign and send `debit` with `validUntil = received_at + debit_validity`, rounded down to a whole second; fees by §3.2. The hash is stored on the `operator_txs` row, status `SENT`, before `eth_sendRawTransaction`, so a restart finds every hash it may have sent | Any error of `eth_sendRawTransaction` is treated as sent (EC-15): logged without secrets, step 12 continues; a transaction that never lands is resolved by the tracker (UC-3 rows 7–8). A failure before the send — fee read, signature, storing the hash — sends nothing: the slot stays `PLANNED` (UC-3 row 9) and the answer is `TIMED_OUT`, `DECLINED / TIMEOUT` |
 | 12 | Wait until `deadline_at` for whichever comes first: the inclusion signal from the chain listener, or the receipt from polling every `receipt_poll_interval`. A preconfirmed receipt counts | — |
-| 13 | Success → `APPROVED`. Reverted → `DECLINED / DEBIT_REVERTED`. Deadline → `TIMED_OUT`, response `DECLINED / TIMEOUT` | — |
+| 13 | Success → `APPROVED`. Reverted → `DECLINED / DEBIT_REVERTED`. Deadline → `TIMED_OUT`, response `DECLINED / TIMEOUT`. The answer keeps its deadline (FR-1); the outcome is stored even when the answer has already gone out at the deadline: its write runs detached from the request deadline with its own timeout of 2 s, as the decline writes of steps 5 to 9a do. Once the deadline's answer has gone out, only `TIMED_OUT` is stored: a signal found during a late write never turns into an approval the processor did not see (D-21). A write that still fails is logged; the row stays `DEBIT_SUBMITTED` for UC-3 row 11 | — |
 
 ##### Preconditions
 - The card is registered for the tenant and bound to a wallet connection (SRS — Core).
@@ -593,8 +594,9 @@ N/A — background worker; no interaction between systems beyond RPC reads and t
 | 6 | `TIMED_OUT`, debit reverted, or the latest block timestamp is past `validUntil` and `authorizations(authId)` shows 0 | Set `DECLINED / TIMEOUT` |
 | 7 | Transaction not mined, `validUntil` not reached | Replace with the same nonce and a higher fee |
 | 8 | Transaction not mined, `validUntil` passed | Replace with a zero-value self-transfer to release the nonce |
-| 9 | Service start | For every non-final authorization and return: read on-chain state first, then continue from the matching row above. A `PLANNED` slot without a transaction: `validUntil` not reached → send it now; reached → `DECLINED / TIMEOUT`, and the slot is reused by the next send so that no nonce is left unused |
+| 9 | Service start; a `PLANNED` slot | For every non-final authorization and return: read on-chain state first, then continue from the matching row. A `PLANNED` slot without a hash is never sent as a debit, whatever `validUntil` says: the tracker fills its nonce at once with a zero-value transfer of the operator to itself (purpose `RELEASE`, status `RELEASED` at inclusion) and sets the authorization from `TIMED_OUT` to `DECLINED / TIMEOUT` (D-22). A debit sent after the answer can only become a late debit, and an unfilled nonce blocks every later operator transaction |
 | 10 | Receipt or log with a zero `blockHash` | Preconfirmed: an inclusion signal, but `block_number` and `block_hash` are stored only from a sealed receipt. Finality (row 1) counts from the sealed block |
+| 11 | `DEBIT_SUBMITTED` and `deadline_at` passed: the process stopped, or its write failed, before storing the outcome (D-21) | Set `TIMED_OUT` with `decline_reason` `TIMEOUT` — the processor was told `DECLINED / TIMEOUT` or nothing — then continue as for any `TIMED_OUT`: rows 4–8, and row 9 for a `PLANNED` slot |
 
 ##### Preconditions
 - At least one authorization or return is not in a final state.
@@ -612,7 +614,7 @@ Row 1.
 | EC-6 | Debit lands after the decline | Rows 4–5 |
 | EC-7 | Approved debit dropped | Rows 2–3 |
 | EC-5 | Defined in UC-1: after `TIMED_OUT` the transaction is stuck or expires | Rows 6–8 |
-| EC-18 | Restart between send and receipt | Row 9 |
+| EC-18 | Restart between send and receipt | Rows 9 and 11 |
 
 ##### Acceptance Criteria
 
@@ -837,6 +839,7 @@ All parameters come from the environment of `card-auth`; the variable names are 
 |---|---|---|---|
 | `decision_deadline` | `CARD_AUTH_DECISION_DEADLINE` | 2.5 s | Maximum time to answer the processor. One value for the service in S2; per processor later. The default fits a 3 s processor budget |
 | `debit_validity` | `CARD_AUTH_DEBIT_VALIDITY` | 4 s | `validUntil − received_at`; must exceed `decision_deadline` by at least 1 s, because `validUntil` is rounded down to a whole second. The service does not start otherwise |
+| `min_send_window` | `CARD_AUTH_MIN_SEND_WINDOW` | 500 ms | Least time left before `deadline_at` at which step 10 starts (UC-1 step 9a, D-20); must be below `decision_deadline`. The service does not start otherwise |
 | `rpc_read_timeout` | `CARD_AUTH_RPC_READ_TIMEOUT` | 500 ms | Timeout of the on-chain read in step 9 |
 | `rpc_ws_url` | `CARD_AUTH_RPC_WS_URL` | — | WebSocket endpoint of the RPC provider, for the chain listener. Unset: no listener, polling only |
 | `listener_subscription` | `CARD_AUTH_LISTENER_SUBSCRIPTION` | `pendingLogs` | Subscription type of the chain listener: `pendingLogs` on Base Sepolia, `logs` on a chain without Flashblocks such as Anvil |
@@ -847,7 +850,7 @@ All parameters come from the environment of `card-auth`; the variable names are 
 | `return_retry_interval` | `CARD_AUTH_RETURN_RETRY_INTERVAL` | 30 s | Pause between return attempts |
 | `chain_id`, `rpc_url`, `rpc_fallback_url` | `CARD_AUTH_CHAIN_ID`, `CARD_AUTH_RPC_URL`, `CARD_AUTH_RPC_FALLBACK_URL` | — | Network access. `chain_id` must be in the allow-list of test networks (SRS — EVM Connector §3.1) |
 | `rpc_fallback_after` | `CARD_AUTH_RPC_FALLBACK_AFTER` | 3 | Consecutive failures of the primary endpoint after which the fallback is used (§3.2) |
-| `debit_gas_limit`, `refund_gas_limit` | `CARD_AUTH_DEBIT_GAS_LIMIT`, `CARD_AUTH_REFUND_GAS_LIMIT` | measured in st5 | Fixed gas limits of the two operator transactions: no `eth_estimateGas` in the decision path. A release transaction uses 21 000 |
+| `debit_gas_limit`, `refund_gas_limit` | `CARD_AUTH_DEBIT_GAS_LIMIT`, `CARD_AUTH_REFUND_GAS_LIMIT` | 176 000, 145 000 | Fixed gas limits of the two operator transactions: no `eth_estimateGas` in the decision path. A release transaction uses 21 000. Defaults: the maximum measured on Anvil + 25 %, rounded up to a thousand (S2 st5b, 2026-10-06, `eth_estimateGas`): `debit` cold — first debit, treasury balance and the wallet's daily spend zero — 140 105 to 140 117 (the zero bytes of the calldata vary), warm — second debit of the wallet in the day — 105 634, first debit of another wallet 122 734, last debit of the balance 105 658; `refund` cold — first refund to a wallet of zero balance — 115 305, warm 80 822, full 97 922. Checked by the gas test of `internal/debit` |
 | `fee_bump_percent` | `CARD_AUTH_FEE_BUMP_PERCENT` | 25 | Raise of `maxFeePerGas` and `maxPriorityFeePerGas` on a replacement |
 | `controller_address`, `token_address`, `token_decimals` | `CARD_AUTH_CONTROLLER_ADDRESS`, `CARD_AUTH_TOKEN_ADDRESS`, `CARD_AUTH_TOKEN_DECIMALS` | — | Contract and funding token; checked at start (§3.2) |
 | `OPERATOR_PRIVATE_KEY` | `OPERATOR_PRIVATE_KEY` | — | Environment only. On Anvil a default Anvil account key may be used, in `.env` only |
@@ -872,6 +875,7 @@ All parameters come from the environment of `card-auth`; the variable names are 
   - every read of the decision path uses the `pending` block tag: on Base it sees the Flashblocks state the debit will see; on Anvil it equals `latest`;
   - transactions are EIP-1559: `maxPriorityFeePerGas` from `eth_maxPriorityFeePerGas`, `maxFeePerGas` = 2 × base fee of the pending block + the tip; a replacement raises both by `fee_bump_percent` on the same nonce (ADR-10);
   - fallback endpoint: after `rpc_fallback_after` consecutive failures of the primary, reads and sends go to `rpc_fallback_url`; every tracker cycle probes the primary with `eth_chainId` and switches back on success. No retry inside the read budget of step 9: a failed read is `CHAIN_UNAVAILABLE`. The fallback has no WebSocket; the listener stays on the primary;
+  - the fallback counter counts the failures of the step-9 read only; fee reads, sends and receipt polls use the current endpoint and do not count;
   - start checks, the service does not start otherwise: `eth_chainId` of the primary and of the fallback equals `chain_id` and is in the allow-list; `token()` of the controller equals `token_address`; `decimals()` of the token equals `token_decimals`; `symbol()` of the token is read and kept in memory: it is the `token` stored with every quote and answered with an approval (D-10); `next_nonce` of the operator is compared with its transaction count at the pending block tag: a missing `operator_accounts` row is created with that count; a lower `next_nonce` is raised to it and logged; a higher one is kept.
 - **Audit log:**
   - `authorization_events`: every status change;

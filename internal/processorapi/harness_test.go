@@ -29,11 +29,14 @@ import (
 
 	"github.com/DigitLock/crypto-account-service/api/openapi"
 	"github.com/DigitLock/crypto-account-service/internal/chain"
+	"github.com/DigitLock/crypto-account-service/internal/config"
 	"github.com/DigitLock/crypto-account-service/internal/crs"
 	"github.com/DigitLock/crypto-account-service/internal/crs/crstest"
+	"github.com/DigitLock/crypto-account-service/internal/debit"
 	"github.com/DigitLock/crypto-account-service/internal/decision"
 	"github.com/DigitLock/crypto-account-service/internal/processorapi"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
+	"github.com/DigitLock/crypto-account-service/internal/signer"
 	"github.com/DigitLock/crypto-account-service/internal/testchain"
 	"github.com/DigitLock/crypto-account-service/internal/testdb"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
@@ -70,6 +73,11 @@ type options struct {
 	readsDB       func(*pgxpool.Pool) decision.DB // the status query and the credentials
 	debit         *fakeDebit
 	bufferBPS     *int
+	realDebit     bool                            // the Debit step of card-auth instead of the fake
+	debitDB       func(*pgxpool.Pool) decision.DB // the database of the Debit step
+	pollInterval  time.Duration
+	debitValidity time.Duration
+	minSendWindow time.Duration // default 500 ms
 }
 
 // env is a running processor API with its tenant A, card_A and wallet.
@@ -101,7 +109,6 @@ func newEnv(t *testing.T, o options) *env {
 	owner := testdb.Open(t)
 	testdb.Clean(t)
 	e := &env{owner: owner, cardAuth: testdb.OpenCardAuth(t), clock: &fakeClock{}, logs: &syncBuffer{}}
-	e.clock.Set(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
 
 	e.chain = o.chain
 	if e.chain == nil {
@@ -163,24 +170,32 @@ func newEnv(t *testing.T, o options) *env {
 	if o.db != nil {
 		db = o.db(e.cardAuth)
 	}
-	e.debit = o.debit
-	if e.debit == nil {
-		e.debit = &fakeDebit{}
-	}
 	bufferBPS := 100
 	if o.bufferBPS != nil {
 		bufferBPS = *o.bufferBPS
 	}
-	e.engine = &spyEngine{inner: decision.New(db, rates, e.reader, e.debit, decision.Config{
-		DecisionDeadline: or(o.deadline, 2500*time.Millisecond), QuoteBufferBPS: bufferBPS,
+	deadline := or(o.deadline, 2500*time.Millisecond)
+	e.metrics = prometheus.NewRegistry()
+	var step decision.Debit
+	if o.realDebit {
+		step = e.newDebitStep(t, o, deadline, logger)
+	} else {
+		e.debit = o.debit
+		if e.debit == nil {
+			e.debit = &fakeDebit{}
+		}
+		step = e.debit
+	}
+	e.engine = &spyEngine{inner: decision.New(db, rates, e.reader, step, decision.Config{
+		DecisionDeadline: deadline, QuoteBufferBPS: bufferBPS,
 		TokenDecimals: testchain.TokenDecimals, Token: "USDC", ChainID: testchain.ChainID,
+		MinSendWindow: or(o.minSendWindow, 500*time.Millisecond),
 	}, logger, e.clock.Now)}
 
 	var readsDB decision.DB = e.cardAuth
 	if o.readsDB != nil {
 		readsDB = o.readsDB(e.cardAuth)
 	}
-	e.metrics = prometheus.NewRegistry()
 	e.srv = httptest.NewServer(processorapi.NewHandler(processorapi.Deps{
 		DB: readsDB, Engine: e.engine, Reads: registry.NewCards(readsDB, e.clock.Now),
 		Metrics: processorapi.NewMetrics(e.metrics), Logger: logger,
@@ -195,6 +210,31 @@ func newEnv(t *testing.T, o options) *env {
 		t.Fatal(err)
 	}
 	return e
+}
+
+// newDebitStep is the Debit step of card-auth on the chain of the env, with the operator account row that the
+// start of card-auth creates (T107).
+func (e *env) newDebitStep(t *testing.T, o options, deadline time.Duration, logger *slog.Logger) decision.Debit {
+	t.Helper()
+	operator, err := signer.New(e.chain.OperatorKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.exec(t, `INSERT INTO operator_accounts (chain_id, address, next_nonce) VALUES ($1, $2, $3)`,
+		testchain.ChainID, operator.Address().Bytes(), int64(e.chain.TxCount(t, operator.Address())))
+	var db debit.DB = e.cardAuth
+	if o.debitDB != nil {
+		db = o.debitDB(e.cardAuth)
+	}
+	step, err := debit.New(db, e.reader, operator, debit.NewSignals(), debit.NewMetrics(e.metrics), debit.Config{
+		ChainID: testchain.ChainID, Controller: e.chain.Controller, DecisionDeadline: deadline,
+		DebitValidity: or(o.debitValidity, 4*time.Second), GasLimit: config.DefaultDebitGasLimit,
+		PollInterval: or(o.pollInterval, 50*time.Millisecond), CallTimeout: or(o.readTimeout, 500*time.Millisecond),
+	}, logger, e.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return step
 }
 
 func or[T comparable](v, def T) T {
@@ -430,6 +470,28 @@ func (e *env) decisions(t *testing.T, dec, reason string) float64 {
 	return 0
 }
 
+// signals returns inclusion_signals_total{source}.
+func (e *env) signals(t *testing.T, source string) float64 {
+	t.Helper()
+	families, err := e.metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range families {
+		if f.GetName() != "inclusion_signals_total" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "source" && l.GetValue() == source {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
 // observations returns the number of auth_decision_seconds observations.
 func (e *env) observations(t *testing.T) uint64 {
 	t.Helper()
@@ -490,7 +552,8 @@ func (s *spyEngine) Authorize(ctx context.Context, req decision.Request, start t
 	return s.inner.Authorize(ctx, req, start)
 }
 
-// fakeClock is the clock of received_at and of the UTC day of step 8.
+// fakeClock is the clock of received_at and of the UTC day of step 8. Until Set it follows the real time: the
+// validUntil of a debit must be ahead of the time of Anvil's blocks.
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -499,6 +562,9 @@ type fakeClock struct {
 func (c *fakeClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.now.IsZero() {
+		return time.Now()
+	}
 	return c.now
 }
 
@@ -573,6 +639,12 @@ type rpcProxy struct {
 	mode     string // "", "error", "delay"
 	delay    time.Duration
 	requests []proxied
+	// Faults of one method: answered with a JSON-RPC error; relayed, then answered after a delay; receipts with
+	// a zero block hash, as a preconfirmed receipt.
+	failMethod    string
+	hangMethod    string
+	hangFor       time.Duration
+	zeroBlockHash bool
 }
 
 type proxied struct {
@@ -614,6 +686,12 @@ func (p *rpcProxy) serve(w http.ResponseWriter, r *http.Request) {
 		p.mu.Unlock()
 	}()
 
+	p.mu.Lock()
+	failMethod, hangMethod, hangFor, zeroBlockHash := p.failMethod, p.hangMethod, p.hangFor, p.zeroBlockHash
+	p.mu.Unlock()
+	if failMethod != "" && strings.Contains(string(body), `"method":"`+failMethod+`"`) {
+		mode = "error"
+	}
 	switch mode {
 	case "error":
 		w.Header().Set("Content-Type", "application/json")
@@ -628,9 +706,42 @@ func (p *rpcProxy) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if hangMethod != "" && strings.Contains(string(body), `"method":"`+hangMethod+`"`) {
+		time.Sleep(hangFor)
+	}
+	if zeroBlockHash && strings.Contains(string(body), `"method":"eth_getTransactionReceipt"`) {
+		out = zeroReceiptBlockHash(out)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = w.Write(out)
+}
+
+// zeroReceiptBlockHash rewrites the block hash of a receipt, and of its logs, to the zero hash.
+func zeroReceiptBlockHash(body []byte) []byte {
+	var msg map[string]any
+	if json.Unmarshal(body, &msg) != nil {
+		return body
+	}
+	receipt, ok := msg["result"].(map[string]any)
+	if !ok {
+		return body
+	}
+	zero := "0x" + strings.Repeat("0", 64)
+	receipt["blockHash"] = zero
+	if logs, ok := receipt["logs"].([]any); ok {
+		for _, l := range logs {
+			if m, ok := l.(map[string]any); ok {
+				m["blockHash"] = zero
+			}
+		}
+	}
+	out, err := json.Marshal(msg)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // jsonRPCErrors answers every call of a request, single or batch, with a JSON-RPC error.

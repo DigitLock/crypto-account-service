@@ -148,6 +148,7 @@ type Config struct {
 	TokenDecimals    uint8
 	Token            string // symbol of the funding token, read at start (D-10)
 	ChainID          uint64
+	MinSendWindow    time.Duration // min_send_window: step 9a (D-20)
 }
 
 // Engine decides authorizations.
@@ -185,10 +186,13 @@ func ChainRefundID(tenantID uuid.UUID, returnID string) common.Hash {
 	return crypto.Keccak256Hash(tenantID[:], []byte(returnID))
 }
 
-// finishReserve is the part of the deadline kept for storing the decision: the checks end this much earlier.
-func (e *Engine) finishReserve() time.Duration {
-	return min(50*time.Millisecond, e.cfg.DecisionDeadline/10)
+// FinishReserve is the part of a decision deadline kept for storing the decision: the checks, and the wait for
+// the inclusion signal, end this much earlier, so the answer is never later than deadline_at.
+func FinishReserve(decisionDeadline time.Duration) time.Duration {
+	return min(50*time.Millisecond, decisionDeadline/10)
 }
+
+func (e *Engine) finishReserve() time.Duration { return FinishReserve(e.cfg.DecisionDeadline) }
 
 // Authorize runs steps 3 to 9 for a validated request received at start (real time) and returns the decision.
 // The only error is ErrAuthIDConflict. Any other failure is a decline, INTERNAL_ERROR or TIMEOUT. The result is
@@ -423,6 +427,12 @@ func (e *Engine) decide(ctx context.Context, req Request, id uuid.UUID, received
 		return decline(ReasonLimitExceeded)
 	}
 
+	// Step 9a (D-20): no debit is sent without the time to see its signal. Nothing is reserved or sent.
+	if deadline, _ := ctx.Deadline(); time.Until(deadline) < e.cfg.MinSendWindow {
+		log.InfoContext(ctx, "less than min_send_window left before step 10", "left", time.Until(deadline).String())
+		return decline(ReasonTimeout)
+	}
+
 	// Steps 10 to 13.
 	d, err := e.debit.Debit(ctx, Checked{
 		ID: id, TenantID: req.TenantID, AuthID: req.AuthID, ChainAuthID: ChainAuthID(req.TenantID, req.AuthID),
@@ -436,10 +446,31 @@ func (e *Engine) decide(ctx context.Context, req Request, id uuid.UUID, received
 	return d
 }
 
-// decline stores RECEIVED → DECLINED with the reason, the known facts and the event, and returns the answer.
-// When the authorization is no longer RECEIVED, the stored state is answered. When storing fails, the answer is
-// INTERNAL_ERROR, or TIMEOUT when the deadline ended it; no tokens moved either way.
+// OutcomeWriteTimeout bounds the write of an outcome. The write is detached from the request deadline (D-21): the
+// answer keeps its deadline, the outcome is stored even when the answer has already gone out.
+const OutcomeWriteTimeout = 2 * time.Second
+
+// decline stores RECEIVED → DECLINED with the reason, the known facts and the event, and returns the answer. The
+// write runs in its own context; when the deadline comes first the decline is answered and the write goes on.
+// When the authorization is no longer RECEIVED, the stored state is answered; when storing fails before the
+// deadline, INTERNAL_ERROR. No tokens moved either way.
 func (e *Engine) decline(ctx context.Context, log *slog.Logger, id uuid.UUID, f facts, reason string) Decision {
+	done := make(chan Decision, 1)
+	go func() {
+		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeWriteTimeout)
+		defer cancel()
+		done <- e.storeDecline(wctx, log, id, f, reason)
+	}()
+	select {
+	case d := <-done:
+		return d
+	case <-ctx.Done():
+		log.WarnContext(ctx, "decline answered at the deadline before it was stored", "reason", reason)
+		return declined(StatusDeclined, reason)
+	}
+}
+
+func (e *Engine) storeDecline(ctx context.Context, log *slog.Logger, id uuid.UUID, f facts, reason string) Decision {
 	decidedAt := e.now()
 	var changed bool
 	err := pgx.BeginFunc(ctx, e.db, func(tx pgx.Tx) error {
@@ -462,9 +493,6 @@ func (e *Engine) decline(ctx context.Context, log *slog.Logger, id uuid.UUID, f 
 	})
 	if err != nil {
 		log.ErrorContext(ctx, "storing the decline failed", "reason", reason, "error", ErrorDetail(err))
-		if ctx.Err() != nil {
-			return declined(StatusDeclined, ReasonTimeout)
-		}
 		return declined(StatusDeclined, ReasonInternalError)
 	}
 	if !changed {

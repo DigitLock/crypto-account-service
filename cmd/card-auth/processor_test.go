@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/DigitLock/crypto-account-service/internal/decision"
@@ -13,10 +18,10 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/testdb"
 )
 
-// S2-T425 — Req: SRS — Card Spend §2.1.1. The binary of st5a has no Debit step (steps 10 to 13 are st5b): an
-// authorization that passes every check is declined as INTERNAL_ERROR, "debit path not built" is logged, and no
-// transaction is sent. The decision is counted on the health port; POST …/returns is not routed yet.
-func TestT425_PassPathFailsClosed(t *testing.T) {
+// S2-T105 — Req: SRS — Card Spend §3.2 Security. The part of st5b: one authorization and one failed send at
+// LOG_LEVEL=debug. The RPC URL carries a path like a provider API key; neither the key, nor a URL, nor its host,
+// nor the database URL appears in the log. The decisions are counted on the health port.
+func TestT105_AuthorizationAndFailedSend(t *testing.T) {
 	owner := testdb.Open(t)
 	testdb.Clean(t)
 	c := testchain.Start(t)
@@ -46,9 +51,38 @@ func TestT425_PassPathFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := start(t, testEnv(t, c, testdb.CardAuthURL(t)))
-	send := func(method, path, body string) (int, map[string]any) {
-		req, err := http.NewRequest(method, s.httpURL+path, strings.NewReader(body))
+	// The proxy stands for a provider: its path holds a key, and it can refuse eth_sendRawTransaction.
+	var failSend atomic.Bool
+	apiKey := randomHex(t, 16)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if failSend.Load() && bytes.Contains(body, []byte(`"eth_sendRawTransaction"`)) {
+			var msg struct {
+				ID json.RawMessage `json:"id"`
+			}
+			_ = json.Unmarshal(body, &msg)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(msg.ID) + `,"error":{"code":-32000,"message":"injected send failure"}}`))
+			return
+		}
+		resp, err := http.Post(c.RPCURL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			http.Error(w, "upstream", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.Copy(w, resp.Body)
+	}))
+	defer proxy.Close()
+
+	env := testEnv(t, c, testdb.CardAuthURL(t))
+	env["LOG_LEVEL"] = "debug"
+	env["CARD_AUTH_RPC_URL"] = proxy.URL + "/v2/" + apiKey
+	s := start(t, env)
+
+	send := func(body string) map[string]any {
+		req, err := http.NewRequest(http.MethodPost, s.httpURL+"/v1/authorizations", strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,42 +92,57 @@ func TestT425_PassPathFailsClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-		raw, _ := io.ReadAll(resp.Body)
 		var out map[string]any
-		_ = json.Unmarshal(raw, &out)
-		return resp.StatusCode, out
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return out
 	}
-
-	status, body := send(http.MethodPost, "/v1/authorizations", `{"auth_id":"auth-1","card_ref":"card_A","amount":"5","currency":"USD"}`)
-	if status != http.StatusOK || body["decision"] != "DECLINED" || body["decline_reason"] != "INTERNAL_ERROR" {
-		t.Errorf("POST = %d %v, want 200 DECLINED / INTERNAL_ERROR", status, body)
+	if r := send(`{"auth_id":"auth-1","card_ref":"card_A","amount":"5","currency":"USD"}`); r["decision"] != "APPROVED" {
+		t.Errorf("first authorization: %v, want APPROVED", r)
 	}
-	if !strings.Contains(s.logs.String(), `"msg":"debit path not built"`) {
-		t.Errorf("no log line \"debit path not built\":\n%s", s.logs.String())
-	}
-	status, body = send(http.MethodGet, "/v1/authorizations/auth-1", "")
-	if status != http.StatusOK || body["status"] != "DECLINED" || body["token_amount"] != "5000000" {
-		t.Errorf("GET = %d %v, want the declined authorization with its quote", status, body)
-	}
-	if status, _ := send(http.MethodPost, "/v1/authorizations/auth-1/returns", `{"return_id":"r-1","type":"REVERSAL"}`); status != http.StatusNotFound {
-		t.Errorf("POST …/returns = %d, want 404: returns are st6", status)
-	}
-	if n := c.TxCount(t, c.Operator); n != 0 {
-		t.Errorf("the operator sent %d transactions", n)
+	failSend.Store(true)
+	if r := send(`{"auth_id":"auth-2","card_ref":"card_A","amount":"5","currency":"USD"}`); r["status"] != "TIMED_OUT" || r["decline_reason"] != "TIMEOUT" {
+		t.Errorf("failed send: %v, want DECLINED / TIMEOUT, status TIMED_OUT", r)
 	}
 
 	resp, err := client.Get(s.healthURL + "/metrics")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	for _, want := range []string{
-		`auth_decisions_total{decision="DECLINED",reason="INTERNAL_ERROR"} 1`,
-		`auth_decision_seconds_count 1`,
+		`auth_decisions_total{decision="APPROVED",reason=""} 1`,
+		`auth_decisions_total{decision="DECLINED",reason="TIMEOUT"} 1`,
+		`inclusion_signals_total{source="polling"} 1`,
+		`auth_decision_seconds_count 2`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("/metrics has no %s", want)
+		}
+	}
+	if err := s.stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := s.logs.String()
+	for _, want := range []string{`"msg":"authorization approved"`, `"msg":"debit send failed; treated as sent"`, `"level":"DEBUG"`} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("the log has no %s", want)
+		}
+	}
+	key := strings.TrimPrefix(env["OPERATOR_PRIVATE_KEY"], "0x")
+	keyBytes, _ := hex.DecodeString(key)
+	forbidden := []string{key, strings.ToUpper(key), string(keyBytes), apiKey, proxy.URL, strings.TrimPrefix(proxy.URL, "http://"),
+		c.RPCURL, strings.TrimPrefix(c.RPCURL, "http://"), env["CARD_AUTH_DATABASE_URL"], pair.Password}
+	if u, err := url.Parse(env["CARD_AUTH_DATABASE_URL"]); err == nil {
+		if p, ok := u.User.Password(); ok {
+			forbidden = append(forbidden, p)
+		}
+		forbidden = append(forbidden, u.Host)
+	}
+	for _, v := range forbidden {
+		if len(v) >= 4 && strings.Contains(logs, v) {
+			t.Errorf("the log contains a secret, a URL or a host")
 		}
 	}
 }

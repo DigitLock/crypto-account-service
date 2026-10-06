@@ -219,7 +219,7 @@ INSERT INTO authorizations (tenant_id, auth_id, chain_auth_id, request_hash, fia
 VALUES ($1, $2, $3, $4,
         $5::text::numeric, $6, $7, 'RECEIVED',
         $8, $9)
-ON CONFLICT (tenant_id, auth_id) DO NOTHING
+ON CONFLICT DO NOTHING
 RETURNING id
 `
 
@@ -235,7 +235,8 @@ type InsertReceivedAuthorizationParams struct {
 	DeadlineAt   *time.Time
 }
 
-// Step 4. A concurrent insert of the same auth_id is no row: the caller reads the winner's row.
+// Step 4. A concurrent insert of the same auth_id is no row: the caller reads the winner's row. No conflict target:
+// chain_auth_id is unique too and derived from (tenant_id, auth_id), so a racing insert may meet either index first.
 func (q *Queries) InsertReceivedAuthorization(ctx context.Context, arg InsertReceivedAuthorizationParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, insertReceivedAuthorization,
 		arg.TenantID,

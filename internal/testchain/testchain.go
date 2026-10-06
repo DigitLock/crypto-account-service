@@ -3,8 +3,9 @@
 // describes. It is used only by tests.
 //
 // anvil and forge must be on PATH. Without them a test is skipped locally and fails in CI, where the
-// variable CI is set. No key is written anywhere: the script runs with Anvil's unlocked accounts
-// (DEPLOYER, ADMIN and TREASURY are accounts 0, 1 and 3), and the operator key is generated at run time.
+// variable CI is set. No key is written anywhere: the script runs with Anvil's unlocked accounts (DEPLOYER and
+// ADMIN are accounts 0 and 1); the operator key is generated at run time; the treasury is a random address that
+// Anvil impersonates, so it approves refunds without any key.
 package testchain
 
 import (
@@ -73,13 +74,14 @@ func Start(t testing.TB) *Chain {
 		RPCURL:      rpcURL,
 		Deployer:    accounts[0],
 		Admin:       accounts[1],
-		Treasury:    accounts[3],
+		Treasury:    randomAddress(t),
 		Operator:    crypto.PubkeyToAddress(key.PublicKey),
 		OperatorKey: vault.NewSecret(crypto.FromECDSA(key)),
 	}
 	if err := client.CallContext(ctx, nil, "anvil_setBalance", c.Operator, (*hexutil.Big)(operatorBalance)); err != nil {
 		t.Fatalf("testchain: fund the operator: %v", err)
 	}
+	c.impersonate(t, c.Treasury)
 	c.Token, c.Controller = deploy(t, forge, c)
 	return c
 }

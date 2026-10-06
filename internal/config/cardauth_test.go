@@ -151,7 +151,7 @@ func TestT101_RequiredConfiguration(t *testing.T) {
 			}
 		}
 		for _, want := range []string{`"CARD_AUTH_DECISION_DEADLINE":"2.5s"`, `"CARD_AUTH_CHAIN_ID":31337`,
-			`"CARD_AUTH_CONTROLLER_ADDRESS":"` + controllerAddress + `"`, `"CARD_AUTH_DEBIT_GAS_LIMIT":"unset"`} {
+			`"CARD_AUTH_CONTROLLER_ADDRESS":"` + controllerAddress + `"`, `"CARD_AUTH_DEBIT_GAS_LIMIT":176000`} {
 			if !strings.Contains(buf.String(), want) {
 				t.Errorf("log does not show %s: %s", want, buf.String())
 			}
@@ -191,6 +191,7 @@ func TestT102_Defaults(t *testing.T) {
 		{"CARD_AUTH_RPC_WS_URL", cfg.RPCWSURL.Value(), ""},
 		{"CARD_AUTH_DECISION_DEADLINE", cfg.DecisionDeadline, 2500 * time.Millisecond},
 		{"CARD_AUTH_DEBIT_VALIDITY", cfg.DebitValidity, 4 * time.Second},
+		{"CARD_AUTH_MIN_SEND_WINDOW", cfg.MinSendWindow, 500 * time.Millisecond},
 		{"CARD_AUTH_RPC_READ_TIMEOUT", cfg.RPCReadTimeout, 500 * time.Millisecond},
 		{"CARD_AUTH_RECEIPT_POLL_INTERVAL", cfg.ReceiptPollInterval, 200 * time.Millisecond},
 		{"CARD_AUTH_QUOTE_BUFFER_BPS", cfg.QuoteBufferBPS, 100},
@@ -202,8 +203,8 @@ func TestT102_Defaults(t *testing.T) {
 		{"CARD_AUTH_RPC_FALLBACK_AFTER", cfg.RPCFallbackAfter, 3},
 		{"CARD_AUTH_FEE_BUMP_PERCENT", cfg.FeeBumpPercent, 25},
 		{"CARD_AUTH_LISTENER_SUBSCRIPTION", cfg.ListenerSubscription, "pendingLogs"},
-		{"CARD_AUTH_DEBIT_GAS_LIMIT", cfg.DebitGasLimit, uint64(0)},
-		{"CARD_AUTH_REFUND_GAS_LIMIT", cfg.RefundGasLimit, uint64(0)},
+		{"CARD_AUTH_DEBIT_GAS_LIMIT", cfg.DebitGasLimit, uint64(176000)},
+		{"CARD_AUTH_REFUND_GAS_LIMIT", cfg.RefundGasLimit, uint64(145000)},
 		{"CRS_ADDRESS", cfg.CRSAddress, ""},
 		{"CARD_AUTH_HTTP_PORT", cfg.HTTPPort, 8092},
 		{"CARD_AUTH_HEALTH_PORT", cfg.HealthPort, 8093},
@@ -272,6 +273,8 @@ func TestT103_InvalidConfiguration(t *testing.T) {
 	}{
 		{"debit validity below deadline + 1s", map[string]string{"CARD_AUTH_DEBIT_VALIDITY": "3499ms"}, "CARD_AUTH_DEBIT_VALIDITY"},
 		{"debit validity equal to deadline", map[string]string{"CARD_AUTH_DECISION_DEADLINE": "4s"}, "CARD_AUTH_DEBIT_VALIDITY"},
+		{"min send window equal to deadline", map[string]string{"CARD_AUTH_MIN_SEND_WINDOW": "2.5s"}, "CARD_AUTH_MIN_SEND_WINDOW"},
+		{"min send window above deadline", map[string]string{"CARD_AUTH_MIN_SEND_WINDOW": "3s"}, "CARD_AUTH_MIN_SEND_WINDOW"},
 		{"chain ID outside the allow-list", map[string]string{"CARD_AUTH_CHAIN_ID": "1"}, "CARD_AUTH_CHAIN_ID"},
 		{"chain ID outside a set allow-list", map[string]string{"EVM_ALLOWED_CHAIN_IDS": "84532"}, "CARD_AUTH_CHAIN_ID"},
 		{"chain ID not a number", map[string]string{"CARD_AUTH_CHAIN_ID": "anvil"}, "CARD_AUTH_CHAIN_ID"},

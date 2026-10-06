@@ -1,6 +1,5 @@
 // Command card-auth is the card authorization service of CAS (SRS — Card Spend): processor API on
-// CARD_AUTH_HTTP_PORT, health and metrics on CARD_AUTH_HEALTH_PORT. Steps 10 to 13 of UC-1 are not built yet:
-// an authorization that passes every check is declined as INTERNAL_ERROR and no transaction is sent.
+// CARD_AUTH_HTTP_PORT, health and metrics on CARD_AUTH_HEALTH_PORT.
 package main
 
 import (
@@ -22,6 +21,7 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/chain"
 	"github.com/DigitLock/crypto-account-service/internal/config"
 	"github.com/DigitLock/crypto-account-service/internal/crs"
+	"github.com/DigitLock/crypto-account-service/internal/debit"
 	"github.com/DigitLock/crypto-account-service/internal/decision"
 	"github.com/DigitLock/crypto-account-service/internal/health"
 	"github.com/DigitLock/crypto-account-service/internal/processorapi"
@@ -119,14 +119,27 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	} else {
 		logger.Warn("CRS_ADDRESS is unset: every non-USD authorization is declined as RATE_UNAVAILABLE")
 	}
-	engine := decision.New(pool, rates, reader, notBuiltDebit{logger: logger}, decision.Config{
+	metrics := health.NewRegistry()
+	debitStep, err := debit.New(pool, reader, operator, debit.NewSignals(), debit.NewMetrics(metrics), debit.Config{
+		ChainID:          cfg.ChainID,
+		Controller:       cfg.ControllerAddress,
+		DecisionDeadline: cfg.DecisionDeadline,
+		DebitValidity:    cfg.DebitValidity,
+		GasLimit:         cfg.DebitGasLimit,
+		PollInterval:     cfg.ReceiptPollInterval,
+		CallTimeout:      cfg.RPCReadTimeout,
+	}, logger, time.Now)
+	if err != nil {
+		return err
+	}
+	engine := decision.New(pool, rates, reader, debitStep, decision.Config{
 		DecisionDeadline: cfg.DecisionDeadline,
 		QuoteBufferBPS:   cfg.QuoteBufferBPS,
 		TokenDecimals:    cfg.TokenDecimals,
 		Token:            symbol,
 		ChainID:          cfg.ChainID,
+		MinSendWindow:    cfg.MinSendWindow,
 	}, logger, time.Now)
-	metrics := health.NewRegistry()
 
 	healthSrv := &http.Server{
 		Handler: health.NewHandler(logger, metrics,

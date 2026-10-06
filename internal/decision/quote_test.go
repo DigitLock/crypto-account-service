@@ -66,14 +66,14 @@ func TestT405_ExactDecimal(t *testing.T) {
 	}
 }
 
-// S2-T405 — "no float in any amount or rate path": the hand-written code of the decision path declares no
+// S2-T405 — "no float in any amount, rate or fee path": the hand-written code of the decision path declares no
 // float type and parses no float; the latency metric is the one exception. The generated CRS code carries the double field rate; it is never read
 // (crstest sends a wrong double with every answer, internal/processorapi T404 and T405).
 func TestT405_NoFloatInTheDecisionPath(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..")
 	var files []string
-	for _, dir := range []string{"decision", "processorapi", "crs", "chain"} {
+	for _, dir := range []string{"decision", "processorapi", "crs", "chain", "debit"} {
 		matches, err := filepath.Glob(filepath.Join(root, dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)

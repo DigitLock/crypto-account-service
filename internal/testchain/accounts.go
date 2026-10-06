@@ -21,20 +21,38 @@ import (
 // NewWallet returns a random cardholder address, impersonated by Anvil and funded with gas.
 func (c *Chain) NewWallet(t testing.TB) common.Address {
 	t.Helper()
-	var wallet common.Address
-	if _, err := rand.Read(wallet[:]); err != nil {
+	wallet := randomAddress(t)
+	c.impersonate(t, wallet)
+	return wallet
+}
+
+// ApproveRefunds sets the allowance of the treasury to the controller, for refunds.
+func (c *Chain) ApproveRefunds(t testing.TB, amount *big.Int) {
+	t.Helper()
+	c.send(t, c.Treasury, c.Token, tokenABI(t), "approve", c.Controller, amount)
+}
+
+func randomAddress(t testing.TB) common.Address {
+	t.Helper()
+	var a common.Address
+	if _, err := rand.Read(a[:]); err != nil {
 		t.Fatal(err)
 	}
+	return a
+}
+
+// impersonate lets the tests send from addr without a key and funds it with gas.
+func (c *Chain) impersonate(t testing.TB, addr common.Address) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	client := dial(t, c.RPCURL)
-	if err := client.CallContext(ctx, nil, "anvil_impersonateAccount", wallet); err != nil {
-		t.Fatalf("testchain: impersonate the wallet: %v", err)
+	if err := client.CallContext(ctx, nil, "anvil_impersonateAccount", addr); err != nil {
+		t.Fatalf("testchain: impersonate %s: %v", addr.Hex(), err)
 	}
-	if err := client.CallContext(ctx, nil, "anvil_setBalance", wallet, (*hexutil.Big)(operatorBalance)); err != nil {
-		t.Fatalf("testchain: fund the wallet: %v", err)
+	if err := client.CallContext(ctx, nil, "anvil_setBalance", addr, (*hexutil.Big)(operatorBalance)); err != nil {
+		t.Fatalf("testchain: fund %s: %v", addr.Hex(), err)
 	}
-	return wallet
 }
 
 // Mint mints amount base units of the token to a wallet of NewWallet, sent by the wallet itself.
@@ -132,4 +150,54 @@ func controllerABI(t testing.TB) *abi.ABI {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// Call makes one JSON-RPC call to Anvil; result may be nil.
+func (c *Chain) Call(t testing.TB, result any, method string, args ...any) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := dial(t, c.RPCURL).CallContext(ctx, result, method, args...); err != nil {
+		t.Fatalf("testchain: %s: %v", method, err)
+	}
+}
+
+// SetAutomine turns mining of every transaction on arrival on or off.
+func (c *Chain) SetAutomine(t testing.TB, on bool) {
+	t.Helper()
+	c.Call(t, nil, "evm_setAutomine", on)
+}
+
+// SetIntervalMining mines a block every seconds; 0 turns it off.
+func (c *Chain) SetIntervalMining(t testing.TB, seconds uint64) {
+	t.Helper()
+	c.Call(t, nil, "evm_setIntervalMining", seconds)
+}
+
+// Mine mines one block with the pending transactions.
+func (c *Chain) Mine(t testing.TB) {
+	t.Helper()
+	c.Call(t, nil, "evm_mine")
+}
+
+// SendAsync sends a call from an unlocked or impersonated account with the given tip and returns its hash
+// without waiting for a block: for tests that mine by hand.
+func (c *Chain) SendAsync(t testing.TB, from, to common.Address, data []byte, tip *big.Int) common.Hash {
+	t.Helper()
+	var hash common.Hash
+	c.Call(t, &hash, "eth_sendTransaction", map[string]any{
+		"from": from, "to": to, "data": hexutil.Bytes(data),
+		"maxPriorityFeePerGas": (*hexutil.Big)(tip), "maxFeePerGas": (*hexutil.Big)(new(big.Int).Mul(tip, big.NewInt(1000))),
+	})
+	return hash
+}
+
+// TokenCalldata packs a call of the token.
+func TokenCalldata(t testing.TB, method string, args ...any) []byte {
+	t.Helper()
+	data, err := tokenABI(t).Pack(method, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
