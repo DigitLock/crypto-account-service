@@ -80,6 +80,8 @@ type Tracker struct {
 	foreignNonce map[uuid.UUID]bool // slots used on chain outside card-auth, alerted once
 
 	cyc *cycle // the RPC budget of the cycle that runs (budget.go)
+
+	metricsReadAt time.Time // the last chain read of the metrics (metrics.go); zero before the first cycle
 }
 
 // New returns a tracker. now is the clock of the retry interval and of created_at.

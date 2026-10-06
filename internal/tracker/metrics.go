@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math/big"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -51,7 +52,14 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	return m
 }
 
-// updateMetrics reads both gauges; a failed read keeps the last value and is logged.
+// metricsChainInterval bounds the chain reads of the metrics — operator_gas_balance (eth_getBalance) and
+// treasury_refund_capacity (two eth_call) — to one per 60 s (owner's decision of 2026-10-06, rules of S2 st9b: at a
+// cycle every 2 s they alone used 36 CU/s of the provider with no open row). A constant of the code, as the backoff of
+// the listener, not a variable of SRS — Card Spend §3.1. The first cycle after the start reads them.
+const metricsChainInterval = 60 * time.Second
+
+// updateMetrics sets the gauges; a failed read keeps the last value and is logged. The chain reads run at most once
+// per metricsChainInterval; the database reads run every cycle.
 func (t *Tracker) updateMetrics(ctx context.Context) {
 	n, err := repository.New(t.db).CountReturnsNotConfirmed(ctx, t.chainID())
 	if err != nil {
@@ -71,6 +79,11 @@ func (t *Tracker) updateMetrics(ctx context.Context) {
 	if t.limited() {
 		return // the chain reads wait for the next cycle (budget.go)
 	}
+	now := t.now()
+	if !t.metricsReadAt.IsZero() && now.Sub(t.metricsReadAt) < metricsChainInterval {
+		return
+	}
+	t.metricsReadAt = now
 	if wei, err := t.queue.Balance(ctx); err != nil {
 		if err := t.check(err); !t.limited() {
 			t.failed(ctx, slog.LevelWarn, "tracker: the operator balance not read", "error", err.Error())

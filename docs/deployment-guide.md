@@ -1,7 +1,7 @@
 # Deployment Guide — Base Sepolia
 
-- **Version:** 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal. Values of Base Sepolia are placeholders until S2 st9b.
-- **Status:** Draft.
+- **Version:** 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
+- **Status:** Pre-approved: used by the owner for S2 st9b on 2026-10-06.
 - **Parents:** [SRS — Card Spend](srs/card-spend.md) §3.1, §3.2; [SRS — Core](srs/core.md) UC-105, `CreateConnection`, `RegisterCard`, §3.2; [test plan S2](test-plan-s2.md) phase 8.
 
 ---
@@ -51,7 +51,7 @@ export CAS_SEPOLIA_KEYS=~/cas-sepolia/keys.env
 | Source | CDP faucet: 0.0001 ETH per claim |
 | Gas price, measured 2026-10-06 | 0.006 gwei |
 | One ETH transfer, measured 2026-10-06 | 0.000000132 ETH, of which the L1 fee is about 5 % |
-| Need of st9 | About 0.001 ETH in total |
+| Need of st9 | About 0.001 ETH in total; st9b was funded with about 0.0017 ETH (§12) |
 | Who needs ETH | `DEPLOYER` (deployment), `USER` (mint, approve), `ADMIN` (limit), `TREASURY` (approve), `OPERATOR` (debits, refunds; metric `operator_gas_balance`) |
 
 ## 4. Database
@@ -126,6 +126,7 @@ CREATE ROLE cas_card_auth LOGIN PASSWORD '…';
 | 6 | `scripts/sepolia/measure.sh` | 30 USD authorizations of 1.00 in sequence, card `card_A` (S2-T806, S2-T807) | `PASS`: p95 of `auth_decision_seconds` ≤ 2 s; signals by source both counted; record the summary in the test plan |
 | 7 | Alchemy dashboard | CU of the run (S2-T808) | About 400 CU per authorization |
 
+- Terminals: the scripts in the first; `server` (step 3) in the second, started before `register.sh`; `card-auth` (step 4) in the third, started after `server`. Both keep running until step 7.
 - Step 5: the pair goes into the environment of the shell from the credentials file, never typed:
 
 ```sh
@@ -217,11 +218,48 @@ go run ./cmd/casctl sim get --auth-id t805-1
 
 ## 12. Evidence of st9b
 
-| Item | Value |
+Run by the owner on 2026-10-06, step by step by this guide (S2-T809).
+
+### 12.1 Accounts
+
+Funded from the CDP faucet, about 0.0017 ETH in total.
+
+| Role | Address |
 |---|---|
-| `MockUSDC` | `<address>`, `<explorer link of the deployment transaction>` |
-| `CardSpendController` | `<address>`, `<explorer link of the deployment transaction>` |
-| `DEPLOYER`, `ADMIN`, `OPERATOR`, `TREASURY`, `USER` | `<addresses>` |
-| T805 debit, return | `<explorer links>` |
-| T806 | `<date and time UTC, provider, N, p95, signals by source>` |
-| T808 | `<CU of the run>` |
+| `DEPLOYER` | [`0x64e25fBcaA5eb447E947334Ce0764925CCa36E8e`](https://sepolia.basescan.org/address/0x64e25fBcaA5eb447E947334Ce0764925CCa36E8e) |
+| `ADMIN` | [`0x592bb9B85d83B916f4592541903894efeCB1e89D`](https://sepolia.basescan.org/address/0x592bb9B85d83B916f4592541903894efeCB1e89D) |
+| `OPERATOR` | [`0x38049E6faB07F017f253c3a0e8C8D434D0758676`](https://sepolia.basescan.org/address/0x38049E6faB07F017f253c3a0e8C8D434D0758676) |
+| `TREASURY` | [`0x130D1155E06C6Cd4b3ceE9128cf1356903aBbC7b`](https://sepolia.basescan.org/address/0x130D1155E06C6Cd4b3ceE9128cf1356903aBbC7b) |
+| `USER` | [`0xa617D46ED016Ed832d06c09afFa489ca1344FcE0`](https://sepolia.basescan.org/address/0xa617D46ED016Ed832d06c09afFa489ca1344FcE0) |
+
+### 12.2 Deployment, S2-T802
+
+- 2026-10-06T17:01:29Z, `deploy.sh` through the public endpoint; `token()`, `treasury()`, `decimals()` and both roles checked.
+
+| Contract | Address | Transaction | Block | Gas |
+|---|---|---|---|---|
+| `MockUSDC` | [`0x6c0434c821694513FFfd5364D63f27F05d73f3aB`](https://sepolia.basescan.org/address/0x6c0434c821694513FFfd5364D63f27F05d73f3aB) | [`0xba8b22aa…b583`](https://sepolia.basescan.org/tx/0xba8b22aa7392985b62f1c74d0979592c6f8c8f469420c708d5e892777b25b583) | 47768907 | 544734 |
+| `CardSpendController` | [`0xF75D58dc6E33487dB994D81D0d870D61Eac45F37`](https://sepolia.basescan.org/address/0xF75D58dc6E33487dB994D81D0d870D61Eac45F37) | [`0x03c1b47f…492e`](https://sepolia.basescan.org/tx/0x03c1b47fda14da7649230296cad5e952424cdaba3d683cab18c8cd7a1723492e) | 47768908 | 860402 |
+
+### 12.3 Setup and registration
+
+| Step | Transaction |
+|---|---|
+| `USER` mints 100 USDC | [`0xba6355a0…379f`](https://sepolia.basescan.org/tx/0xba6355a0498621ce3cf059f7e536c8364d1415cd2460a8425b31fd404bd8379f) |
+| `USER` approves the controller | [`0xc93c1f4d…8878`](https://sepolia.basescan.org/tx/0xc93c1f4df7d7c360e3b3f8a0bad88f8fb58dcde141033a82a0884b2995448878) |
+| `ADMIN` sets the daily limit of `USER` | [`0x6018878d…94c3`](https://sepolia.basescan.org/tx/0x6018878d2bef66c39644e1aa476ccf0f553c7ff40401202191c543c2176294c3) |
+| `TREASURY` approves the controller for refunds | [`0xa9470cc1…9480`](https://sepolia.basescan.org/tx/0xa9470cc12000ef2b158555e6107ab932dcc5d010d924a68e4bcdf8454a8d9480) |
+
+- The first run of `setup.sh` failed on the public endpoint with `replacement transaction underpriced` (a stale nonce, §10); the rerun through Alchemy passed. Since then the scripts default to `CARD_AUTH_RPC_URL` (§5.2).
+- `register.sh`: tenant `sepolia-demo`, wallet connection on `base-sepolia` for `USER`, card `card_A` `ACTIVE` with a daily limit of 200 USDC; through `casctl` and gRPC only.
+
+### 12.4 card-auth on the public chain
+
+| Row | Result |
+|---|---|
+| S2-T803 | Start passed with Alchemy as the primary: `/readyz` 200, `chain_listener_connected` 1, `operator_gas_balance` 8.5e14 wei. Start passed with `https://sepolia.base.org` as the primary and no listener: authorization `t803-fb-1` approved by receipt polling, [`0xcb0c87a1…20e8`](https://sepolia.basescan.org/tx/0xcb0c87a14f900a9d5ab7e9558caa7e9e66bb358c34accbc7e1a4de8a2c1420e8) |
+| S2-T805 | Authorize 5 USD: `APPROVED` at 17:16:28Z, decision 0.52 s, debit [`0x0a279604…543d`](https://sepolia.basescan.org/tx/0x0a279604d811c9ef8ece825169a6dcb9465a006fc83075696a94d9c3f3d4543d). Return 2 USD (`REFUND`): `CONFIRMED`, refund [`0xbec7dd27…f45c`](https://sepolia.basescan.org/tx/0xbec7dd2757787ef0aa28187a0e3e0b5e43187aed34dd42774e4b46c80b4cf45c). `DEBIT_CONFIRMED` by the tag `finalized` at 17:58:03Z, right after a restart of `card-auth`: the new process moved all 31 open authorizations to `DEBIT_CONFIRMED` in its first cycle (FR-16 on the public chain) |
+| S2-T806 | 2026-10-06T17:20:58Z; Alchemy free plan; listener on (`pendingLogs`); 30 × 1.00 USD in sequence, one card, from the owner's development machine (Serbia). 30 approved. p95 of `auth_decision_seconds` (histogram) 0.696 s; client-side p50 510 ms, p95 597 ms, max 729 ms. `PASS`: done-when 4 of the milestone |
+| S2-T807 | Inclusion signals: subscription 11, polling 19. Receipt polling every 200 ms often sees the preconfirmed receipt first |
+| S2-T808 | Alchemy dashboard, 2026-10-06: about 11K requests in 24 h, success 99.7 %; a rate-limited peak of about 1 % at 17:22Z, from the tracker before the fix of st9b (63 calls per cycle, HTTP 429). Idle use 36 CU/s before the metrics were bounded to one chain read per 60 s. CU per authorization could not be separated from the dashboard |
+| S2-T809 | The guide was followed step by step. Deviations found and fixed here: the RPC default of the scripts (§5.2), the 429 row (§10), the order of the terminals: server, then `card-auth` (§5.3) |

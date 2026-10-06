@@ -405,7 +405,10 @@ func TestT508_TreasuryCannotFund(t *testing.T) {
 	if got := e.gauge(t, "returns_not_confirmed"); got != 0 {
 		t.Errorf("returns_not_confirmed = %v, want 0", got)
 	}
-	// The treasury holds the 5 USDC of the debit, less the 5 returned; capacity is min(balance, allowance).
+	// The chain reads of the metrics run at most once per 60 s (rules of S2 st9b): the next one shows the state after
+	// the refund. The treasury holds the 5 USDC of the debit, less the 5 returned; capacity is min(balance, allowance).
+	e.clock.Set(now.Add(120 * time.Second))
+	e.tracker.Cycle(ctx)
 	if got, want := e.gauge(t, "treasury_refund_capacity"), e.balance(t, e.chain.Treasury); got != float64(want.Int64()) {
 		t.Errorf("treasury_refund_capacity = %v, want the treasury balance %s", got, want)
 	}

@@ -626,6 +626,7 @@ N/A — background worker; no interaction between systems beyond RPC reads and t
   - reorg check (ADR-10): at most one read per distinct block number per cycle, only for rows not yet final. The rows go in descending order of their block: when the highest stored block still has its stored hash, the lower stored blocks of the cycle are taken as unchanged, as a block commits to its ancestors. The check right before a row is set final reads its block
   - a rate-limit answer of the endpoint — HTTP 429, JSON-RPC error `-32005` or `429`, or a message naming a rate limit — ends the cycle at once: no further chain call, one WARN line for the cycle, no row moves on the missing answer. A rate limit is no evidence of a nonce used outside `card-auth`. The next cycle runs on its schedule
   - failures of the same kind across rows in one cycle are logged once, with the attributes of the first row and the number of rows (`rows`)
+  - the chain reads of the metrics `operator_gas_balance` (`eth_getBalance`) and `treasury_refund_capacity` (two `eth_call`) run at most once per 60 s; the first cycle after the start reads them. A constant of the code, as the backoff of the listener; no variable of §3.1 (owner's decision of 2026-10-06: at a cycle every 2 s they alone used 36 CU/s of Alchemy with no open row, about 93M CU a month against the 30M of the free plan). The rest of the cycle is unchanged
 
 ##### Preconditions
 - At least one authorization or return is not in a final state.
@@ -847,10 +848,10 @@ Next nonce per operator and network. Locked while a nonce is reserved.
 | card-auth | `debits_lost_total` | 0 | Any, critical | Approved debits that could not be repeated | US-15 |
 | card-auth | `returns_not_confirmed` | 0 | Any return older than 10 min | Returns in `ACCEPTED`, `SUBMITTED`, `INCLUDED`, `RETRYING` | BR-10 |
 | card-auth | `operator_tx_pending_seconds` | < `debit_validity` | Above `debit_validity` | Age of the oldest unmined operator transaction | US-15 |
-| card-auth | `operator_gas_balance` | — | Below threshold | Native token balance of the operator | US-15 |
+| card-auth | `operator_gas_balance` | — | Below threshold | Native token balance of the operator; read from the chain at most once per 60 s (rules of S2 st9b) | US-15 |
 | card-auth | `chain_listener_connected` | 1 | 0 for 1 min | State of the WebSocket subscription | BR-7 |
 | card-auth | `inclusion_signals_total{source}` | — | — | Signals by source: subscription or polling | BR-7 |
-| card-auth | `treasury_refund_capacity` | — | Below threshold | min(treasury balance, treasury allowance) | US-15 |
+| card-auth | `treasury_refund_capacity` | — | Below threshold | min(treasury balance, treasury allowance); read from the chain at most once per 60 s (rules of S2 st9b) | US-15 |
 | server | `reconciliation_mismatches_total{type}` | 0 | Any | Mismatches of UC-4 | BR-12 |
 
 #### 2.5.2 Alerts

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -110,6 +111,10 @@ func TestTrackerBudget_ApprovedRows(t *testing.T) {
 	e, p := budgetEnv(t)
 	const rows = 30
 	approvedWith(t, e.authorize(t, authReq("budget-1", "card_A", "1", "USD")), "1000000")
+	// The first cycle also reads the metrics, then not for 60 s (TestTrackerBudget_IdleMetrics): the clock stays.
+	e.clock.Set(time.Now())
+	metrics := countCalls(t, e.cycleCalls(t, p))
+	t.Logf("first cycle, with the reads of the metrics: %s", metrics)
 	one := countCalls(t, e.cycleCalls(t, p))
 	for i := 2; i <= rows; i++ {
 		approvedWith(t, e.authorize(t, authReq("budget-"+strconv.Itoa(i), "card_A", "1", "USD")), "1000000")
@@ -257,6 +262,38 @@ func TestTrackerBudget_SameFailureLoggedOnce(t *testing.T) {
 	e.anvilMine(t, 70)
 	for i := 1; i <= rows; i++ {
 		e.cycleUntilStatus(t, "fail-"+strconv.Itoa(i), decision.StatusDebitConfirmed)
+	}
+	e.noNonceGap(t)
+}
+
+// S2 st9b, idle budget (owner's decision of 2026-10-06): with no open row a cycle reads the chain only for the metrics
+// operator_gas_balance and treasury_refund_capacity, and those at most once per 60 s; the first cycle reads them.
+func TestTrackerBudget_IdleMetrics(t *testing.T) {
+	e, p := budgetEnv(t)
+	start := time.Now()
+	e.clock.Set(start)
+	idle := calls{}
+	for s := 0; s <= 10; s += 2 {
+		e.clock.Set(start.Add(time.Duration(s) * time.Second))
+		for m, n := range countCalls(t, e.cycleCalls(t, p)) {
+			idle[m] += n
+		}
+	}
+	t.Logf("6 idle cycles over 10 s: %s", idle)
+	want := calls{"eth_getBalance": 1, "eth_call": 2}
+	if idle.String() != want.String() {
+		t.Errorf("6 idle cycles over 10 s: %s, want %s", idle, want)
+	}
+	e.clock.Set(start.Add(58 * time.Second))
+	if c := countCalls(t, e.cycleCalls(t, p)); c.total() != 0 {
+		t.Errorf("an idle cycle at 58 s: %s, want none", c)
+	}
+	e.clock.Set(start.Add(60 * time.Second))
+	if c := countCalls(t, e.cycleCalls(t, p)); c.String() != want.String() {
+		t.Errorf("the idle cycle at 60 s: %s, want %s", c, want)
+	}
+	if got := e.gauge(t, "operator_gas_balance"); got <= 0 {
+		t.Errorf("operator_gas_balance %v after the reads", got)
 	}
 	e.noNonceGap(t)
 }
