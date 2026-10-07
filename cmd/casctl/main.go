@@ -1,5 +1,5 @@
-// Command casctl manages tenants, service tokens and processor credentials of CAS and sets values of EVM sources
-// (SRS — Core UC-105).
+// Command casctl manages tenants, service tokens and processor credentials of CAS, sets values of EVM sources and
+// reconciles a source on demand (SRS — Core UC-105).
 // It connects with the owner role through CASCTL_DATABASE_URL only. The group sim plays the processor against the
 // API of card-auth (SRS — Card Spend §2.1.1) and never opens the database.
 package main
@@ -57,6 +57,15 @@ type app struct {
 }
 
 func (a *app) registry(ctx context.Context) (*registry.Registry, error) {
+	pool, err := a.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return registry.New(pool), nil
+}
+
+// db opens the pool of the owner role on first use.
+func (a *app) db(ctx context.Context) (*pgxpool.Pool, error) {
 	if a.pool == nil {
 		url := a.getenv(dbURLVar)
 		if url == "" {
@@ -69,7 +78,7 @@ func (a *app) registry(ctx context.Context) (*registry.Registry, error) {
 		}
 		a.pool = pool
 	}
-	return registry.New(a.pool), nil
+	return a.pool, nil
 }
 
 func (a *app) close() {
@@ -94,7 +103,7 @@ func (a *app) rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd(), a.simCmd())
+	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd(), a.reconcileCmd(), a.simCmd())
 	return root
 }
 

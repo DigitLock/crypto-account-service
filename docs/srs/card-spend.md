@@ -9,7 +9,7 @@
 - **Milestones:** S1 (contract), S2 (`card-auth`), S3 (reconciliation, UC-4).
 - **Out of scope:** tenants, card registry (US-6) and ledger — SRS — Core; event indexer — [SRS — EVM Connector](evm-connector.md). Items marked `Design only` in the PRD are outlined in §2.3.5.
 - **Parents:** [PRD — Card Spend](../prd/card-spend.md) (`US-n`, `EC-n`), [BRD](../brd.md) (`BR-n`), [ADR](../adr/README.md) 3, 7–13.
-- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n; the bare D-n of this document are decisions of S2): UC-4 per source and tenant (S3 D-6), the checked period and the eligibility of an item (S3 D-7, S3 D-26), trigger and on-demand run (S3 D-8), every run stored and the gauge `reconciliation_mismatches` (S3 D-9), the amount of rule 1 and `UNEXPECTED_DEBIT` (S3 D-21, S3 D-25), alerts as metrics (S3 D-11), finality configured twice (S3 D-18); §4 issue 4 closed. Version 1.2, 2026-10-05. Completed by the discovery of S2: error bodies and validation of the processor API, processor credentials, request normalization, lock and waiter rules, read block tag, fees, preconfirmed receipts, the `PLANNED` slot after a restart, start checks, fallback endpoint, TLS, tombstone response, rate precision and age; §4 issues 1 and 5 closed. Completed in S2 st10a, 2026-10-06, to match the code: `quote` absent for USD, the cases of `RATE_UNAVAILABLE` and `TIMEOUT`, the output and exit code of `casctl sim`, the unique `chain_auth_id` and `chain_refund_id`, what `inclusion_signals_total` counts; the reference point of the decision deadline, the quote in base units, the release of a `PLANNED` slot, a stuck release, the finality tags, the ranges checked at start, the probe of the primary, the fallback counter, the connect timeout of the listener. Owner's answers of 2026-10-06: the exception of FR-20 for refunds; `TIMEOUT` when the deadline ends a step; `INTERNAL_ERROR` of step 6; `405` and the plain-text answers of the router; `returns_not_confirmed` as built; a rate limit at a refund attempt and at the start; the treasury address read again by the metric update while unset (2026-10-07); the write-ahead of a resubmitted debit; the scope of `rpc_read_timeout`; at most 50 returns per cycle. Version 1.1, 2026-10-04: §2.1.5 completed by the discovery of S1. Version 1.0 approved 2026-10-04.
+- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n; the bare D-n of this document are decisions of S2): UC-4 per source and tenant (S3 D-6), the checked period and the eligibility of an item (S3 D-7, S3 D-26), trigger and on-demand run (S3 D-8), every run stored and the gauge `reconciliation_mismatches` (S3 D-9), the amount of rule 1 and `UNEXPECTED_DEBIT` (S3 D-21, S3 D-25), alerts as metrics (S3 D-11), finality configured twice (S3 D-18); §4 issue 4 closed. Completed in S3 st7a, 2026-10-07, to match the code: the totals of a run (S3 D-40), the statuses checked, the `REFUND` row that decides the eligibility of a return, a treasury never indexed, a malformed stored event. Version 1.2, 2026-10-05. Completed by the discovery of S2: error bodies and validation of the processor API, processor credentials, request normalization, lock and waiter rules, read block tag, fees, preconfirmed receipts, the `PLANNED` slot after a restart, start checks, fallback endpoint, TLS, tombstone response, rate precision and age; §4 issues 1 and 5 closed. Completed in S2 st10a, 2026-10-06, to match the code: `quote` absent for USD, the cases of `RATE_UNAVAILABLE` and `TIMEOUT`, the output and exit code of `casctl sim`, the unique `chain_auth_id` and `chain_refund_id`, what `inclusion_signals_total` counts; the reference point of the decision deadline, the quote in base units, the release of a `PLANNED` slot, a stuck release, the finality tags, the ranges checked at start, the probe of the primary, the fallback counter, the connect timeout of the listener. Owner's answers of 2026-10-06: the exception of FR-20 for refunds; `TIMEOUT` when the deadline ends a step; `INTERNAL_ERROR` of step 6; `405` and the plain-text answers of the router; `returns_not_confirmed` as built; a rate limit at a refund attempt and at the start; the treasury address read again by the metric update while unset (2026-10-07); the write-ahead of a resubmitted debit; the scope of `rpc_read_timeout`; at most 50 returns per cycle. Version 1.1, 2026-10-04: §2.1.5 completed by the discovery of S1. Version 1.0 approved 2026-10-04.
 
 | Term | Meaning |
 |---|---|
@@ -684,18 +684,28 @@ N/A — batch comparison inside `server`, or inside `casctl` on demand; inputs a
 | Partner tenant | 1, 2a, 3 | Its authorizations and returns of the chain of the source, with `auth_id` and `return_id` |
 | Platform tenant `cas-platform` | 2, 4, 5 | Every event of the treasury of the source. "Unknown": no authorization or return of any tenant has that ID. Never an `auth_id` or `return_id` of another tenant |
 
-- A partner tenant without an authorization on the chain gets no run. A source without a treasury connection gets no run (SRS — EVM Connector §2.1.1).
+- A partner tenant without an authorization on the chain gets no run; the platform tenant never gets a partner run. A source without a treasury connection, or whose treasury has no stored logs yet (its `logs` cursor has no `last_time`), gets no run (SRS — EVM Connector §2.1.1; SRS — Core EC-123).
 - **Checked period and eligibility** (S3 D-7, S3 D-26). Each run is cumulative: it checks the whole history of the chain up to the boundary.
 
 | Item | Boundary |
 |---|---|
 | `period_to` | `last_time` of the treasury's `logs` cursor: the newest block time whose logs are stored. `to_block` = `next_block − 1` of the same cursor |
-| Authorization (rules 1, 2a) | Checked when `valid_until` ≤ `period_to`: the contract rejects a debit after `validUntil`, so its debit, if any, is stored |
-| Return (rule 3) | Checked when it is `CONFIRMED` and the block of its `REFUND` row of `operator_txs` ≤ `to_block` |
+| Authorization (rules 1, 2a) | Checked when its status is `APPROVED`, `DEBIT_CONFIRMED` (rule 1), `DECLINED` or `DEBIT_LOST` (rule 2a) and `valid_until` ≤ `period_to`: the contract rejects a debit after `validUntil`, so its debit, if any, is stored. Without `valid_until` never checked: `card-auth` sends no debit without it |
+| Return (rule 3) | Checked when it is `CONFIRMED` and the block of its `REFUND` row of `operator_txs` ≤ `to_block`. Of several `REFUND` rows (one per attempt), the row of its `tx_hash` by §2.1.4: `INCLUDED` or `CONFIRMED` first, else the newest with a hash. A row without a block: not checked yet |
 | Event (rules 2, 4) | Every stored event of the treasury: all are at or below `to_block` |
 | `period_from` | Partner run: `received_at` of the oldest authorization checked. Platform run: `occurred_at` of the oldest event checked. Nothing checked: `period_to` |
 
-- **Totals:** authorizations checked, debits count and sum, returns checked, refunds count and sum; amounts in token base units (SRS — Core §2.1.1 Reconciliation run).
+- **Other statuses** (`RECEIVED`, `DEBIT_SUBMITTED`, `TIMED_OUT`, `LATE_DEBIT`, `LATE_DEBIT_REFUNDED`): not counted, no mismatch. A late debit is checked through its `LATE_DEBIT` return (rule 3); until that return is `CONFIRMED`, the metrics of the tracker of `card-auth` cover it (UC-3).
+- **Totals** (S3 D-40), amounts in token base units (SRS — Core §2.1.1 Reconciliation run):
+
+| Total | Partner run | Platform run |
+|---|---|---|
+| `authorizations_checked` | Authorizations checked by rules 1 and 2a | 0 |
+| `debits_count`, `debits_amount` | `Debited` events of those authorizations | Every `Debited` event of the treasury |
+| `returns_checked` | Returns checked by rule 3 | 0 |
+| `refunds_count`, `refunds_amount` | `Refunded` events of those returns | Every `Refunded` event of the treasury |
+
+- The debits of the partner runs need not add up to those of the platform run: a late debit is counted by the platform run only.
 
 ##### Preconditions
 - The source has a treasury connection, and its `logs` stream has stored events up to a final block ([SRS — EVM Connector](evm-connector.md) §2.4).
@@ -710,6 +720,7 @@ Rules 1–5 produce an empty mismatch list in every run of the source.
 ##### Exception Paths
 - Any mismatch is stored in the run and counted in the metric `reconciliation_mismatches` (§2.5.1).
 - An item beyond the boundary is skipped and checked by a later run.
+- A stored event without a 32-byte `authId` or `refundId` or an integer `amount` in `raw.args` fails the reconciliation of the source: nothing is stored. The connector writes these fields; such an event is a defect, not a mismatch.
 - A mismatch that persists appears in every later run: runs are cumulative.
 
 ##### Acceptance Criteria
