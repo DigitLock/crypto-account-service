@@ -197,7 +197,7 @@ func dial(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
 func (e *env) connectors() *connector.Set {
 	set := connector.NewSet()
 	set.Register(fake.Code, e.fake)
-	set.RegisterEVM(evm.New([]uint64{31337, 84532}))
+	set.RegisterEVM(evm.New([]uint64{31337, 84532}, nil, nil, nil))
 	return set
 }
 

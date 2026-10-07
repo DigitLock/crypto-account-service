@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DigitLock/crypto-account-service/internal/connector/evm"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
 )
 
@@ -58,17 +59,13 @@ type Config struct {
 	EVMRPC map[string]EVMEndpoints
 }
 
-// EVMEndpoints are the RPC endpoints of one EVM source. A provider URL usually carries an API key in its path
-// or query, so both are secrets (SRS — EVM Connector §3.2 Security).
-type EVMEndpoints struct {
-	Primary  vault.Secret[string] // empty: the source has no endpoint (S3 D-16), even with a fallback
-	Fallback vault.Secret[string] // empty: no fallback
-}
+// EVMEndpoints are the RPC endpoints of one EVM source, as the EVM connector takes them.
+type EVMEndpoints = evm.Endpoints
 
 // Prefixes of the endpoint variables of an EVM source; the suffix is the source code in upper case with _ for -.
 const (
-	EVMRPCURLPrefix         = "EVM_RPC_URL_"
-	EVMRPCFallbackURLPrefix = "EVM_RPC_FALLBACK_URL_"
+	EVMRPCURLPrefix         = evm.RPCURLPrefix
+	EVMRPCFallbackURLPrefix = evm.RPCFallbackURLPrefix
 )
 
 // Log formats of LOG_FORMAT.
@@ -178,9 +175,7 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 // EVMSourceSuffix returns the suffix of the endpoint variables of a source: base-sepolia → BASE_SEPOLIA.
-func EVMSourceSuffix(code string) string {
-	return strings.ReplaceAll(strings.ToUpper(code), "-", "_")
-}
+func EVMSourceSuffix(code string) string { return evm.SourceSuffix(code) }
 
 // evmSourceCode returns the source code of a suffix, BASE_SEPOLIA → base-sepolia, or false when the suffix is
 // not upper-case letters, digits and _.

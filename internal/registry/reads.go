@@ -51,6 +51,10 @@ func (c *Connections) Balances(ctx context.Context, tenantID uuid.UUID, ownerRef
 	if connectionID != nil && len(rows) == 0 {
 		return nil, nil, ErrConnectionNotFound
 	}
+	aliases, err := q.AliasesBySource(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read the aliases: %w", err)
+	}
 
 	now := c.now()
 	connections := make([]Freshness, 0, len(rows))
@@ -64,7 +68,7 @@ func (c *Connections) Balances(ctx context.Context, tenantID uuid.UUID, ownerRef
 			snapshots = append(snapshots, r.SnapshotID)
 			owner[r.SnapshotID] = r.ID
 		}
-		src := connector.Source{Code: r.SourceCode, Kind: r.SourceKind, Config: r.SourceConfig}
+		src := connector.Source{Code: r.SourceCode, Kind: r.SourceKind, Config: r.SourceConfig, Aliases: aliases[r.SourceCode]}
 		// Stale without a balance stream, when one never succeeded, or when the oldest success is too old.
 		f.Stale = r.Streams == 0 || r.Succeeded < r.Streams || now.Sub(r.OldestSuccess) > connector.StaleAfter(src)
 		connections = append(connections, f)

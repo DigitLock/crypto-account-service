@@ -7,15 +7,16 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/DigitLock/crypto-account-service/internal/chain"
 	"github.com/DigitLock/crypto-account-service/internal/connector"
 )
 
 // Finality modes and tags of sources.config (§2.1.1 Finality rule).
 const (
-	FinalityModeTag           = "tag"
-	FinalityModeConfirmations = "confirmations"
-	FinalityTagFinalized      = "finalized"
-	FinalityTagSafe           = "safe"
+	FinalityModeTag           = chain.FinalityModeTag
+	FinalityModeConfirmations = chain.FinalityModeConfirmations
+	FinalityTagFinalized      = chain.FinalityTagFinalized
+	FinalityTagSafe           = chain.FinalityTagSafe
 )
 
 // Defaults of the EVM values of sources.config (SRS — EVM Connector §3.1).
@@ -40,10 +41,10 @@ type Config struct {
 	FinalityMode          string // FinalityModeTag or FinalityModeConfirmations
 	FinalityTag           string // used in mode tag
 	FinalityConfirmations uint64 // used in mode confirmations
-	ControllerAddress     string // EIP-55; empty until set
+	ControllerAddress     string // EIP-55
 	TreasuryConnection    string // UUID; empty until set
+	TreasuryAddress       string // EIP-55; empty until set (S3 D-32)
 	BackfillFloor         uint64
-	HasBackfillFloor      bool // false until set
 	LogRangeMax           uint64
 	RPCRateLimit          int
 	CompletenessInterval  time.Duration
@@ -51,8 +52,14 @@ type Config struct {
 	LogsInterval          time.Duration
 }
 
+// Rule is the finality rule of the network for the shared read of internal/chain.
+func (c Config) Rule() chain.FinalityRule {
+	return chain.FinalityRule{Mode: c.FinalityMode, Tag: c.FinalityTag, Confirmations: c.FinalityConfirmations}
+}
+
 // ErrNetworkConfig marks a value of sources.config that makes the network unusable: a missing or malformed
-// chain_id or finality_mode. The errors name the key, never the value.
+// chain_id, finality_mode, controller_address or backfill_floor (S3 D-30, S3 D-36). The errors name the key,
+// never the value.
 var ErrNetworkConfig = errors.New("evm: sources.config")
 
 type configError struct{ msg string }
@@ -60,9 +67,9 @@ type configError struct{ msg string }
 func (e *configError) Error() string { return "evm: sources.config: " + e.msg }
 func (e *configError) Unwrap() error { return ErrNetworkConfig }
 
-// ParseConfig parses the EVM part of sources.config of src. chain_id and finality_mode have no default: a
-// missing or malformed one is an error that wraps ErrNetworkConfig. Any other malformed value takes its
-// default, or stays unset when it has none, as the rule of SRS — Core §3.1. No RPC call.
+// ParseConfig parses the EVM part of sources.config of src. chain_id, finality_mode, controller_address and
+// backfill_floor have no default: a missing or malformed one is an error that wraps ErrNetworkConfig. Any other
+// malformed value takes its default, or stays unset when it has none, as the rule of SRS — Core §3.1. No RPC call.
 func ParseConfig(src connector.Source) (Config, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(src.Config, &raw); err != nil {
@@ -72,15 +79,16 @@ func ParseConfig(src connector.Source) (Config, error) {
 	if !ok {
 		return Config{}, &configError{"chain_id must be a positive integer"}
 	}
+	balances, logs := Intervals(src)
 	cfg := Config{
 		ChainID:               chainID,
 		FinalityTag:           DefaultFinalityTag,
 		FinalityConfirmations: DefaultFinalityConfirmations,
 		LogRangeMax:           DefaultLogRangeMax,
-		RPCRateLimit:          DefaultRPCRateLimit,
+		RPCRateLimit:          RPCRateLimit(src),
 		CompletenessInterval:  DefaultCompletenessInterval,
-		BalancesInterval:      connector.SyncInterval(src, FamilyBalances),
-		LogsInterval:          DefaultLogsInterval,
+		BalancesInterval:      balances,
+		LogsInterval:          logs,
 	}
 
 	switch mode, _ := stringOf(raw["finality_mode"]); mode {
@@ -89,40 +97,68 @@ func ParseConfig(src connector.Source) (Config, error) {
 	default:
 		return Config{}, &configError{"finality_mode must be tag or confirmations"}
 	}
+	s, _ := stringOf(raw["controller_address"])
+	address, err := CheckAddress(s)
+	if err != nil {
+		return Config{}, &configError{"controller_address must be set to an address: casctl source set"}
+	}
+	cfg.ControllerAddress = address
+	n, ok := uintOf(raw["backfill_floor"])
+	if !ok {
+		return Config{}, &configError{"backfill_floor must be set to a block number: casctl source set"}
+	}
+	cfg.BackfillFloor = n
+
 	if tag, _ := stringOf(raw["finality_tag"]); tag == FinalityTagFinalized || tag == FinalityTagSafe {
 		cfg.FinalityTag = tag
 	}
 	if n, ok := uintOf(raw["finality_confirmations"]); ok && n >= 1 {
 		cfg.FinalityConfirmations = n
 	}
-	if s, ok := stringOf(raw["controller_address"]); ok {
-		if address, err := CheckAddress(s); err == nil {
-			cfg.ControllerAddress = address
-		}
-	}
 	if s, ok := stringOf(raw["treasury_connection"]); ok && isUUID(s) {
 		cfg.TreasuryConnection = s
 	}
-	if n, ok := uintOf(raw["backfill_floor"]); ok {
-		cfg.BackfillFloor, cfg.HasBackfillFloor = n, true
+	if s, ok := stringOf(raw["treasury_address"]); ok {
+		if address, err := CheckAddress(s); err == nil {
+			cfg.TreasuryAddress = address
+		}
 	}
 	if n, ok := uintOf(raw["log_range_max"]); ok && n >= 1 {
 		cfg.LogRangeMax = n
 	}
-	if n, ok := uintOf(raw["rpc_rate_limit"]); ok && n >= 1 && n <= 1<<31-1 {
-		cfg.RPCRateLimit = int(n)
-	}
 	if d, ok := durationOf(raw["completeness_interval"]); ok {
 		cfg.CompletenessInterval = d
 	}
-	// The default of the family logs is 5 min for EVM, not the 1 h of SRS — Core §3.1.
-	var intervals map[string]json.RawMessage
-	if json.Unmarshal(raw["sync_interval"], &intervals) == nil {
-		if d, ok := durationOf(intervals[FamilyLogs]); ok {
-			cfg.LogsInterval = d
+	return cfg, nil
+}
+
+// Intervals are the sync intervals of the two streams: balances by connector.SyncInterval (15 min), logs 5 min
+// unless sync_interval.logs sets a valid one: the EVM default, not the 1 h of SRS — Core §3.1. They do not depend
+// on the values without default, so the streams are declared for a network whose config is incomplete and its
+// runs fail by the start checks (S3 D-30).
+func Intervals(src connector.Source) (balances, logs time.Duration) {
+	balances, logs = connector.SyncInterval(src, FamilyBalances), DefaultLogsInterval
+	var raw struct {
+		SyncInterval map[string]json.RawMessage `json:"sync_interval"`
+	}
+	if json.Unmarshal(src.Config, &raw) == nil {
+		if d, ok := durationOf(raw.SyncInterval[FamilyLogs]); ok {
+			logs = d
 		}
 	}
-	return cfg, nil
+	return balances, logs
+}
+
+// RPCRateLimit is rpc_rate_limit of the source: requests per second and endpoint, a JSON integer ≥ 1, default 5.
+func RPCRateLimit(src connector.Source) int {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(src.Config, &raw) != nil {
+		return DefaultRPCRateLimit
+	}
+	if n, ok := uintOf(raw["rpc_rate_limit"]); ok && n >= 1 && n <= 1<<31-1 {
+		return int(n)
+	}
+	return DefaultRPCRateLimit
 }
 
 func stringOf(raw json.RawMessage) (string, bool) {

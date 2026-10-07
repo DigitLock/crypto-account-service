@@ -248,7 +248,7 @@ func setup(t *testing.T) *harness {
 	h.fake = fake.New()
 	h.set = connector.NewSet()
 	h.set.Register(fake.Code, h.fake)
-	h.set.RegisterEVM(evm.New([]uint64{31337, 84532}))
+	h.set.RegisterEVM(evm.New([]uint64{31337, 84532}, nil, nil, nil))
 	if h.vault, err = vault.New(randomBytes(t, 32), 1); err != nil {
 		t.Fatal(err)
 	}

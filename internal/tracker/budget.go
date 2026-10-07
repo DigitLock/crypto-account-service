@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/DigitLock/crypto-account-service/internal/chain"
-	"github.com/DigitLock/crypto-account-service/internal/config"
 )
 
 // The RPC budget of a cycle (SRS — Card Spend UC-3, rules of S2 st9b). The decision path uses the same endpoint, so
@@ -164,30 +163,31 @@ func (t *Tracker) finalNumber(ctx context.Context) (number uint64, ok bool, err 
 	return c.final, c.finalOK, c.finalErr
 }
 
-// readFinal reads the final block of the finality rule; a failed read is shared by the rows of the cycle.
+// readFinal reads the final block by the shared function of internal/chain (S3 D-4); a failed read is shared by
+// the rows of the cycle. Mode tag reads the header of the tag; mode confirmations uses the head of the cycle.
 func (t *Tracker) readFinal(ctx context.Context) (uint64, bool, error) {
-	if t.cfg.FinalityMode == config.FinalityModeTag {
-		tag := rpc.FinalizedBlockNumber
-		if t.cfg.FinalityTag == config.FinalityTagSafe {
-			tag = rpc.SafeBlockNumber
-		}
-		cctx, cancel := context.WithTimeout(ctx, t.cfg.Interval)
-		defer cancel()
-		h, err := t.queue.Reader().Endpoint().Client.HeaderByNumber(cctx, big.NewInt(int64(tag)))
-		if err != nil {
-			return 0, false, t.rpcErrWithin("final block", err, t.cfg.Interval)
-		}
-		return h.Number.Uint64(), true, nil
+	rule := chain.FinalityRule{
+		Mode: t.cfg.FinalityMode, Tag: t.cfg.FinalityTag, Confirmations: uint64(t.cfg.FinalityConfirmations),
 	}
-	latest, _, err := t.head(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-	n := uint64(t.cfg.FinalityConfirmations)
-	if latest < n {
-		return 0, false, nil
-	}
-	return latest - n, true, nil
+	return chain.FinalBlock(ctx, rule, chain.FinalReads{
+		TagNumber: func(ctx context.Context, tag string) (uint64, error) {
+			number := big.NewInt(int64(rpc.FinalizedBlockNumber))
+			if tag == chain.FinalityTagSafe {
+				number = big.NewInt(int64(rpc.SafeBlockNumber))
+			}
+			cctx, cancel := context.WithTimeout(ctx, t.cfg.Interval)
+			defer cancel()
+			h, err := t.queue.Reader().Endpoint().Client.HeaderByNumber(cctx, number)
+			if err != nil {
+				return 0, t.rpcErrWithin("final block", err, t.cfg.Interval)
+			}
+			return h.Number.Uint64(), nil
+		},
+		Head: func(ctx context.Context) (uint64, error) {
+			latest, _, err := t.head(ctx)
+			return latest, err
+		},
+	})
 }
 
 // blockHash returns the hash of block number on chain now, read at most once per cycle; zero when there is none.

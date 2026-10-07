@@ -1,0 +1,110 @@
+package evm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/ethereum/go-ethereum/common/hexutil"
+
+	"github.com/DigitLock/crypto-account-service/internal/connector"
+)
+
+// cursor is the cursor of the logs stream (§2.4 Cursor formats). An empty cursor {} is the first run: next_block is
+// backfill_floor and there is no hash to guard.
+type cursor struct {
+	NextBlock *uint64 `json:"next_block,omitempty"`
+	LastHash  string  `json:"last_hash,omitempty"`
+	LastTime  string  `json:"last_time,omitempty"`
+}
+
+func parseCursor(raw json.RawMessage) (cursor, error) {
+	var c cursor
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return c, nil
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return cursor{}, errors.New("evm: the logs cursor is malformed")
+	}
+	if c.LastHash != "" && (c.NextBlock == nil || *c.NextBlock == 0) {
+		return cursor{}, errors.New("evm: the logs cursor has last_hash without a next_block above 0")
+	}
+	return c, nil
+}
+
+// ReorgError is REORG_BELOW_FINAL (UC-303 steps 3 and 10, EC-308): the block before the cursor is missing or its
+// hash changed. The cursor does not move and no entry is changed; every later run fails the same way until an
+// operator acts. Found is empty when the block is missing.
+type ReorgError struct {
+	Block  uint64
+	Stored string
+	Found  string
+}
+
+func (e *ReorgError) Error() string {
+	found := e.Found
+	if found == "" {
+		found = "no block"
+	}
+	return fmt.Sprintf("evm: REORG_BELOW_FINAL: block %d: stored hash %s, found %s", e.Block, e.Stored, found)
+}
+
+// logs runs UC-303 steps 2 to 5 and 10 on the endpoint of the run; step 1 is open. The reads of steps 6 to 9 come
+// in st5: a range to read ends the run with ErrNotBuilt.
+func (s *session) logs(ctx context.Context, mode connector.Mode, cur cursor, raw json.RawMessage) (connector.Page, error) {
+	next := s.cfg.BackfillFloor
+	if cur.NextBlock != nil {
+		next = *cur.NextBlock
+	}
+
+	// Step 2.
+	final, ok, err := s.finalBlock(ctx)
+	if err != nil {
+		return connector.Page{}, err
+	}
+
+	// Step 3: skipped on the first run, which has no hash.
+	if cur.LastHash != "" {
+		h, err := s.headerAt(ctx, hexutil.EncodeUint64(next-1))
+		if err != nil {
+			return connector.Page{}, err
+		}
+		if h == nil || !strings.EqualFold(h.Hash.Hex(), cur.LastHash) {
+			reorg := &ReorgError{Block: next - 1, Stored: cur.LastHash}
+			if h != nil {
+				reorg.Found = h.Hash.Hex()
+			}
+			s.c.metrics.ReorgBelowFinal(s.src.Code)
+			s.c.logger.ErrorContext(ctx, "critical: REORG_BELOW_FINAL: the last processed block is missing or its hash changed; "+
+				"the stream stays failed until an operator acts", "source", s.src.Code, "connection_id", s.conn.ID,
+				"block", reorg.Block, "stored_hash", reorg.Stored, "found_hash", reorg.Found)
+			return connector.Page{}, reorg
+		}
+	}
+
+	// Step 4: nothing final yet, or nothing new: a successful run with the same cursor.
+	if !ok || next > final {
+		same := raw
+		if len(bytes.TrimSpace(same)) == 0 {
+			same = json.RawMessage(`{}`)
+		}
+		return connector.Page{Cursor: same, Mode: mode}, nil
+	}
+
+	// Step 5.
+	from, to := logRange(next, final, s.cfg.LogRangeMax)
+	return connector.Page{}, fmt.Errorf("%w: eth_getLogs of blocks %d to %d (UC-303 steps 6 to 9)", ErrNotBuilt, from, to)
+}
+
+// logRange is UC-303 step 5: from next to min(next + size − 1, final). It never ends above final (FR-306). The
+// caller ensures next ≤ final and size ≥ 1.
+func logRange(next, final, size uint64) (from, to uint64) {
+	to = final
+	if size >= 1 && final-next >= size {
+		to = next + size - 1
+	}
+	return next, to
+}

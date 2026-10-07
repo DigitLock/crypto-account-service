@@ -96,7 +96,7 @@ func run(ctx context.Context, getenv func(string) string, names []string, stderr
 		_ = grpcLn.Close()
 		return err
 	}
-	connectors := newConnectors(cfg)
+	connectors := newConnectors(cfg, evm.NewPromMetrics(metrics), logger)
 	reporter := engine.NewPromReporter(metrics)
 	// One limiter per source for the whole process (FR-110): the engine and CreateConnection share it.
 	limiters := limiter.NewSet(limiter.SystemClock{}, reporter.BudgetWaited)
@@ -163,30 +163,46 @@ func run(ctx context.Context, getenv func(string) string, names []string, stderr
 	return errors.Join(serveErr, shutdownErr)
 }
 
-// newConnectors registers the EVM connector with the allow-list and, only with ENABLE_FAKE_SOURCE,
-// the fake connector.
-func newConnectors(cfg config.Config) *connector.Set {
+// newConnectors registers the EVM connector with the allow-list and the endpoints and, only with
+// ENABLE_FAKE_SOURCE, the fake connector.
+func newConnectors(cfg config.Config, evmMetrics evm.Metrics, logger *slog.Logger) *connector.Set {
 	set := connector.NewSet()
-	set.RegisterEVM(evm.New(cfg.EVMAllowedChainIDs))
+	set.RegisterEVM(evm.New(cfg.EVMAllowedChainIDs, cfg.EVMRPC, evmMetrics, logger))
 	if cfg.EnableFakeSource {
 		set.Register(fake.Code, fake.New())
 	}
 	return set
 }
 
-// warnUnavailableSources logs one line per enabled EVM source that is not available (EC-318).
-// Availability is evaluated on every request; this is information for the operator only.
+// warnUnavailableSources logs one line per enabled EVM source that is not available (EC-318), and one line per
+// enabled and available EVM source without its primary endpoint, which declares no streams (S3 D-16). Availability
+// is evaluated on every request; this is information for the operator only.
 func warnUnavailableSources(ctx context.Context, logger *slog.Logger, db repository.DBTX, connectors *connector.Set) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	rows, err := repository.New(db).ListSources(ctx)
+	q := repository.New(db)
+	rows, err := q.ListSources(ctx)
 	if err != nil {
 		logger.Warn("cannot read the sources at start; the start goes on", "error", err)
 		return
 	}
+	aliases, err := q.AliasesBySource(ctx)
+	if err != nil {
+		logger.Warn("cannot read the aliases at start; the start goes on", "error", err)
+		return
+	}
 	for _, row := range rows {
-		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config}
-		if src.Kind != connector.KindEVM || !src.Enabled || connectors.Available(src) {
+		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config, Aliases: aliases[row.Code]}
+		if src.Kind != connector.KindEVM || !src.Enabled {
+			continue
+		}
+		if connectors.Available(src) {
+			if c, ok := connectors.For(src); ok {
+				if e, ok := c.(interface{ HasEndpoint(string) bool }); ok && !e.HasEndpoint(src.Code) {
+					logger.Warn("EVM source without an RPC endpoint: no streams are declared; wallet connections and cards work",
+						"source", src.Code, "variable", evm.PrimaryVariable(src.Code))
+				}
+			}
 			continue
 		}
 		if chainID, ok := connector.ChainID(src); ok {

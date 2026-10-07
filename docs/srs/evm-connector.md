@@ -12,7 +12,7 @@
   - the authorization flow, the contract and the reconciliation rules: [SRS — Card Spend](card-spend.md);
   - real-time signals: `card-auth` tracks its own transactions (ADR-13). This connector reads logs from final blocks only.
 - **Parents:** [BRD](../brd.md) BR-1, BR-3, BR-4, BR-5, BR-12; [PRD — Card Spend](../prd/card-spend.md) US-13; [ADR](../adr/README.md) 2, 3, 5, 6, 8, 11, 13.
-- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
+- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); endpoint variables and network errors of `sources.config` (S3 D-29, S3 D-30); tracked tokens with the source, `treasury_address`, endpoint choice per source, call timeout and rate-limit pause, required `controller_address` and `backfill_floor` (S3 D-31 … S3 D-34, S3 D-36); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
 - **Network facts:** finality stages and their timing are taken from the Base documentation for Base mainnet, checked on 2026-10-03. Base Sepolia may differ; the values are measured at S3.
 
 | Term | Meaning |
@@ -97,20 +97,21 @@ sequenceDiagram
 - **Read-only:** the connector holds no key and sends no transaction (ADR-3).
 - **Test networks only:** the chain ID of a source must be in the allow-list `EVM_ALLOWED_CHAIN_IDS`: 31337 (Anvil) and 84532 (Base Sepolia) by default (BRD §9.2). A source outside the list is not available: it is not offered and no connection is created on it. Checked from C1 (FR-318).
 - **Address:** 20 bytes. Stored and returned in EIP-55 form; compared without regard to case.
-- **Tracked tokens:** only tokens listed in `asset_aliases` are read. MVP: `MockUSDC`. A tracked token must be a plain ERC-20: at most 18 decimals, no fee on transfer, no rebasing, a `Transfer` log for every balance change including mint and burn.
+- **Tracked tokens:** only tokens listed in `asset_aliases` are read; the connector gets them with the source (SRS — Core Connector contract, S3 D-31). MVP: `MockUSDC`. A tracked token must be a plain ERC-20: at most 18 decimals, no fee on transfer, no rebasing, a `Transfer` log for every balance change including mint and burn.
 - **Amounts:** `uint256` base units → decimal amount with the token's `decimals` from `asset_aliases`. No floats.
 - **Logs: final blocks only.** No log above the final block is read (ADR-11).
 - **Balances: at the head.** A snapshot is replaced by the next one, so a reorg cannot leave a wrong value behind.
-- **One endpoint per run:** a run uses the primary, or the fallback if the previous run failed on the primary. The final block, the headers and the logs of one run come from the same endpoint. The run after a successful fallback run tries the primary again.
+- **One endpoint per run:** a run uses the primary, or the fallback if the previous run failed on the primary. The final block, the headers and the logs of one run come from the same endpoint. The run after a successful fallback run tries the primary again. The choice is kept in memory per source, not per connection: a run of any connection of the source that failed on the primary sends the next run of the source to the fallback. A failure is an RPC error — transport, HTTP status, JSON-RPC error, timeout, rate limit —, not a reorg guard hit and not a failed start check (S3 D-33).
 - **Roles of a connection:**
   - a wallet connection sees the transfers of its address and the `Debited` and `Refunded` events where it is the `user`;
   - the treasury connection is the one named in `treasury_connection` of the source, in the platform tenant `cas-platform`. It sees the transfers of the treasury and every `Debited` and `Refunded` event. Reconciliation reads its entries (§2.4).
 - **Start checks per network** (S3 D-23):
   - the chain ID of the endpoint equals `chain_id` of the source and is in the allow-list;
   - `token()` of the controller is a tracked token;
-  - the address of the treasury connection equals `treasury()` of the controller.
+  - the address of the treasury connection, `treasury_address` of `sources.config`, equals `treasury()` of the controller (S3 D-32).
 - **When the checks run:** before the first run of a stream of the network after `server` starts, and again before each run while a check fails. Checks that passed are kept until `server` stops. The fallback endpoint is checked when a run first uses it (UC-303 step 1).
 - **A failed check** fails the run: nothing else is read, the failure counts as any failed run (SRS — Core UC-102 step 8: backoff, `DEGRADED` after the threshold), `evm_start_check_failed{source,check}` is 1, critical alert.
+- **An RPC error during a check** is an RPC error of the run (S3 D-33): the endpoint of the next run changes, the check stays to be done. A wrong value is a failed check.
 - **No treasury connection yet:** `treasury_connection` of the source is not set. The treasury check is skipped with one WARN line per start; wallet streams run; reconciliation of the source does not run (SRS — Card Spend UC-4).
 - **C1 and S2:** the connector checked the address only and declared no streams: a wallet connection existed for the card registry, without balances and history. From S3 it declares `balances` and `logs`; existing connections get their cursors at the next start of the engine (SRS — Core FR-122).
 
@@ -262,7 +263,7 @@ See §2.1.1.
 
 | # | Step | On failure |
 |---|---|---|
-| 1 | Choose the endpoint (Common rules). Check its chain ID if the previous run used the other endpoint | Stream failure |
+| 1 | Choose the endpoint (Common rules). Its chain ID is checked when a run of the process first uses it (start checks, S3 D-23) | Stream failure |
 | 2 | Resolve the final block F | Stream failure |
 | 3 | Reorg guard: read the header of block `next_block − 1`. It must exist and its hash must equal `last_hash` of the cursor. Skipped on the first run | `REORG_BELOW_FINAL`: step 10 |
 | 4 | `next_block` > F → end the run: nothing to read | — |
@@ -399,7 +400,7 @@ Rows added by the migration that introduces a network, and the tenant and connec
 | `sources` | One row per network: `code = anvil` or `base-sepolia`, `kind = EVM`, `config` with the values of §3.1. The migrations of C1 add both rows, enabled, with `chain_id` only. A migration of S3 adds the values of §3.1 that do not depend on a deployment to both rows, and `controller_address` and `backfill_floor` to `base-sepolia`; it keeps a `treasury_connection` already written. The values of `anvil` that depend on its deployment are set with `casctl source set` (S3 D-17). S2 adds nothing here: `card-auth` reads the shared values from its own environment (SRS — Card Spend §3.1) |
 | `asset_aliases` | One row per tracked token: `native_asset` = token address in EIP-55 form, `asset` = `USDC`, `decimals` = 6 for `MockUSDC`. `base-sepolia`: added by the migration of S3. `anvil`: the address depends on the deployment, so `casctl source set anvil token_address=<address>` writes the row (S3 D-27) |
 | `tenants` | The platform tenant `cas-platform`: created once per database with `casctl tenant create cas-platform` (S3 D-1) |
-| `connections` | The treasury connection, after the contract is deployed: created through the API in the platform tenant, `CreateConnection` with the treasury address as `wallet`, `owner_ref` `treasury`, label `Treasury` (S3 D-22). Then `casctl source set-treasury <source> <connection_id>` checks that it is an `EVM_WALLET` connection of that source and writes its ID to `treasury_connection` (S3 D-2) |
+| `connections` | The treasury connection, after the contract is deployed: created through the API in the platform tenant, `CreateConnection` with the treasury address as `wallet`, `owner_ref` `treasury`, label `Treasury` (S3 D-22). Then `casctl source set-treasury <source> <connection_id>` checks that it is an `EVM_WALLET` connection of that source and writes its ID to `treasury_connection` and its address to `treasury_address`, in one transaction (S3 D-2, S3 D-32) |
 
 ##### Cursor formats
 
@@ -413,7 +414,7 @@ Content of `sync_cursors.cursor` per stream.
 | `logs` | Next block to read; hash and time of the block before it | `{"next_block": 31250045, "last_hash": "0x6c1f…90ab", "last_time": "2026-10-02T12:19:48Z"}` |
 | `balances` | Empty | `{}` |
 
-- First run: `next_block` = `backfill_floor`, no `last_hash`, no `last_time`.
+- First run: `next_block` = `backfill_floor`, no `last_hash`, no `last_time`. The connector declares the stream with an empty cursor `{}` and reads `backfill_floor` at the first run, so a floor set after the engine started is used (S3 D-36).
 - `last_time` is the boundary of reconciliation: the newest block time whose logs are stored (SRS — Card Spend UC-4, S3 D-7). A cursor without it gets it at its next range.
 - Mode `BACKFILL` until the cursor reaches the final block for the first time; `INCREMENTAL` from then on (SRS — Core UC-102).
 
@@ -465,12 +466,12 @@ Added to the metrics of SRS — Core §2.5. The gap of UC-304 is the metric `led
 | server | `evm_final_block{source}` | — | Not growing for 30 min on a public network | Final block by the finality rule | BR-4 |
 | server | `evm_indexer_lag_blocks{source}` | At most the blocks of one `sync_interval.logs` | More than 3 intervals | Final block minus the oldest `logs` cursor in mode `INCREMENTAL` | BR-4 |
 | server | `evm_reorg_below_final_total{source}` | 0 | Any, critical | Reorg guard hits | BR-4 |
-| server | `evm_start_check_failed{source,check}` | 0 | Any, critical | 1 while a start check fails: chain ID, token, treasury | BRD §9.2 |
+| server | `evm_start_check_failed{source,check}` | 0 | Any, critical | 1 while a start check fails; `check`: `config`, `chain_id`, `token`, `treasury` | BRD §9.2 |
 | server | `evm_completeness_skipped_total{source}` | 0 | No completed check for 24 h | Checks skipped because the state was not served | BR-12 |
 | server | `evm_unmatched_controller_events_total{source}` | 0 | Any | Controller events without their `Transfer` | BR-12 |
 | server | `evm_skipped_logs_total{source,reason}` | 0 | Any | Logs not imported (EC-315) | BR-4 |
 | server | `evm_log_range_blocks{source}` | `log_range_max` | — | Range size in use after splitting | BR-4 |
-| server | `evm_rpc_requests_total{source,endpoint,method,result}` | — | Error share > 20% for 15 min | RPC calls by outcome | BR-3 |
+| server | `evm_rpc_requests_total{source,endpoint,method,result}` | — | Error share > 20% for 15 min | RPC calls by outcome; `endpoint`: `primary`, `fallback`; `result`: `success`, `failure`, `rate_limit` | BR-3 |
 | server | `evm_rpc_fallback_active{source}` | 0 | 1 for 30 min | The last run used the fallback endpoint | BR-3 |
 
 #### 2.5.2 Alerts
@@ -505,14 +506,15 @@ FR-316 and FR-317 apply from S3.
 | Parameter | Where | Default | Meaning |
 |---|---|---|---|
 | `EVM_ALLOWED_CHAIN_IDS` | Environment | 31337, 84532 | Allow-list of test networks: chain IDs separated by commas. Read from C1 |
-| `EVM_RPC_URL_<SOURCE>`, `EVM_RPC_FALLBACK_URL_<SOURCE>` | Environment | — | Endpoints; `<SOURCE>` is the source code in upper case with `_` for `-`. Kept out of the database: a provider URL usually contains an API key. No primary URL: the source declares no streams (S3 D-16) |
-| `chain_id` | `sources.config` | — | Chain ID of the network |
-| `finality_mode` | `sources.config` | Per network | `tag` or `confirmations` (§2.1.1) |
+| `EVM_RPC_URL_<SOURCE>`, `EVM_RPC_FALLBACK_URL_<SOURCE>` | Environment | — | Endpoints; `<SOURCE>` is the source code in upper case with `_` for `-`. Kept out of the database: a provider URL usually contains an API key. No primary URL: the source declares no streams (S3 D-16). A variable with one of the two prefixes whose suffix is not upper-case letters, digits and `_` stops the start of `server`: a misspelt name does not leave a source without its endpoint unnoticed (S3 D-29) |
+| `chain_id` | `sources.config` | — | Chain ID of the network. No default: missing or malformed is an error of the network, its runs fail by the start checks (S3 D-30) |
+| `finality_mode` | `sources.config` | Per network | `tag` or `confirmations` (§2.1.1). No default: missing or malformed is an error of the network, as `chain_id` (S3 D-30) |
 | `finality_tag` | `sources.config` | `finalized` | `finalized` or `safe`; used in mode `tag` |
 | `finality_confirmations` | `sources.config` | 10 | Used in mode `confirmations` |
-| `controller_address` | `sources.config` | — | `CardSpendController` of the network |
+| `controller_address` | `sources.config` | — | `CardSpendController` of the network. Unset or malformed: an error of the network, as `chain_id` (S3 D-36) |
 | `treasury_connection` | `sources.config` | — | ID of the treasury connection; written by `casctl source set-treasury` (S3 D-2) |
-| `backfill_floor` | `sources.config` | — | First block of the backfill: the deployment block of the oldest tracked contract |
+| `treasury_address` | `sources.config` | — | Wallet address of the treasury connection, EIP-55; written with `treasury_connection`; compared with `treasury()` by the start checks (S3 D-32) |
+| `backfill_floor` | `sources.config` | — | First block of the backfill: the deployment block of the oldest tracked contract. Unset or malformed: an error of the network, as `chain_id` (S3 D-36) |
 | `log_range_max` | `sources.config` | 2000 | Blocks per log query before splitting |
 | `rpc_rate_limit` | `sources.config` | 5 per second | Requests the connector may send to one endpoint; set below the provider's plan. Both networks in S3; revised with the measurements of S3 (S3 D-12) |
 | `completeness_interval` | `sources.config` | 1 h | Minimum time between completeness checks of a connection |
@@ -529,7 +531,7 @@ Values per network (S3 D-17). A dash: the default applies.
 | `finality_confirmations` | 10 | — |
 | `controller_address` | `casctl source set`, from the deployment | `0xF75D58dc6E33487dB994D81D0d870D61Eac45F37` |
 | `backfill_floor` | `casctl source set`, from the deployment | 47768907: deployment block of `MockUSDC` |
-| `treasury_connection` | `casctl source set-treasury` | `casctl source set-treasury` |
+| `treasury_connection`, `treasury_address` | `casctl source set-treasury` | `casctl source set-treasury` |
 | `log_range_max`, `rpc_rate_limit`, `completeness_interval`, `sync_interval` | — | — until the measurements of S3 (§4, issue 6) |
 
 - `casctl source set <source> <key>=<value>` accepts `controller_address`, `backfill_floor` and `token_address` only; `token_address` writes the alias row of the tracked token (§2.4, S3 D-27); tests write their own values.
@@ -547,7 +549,8 @@ Values per network (S3 D-17). A dash: the default applies.
   - final blocks only, cursor and entries in one transaction: a restart or a retry changes nothing that is stored;
   - a failed endpoint never fails a read of the API: last data plus the stale flag (SRS — Core);
   - each endpoint has its own budget in the limiter; a paused primary does not block the fallback;
-  - `card-auth` calls the same provider account outside this limiter: `rpc_rate_limit` must leave room for the decision path.
+  - `card-auth` calls the same provider account outside this limiter: `rpc_rate_limit` must leave room for the decision path;
+  - each RPC call is bounded by 10 s; a rate-limit answer pauses the budget of its endpoint for the `Retry-After` of the answer, else for 60 s. Constants of the code, as the backoff of the listener of `card-auth`, until a network needs other values (S3 D-34).
 - **Security:**
   - no key, no transaction, read methods only (FR-313);
   - endpoint URLs are read from the environment and logged without path and query;

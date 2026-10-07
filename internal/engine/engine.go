@@ -335,7 +335,15 @@ func (e *Engine) runWork(ctx context.Context, w work) {
 		}
 		return
 	}
-	src := connector.Source{Code: row.SourceCode, Kind: row.SourceKind, Enabled: row.SourceEnabled, Config: row.SourceConfig}
+	aliases, err := repository.New(e.db).AliasesOfSource(ctx, row.SourceCode)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.logger.ErrorContext(ctx, "cannot read the aliases of a source", "source", row.SourceCode, "error", err)
+		}
+		return
+	}
+	src := connector.Source{Code: row.SourceCode, Kind: row.SourceKind, Enabled: row.SourceEnabled, Config: row.SourceConfig,
+		Aliases: aliases}
 	// Not run and no failure counted while the source is not available (UC-102 preconditions).
 	if !e.connectors.Available(src) {
 		return
@@ -737,9 +745,17 @@ func (e *Engine) CreateMissingCursors(ctx context.Context) {
 		}
 		return
 	}
+	aliases, err := q.AliasesBySource(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.logger.ErrorContext(ctx, "cannot read the aliases for missing cursors", "error", err)
+		}
+		return
+	}
 	now := e.now()
 	for _, row := range rows {
-		src := connector.Source{Code: row.SourceCode, Kind: row.SourceKind, Enabled: row.SourceEnabled, Config: row.SourceConfig}
+		src := connector.Source{Code: row.SourceCode, Kind: row.SourceKind, Enabled: row.SourceEnabled, Config: row.SourceConfig,
+			Aliases: aliases[row.SourceCode]}
 		if !e.connectors.Available(src) {
 			continue
 		}
@@ -800,9 +816,16 @@ func (e *Engine) RefreshGauges(ctx context.Context) {
 		}
 		return
 	}
+	aliases, err := q.AliasesBySource(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.logger.ErrorContext(ctx, "cannot read the aliases", "error", err)
+		}
+		return
+	}
 	bySource := map[string]time.Duration{}
 	for _, row := range rows {
-		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config}
+		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config, Aliases: aliases[row.Code]}
 		if !e.connectors.Available(src) {
 			continue
 		}

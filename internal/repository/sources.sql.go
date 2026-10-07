@@ -100,6 +100,81 @@ func (q *Queries) InsertSourceAlias(ctx context.Context, arg InsertSourceAliasPa
 	return err
 }
 
+const listAliases = `-- name: ListAliases :many
+SELECT s.code AS source_code, a.native_asset, a.asset, a.decimals
+FROM asset_aliases a
+JOIN sources s ON s.id = a.source_id
+ORDER BY s.code, a.native_asset
+`
+
+type ListAliasesRow struct {
+	SourceCode  string
+	NativeAsset string
+	Asset       string
+	Decimals    *int16
+}
+
+// Every alias row with the code of its source: the Source of a connector carries the rows of its source (S3 D-31).
+func (q *Queries) ListAliases(ctx context.Context) ([]ListAliasesRow, error) {
+	rows, err := q.db.Query(ctx, listAliases)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAliasesRow{}
+	for rows.Next() {
+		var i ListAliasesRow
+		if err := rows.Scan(
+			&i.SourceCode,
+			&i.NativeAsset,
+			&i.Asset,
+			&i.Decimals,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAliasesOfSource = `-- name: ListAliasesOfSource :many
+SELECT a.native_asset, a.asset, a.decimals
+FROM asset_aliases a
+JOIN sources s ON s.id = a.source_id
+WHERE s.code = $1
+ORDER BY a.native_asset
+`
+
+type ListAliasesOfSourceRow struct {
+	NativeAsset string
+	Asset       string
+	Decimals    *int16
+}
+
+// The alias rows of one source.
+func (q *Queries) ListAliasesOfSource(ctx context.Context, code string) ([]ListAliasesOfSourceRow, error) {
+	rows, err := q.db.Query(ctx, listAliasesOfSource, code)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAliasesOfSourceRow{}
+	for rows.Next() {
+		var i ListAliasesOfSourceRow
+		if err := rows.Scan(&i.NativeAsset, &i.Asset, &i.Decimals); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSourceAliasesOfAsset = `-- name: ListSourceAliasesOfAsset :many
 SELECT native_asset
 FROM asset_aliases

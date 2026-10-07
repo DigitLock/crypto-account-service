@@ -37,12 +37,21 @@ type Capabilities struct {
 	PermissionsReadable bool
 }
 
-// Source is a row of sources as a connector sees it.
+// Source is a row of sources as a connector sees it, with the alias rows of the source (S3 D-31). The engine and
+// CreateConnection load them; a connector never reads the database.
 type Source struct {
 	Code    string
 	Kind    string
 	Enabled bool
 	Config  json.RawMessage
+	Aliases []Alias
+}
+
+// Alias is a row of asset_aliases: a native asset code or token address of the source and its canonical asset.
+type Alias struct {
+	NativeAsset string
+	Asset       string
+	Decimals    *int16 // nil when the row has none
 }
 
 // ExchangeKey is an API key and its secret. Both print as redacted in every fmt verb, in slog and in JSON.

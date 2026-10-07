@@ -138,8 +138,8 @@
 | C1-T531 | Zero address | Common | Send `0x` + 40 zeros | `INVALID_ARGUMENT` | EC-302 | Pass |
 | C1-T532 | Same address in another case | Wallet connection | Create with the same address in another letter case | `ALREADY_EXISTS` | EC-303, FR-302, FR-104 | Pass |
 | C1-T533 | Same address on two networks | Wallet connection | Create with the same address on `base-sepolia` | Second connection created | FR-104 | Pass |
-| C1-T534 | No network call | — | Run the address check with no network | Passes: the connector of C1 has no RPC client | UC-301 | Pass |
-| C1-T535 | Chain outside the allow-list | `EVM_ALLOWED_CHAIN_IDS` without 84532 | Start; `ListSources`; create on `base-sepolia` | A log line at start; `base-sepolia` is not listed; `FAILED_PRECONDITION / SOURCE_DISABLED` | FR-318, EC-318 | Pass |
+| C1-T534 | No network call | — | Run the address check with no network | Passes: the connector of C1 has no RPC client. From S3 the connector holds one: the row checks that the address check of UC-301 sends no request (S3 D-35) | UC-301 | Pass |
+| C1-T535 | Chain outside the allow-list | `EVM_ALLOWED_CHAIN_IDS` without 84532 | Start; `ListSources`; create on `base-sepolia` | A log line at start; `base-sepolia` is not listed; `FAILED_PRECONDITION / SOURCE_DISABLED`. From S3 an allowed source without an RPC URL has a WARN line of its own (S3 D-16): the test rejects only an "unavailable" line for `anvil` | FR-318, EC-318 | Pass |
 | C1-T536 | Fake source behind its flag | Migrated database | `casctl source add-fake` twice; `ListSources` and create without `ENABLE_FAKE_SOURCE`; then with it | One row `fake`, enabled, kind `EXCHANGE`. Without the flag: not listed, `SOURCE_DISABLED`. With it: listed, creation works | §2.1.1, §2.4, §3.1 | Pass |
 | C1-T537 | Wallet without streams | Wallet connection | Read `sync_cursors`; `GetConnection` | No cursor, no sync; `streams` is empty | UC-101 postcondition, SRS — EVM §2.1.1 | Pass |
 

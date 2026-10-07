@@ -48,3 +48,18 @@ WHERE source_id = $1 AND asset = $2;
 -- name: InsertSourceAlias :exec
 INSERT INTO asset_aliases (source_id, native_asset, asset, decimals)
 VALUES ($1, $2, $3, $4);
+
+-- name: ListAliases :many
+-- Every alias row with the code of its source: the Source of a connector carries the rows of its source (S3 D-31).
+SELECT s.code AS source_code, a.native_asset, a.asset, a.decimals
+FROM asset_aliases a
+JOIN sources s ON s.id = a.source_id
+ORDER BY s.code, a.native_asset;
+
+-- name: ListAliasesOfSource :many
+-- The alias rows of one source.
+SELECT a.native_asset, a.asset, a.decimals
+FROM asset_aliases a
+JOIN sources s ON s.id = a.source_id
+WHERE s.code = $1
+ORDER BY a.native_asset;
