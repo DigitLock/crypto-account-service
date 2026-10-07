@@ -460,12 +460,12 @@ What SRS — Card Spend UC-4 reads from this connector.
 
 #### 2.5.1 Metrics
 
-Added to the metrics of SRS — Core §2.5. The gap of UC-304 is the metric `ledger_gap{source,connection,asset}` of SRS — Core §2.5: the engine computes it for any source (S3 D-19).
+Added to the metrics of SRS — Core §2.5. The gap of UC-304 is the metric `ledger_gap{source,connection,asset}` of SRS — Core §2.5: the engine computes it for any source (S3 D-19). The counters count per read: a range read again counts its logs again; their alert is "any".
 
 | Service | Metric name | Value | Alert | Description | Requestor |
 |---|---|---|---|---|---|
 | server | `evm_final_block{source}` | — | Not growing for 30 min on a public network | Final block by the finality rule | BR-4 |
-| server | `evm_indexer_lag_blocks{source}` | At most the blocks of one `sync_interval.logs` | More than 3 intervals | Final block minus the oldest `logs` cursor in mode `INCREMENTAL` | BR-4 |
+| server | `evm_indexer_lag_blocks{source}` | At most the blocks of one `sync_interval.logs` | More than 3 intervals | Final block minus the oldest last processed block among the connections of the source whose `logs` stream is `INCREMENTAL`; kept in memory of the process, an entry not updated for 3 intervals dropped; 0 before the first such run after a start | BR-4 |
 | server | `evm_reorg_below_final_total{source}` | 0 | Any, critical | Reorg guard hits | BR-4 |
 | server | `evm_start_check_failed{source,check}` | 0 | Any, critical | 1 while a start check fails; `check`: `config`, `chain_id`, `token`, `treasury` | BRD §9.2 |
 | server | `evm_completeness_skipped_total{source}` | 0 | No completed check for 24 h | Checks skipped because the state was not served | BR-12 |
@@ -489,7 +489,7 @@ Conditions are in the Alert column above. S3 exposes the metrics only (S3 D-11).
 | Local chain | Anvil with `MockUSDC` and the controller deployed, on the test database; scripted mint, transfers, debit, refund, then enough blocks to make them final | End to end: entries, snapshot, gap = 0. A reorg below the cursor is produced by returning the chain to a saved state and mining other blocks |
 | Public test network | Base Sepolia with the contracts deployed in S2 | Finality tags and their real distance from the head, range limits of the provider, state reads at the final block (§4) |
 
-- **Fixtures** (S3 D-13, S3 D-28): one JSON file per case, the ordered list of `{method, params, result | error | http_status}`; `http_status` is an HTTP answer without a JSON-RPC body, such as a rate limit (429), written by hand. A batch request takes one entry per element, in order. Recorded from Anvil by a recording transport that stores no URL; error answers of a provider — range too large, rate limit, lagging node — are written by hand. Nothing is recorded from a public network. `testdata/` is scanned for secrets in CI.
+- **Fixtures** (S3 D-13, S3 D-28): one JSON file per case, the ordered list of `{method, params, result | error | http_status}`; `http_status` is an HTTP answer without a JSON-RPC body, such as a rate limit (429), written by hand. A batch request takes one entry per element, in order. A file may carry a `context`: the values a replay needs — addresses of the local deployment, account, connection IDs, `backfill_floor`, range size —, never a URL or a key. `make fixtures-record` records every file from Anvil. Recorded from Anvil by a recording transport that stores no URL; error answers of a provider — range too large, rate limit, lagging node — are written by hand. Nothing is recorded from a public network. `testdata/` is scanned for secrets in CI.
 
 FR-316 and FR-317 apply from S3.
 

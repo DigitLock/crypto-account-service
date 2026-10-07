@@ -38,10 +38,13 @@ test:
 
 check: fmt vet build test
 
-# Records the committed RPC fixtures of testdata/fixtures/evm/ from a local Anvil (internal/rpcfixture). Only this
-# target writes them; a normal test run records into a temporary directory. Anvil and forge must be on PATH.
+# Records the committed RPC fixtures of testdata/fixtures/evm/ from a local Anvil: the head (internal/rpcfixture)
+# and the scenarios of the shared connector suite (internal/connector/evm). Only this target writes them; a normal
+# test run records into a temporary directory. The error_*.json files are written by hand. Anvil and forge must
+# be on PATH.
 fixtures-record:
 	go test -count=1 -run '^TestT107_RecordFromAnvil$$' ./internal/rpcfixture -record
+	go test -count=1 -run '^TestT420_RecordScenarios$$' ./internal/connector/evm -record
 
 secrets:
 	gitleaks git --redact --no-banner .

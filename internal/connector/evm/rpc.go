@@ -44,9 +44,16 @@ type network struct {
 	token          common.Address // token() of the controller, once the token check passed
 	treasury       common.Address // treasury() of the controller, once the treasury check passed or read for pairing
 	treasuryOK     bool
-	treasuryKnown  bool   // treasury holds treasury() of the controller
-	treasuryWarned bool   // the WARN line of an unset treasury_connection is written once per start
-	rangeSize      uint64 // log range size after splitting (EC-306); 0: log_range_max
+	treasuryKnown  bool                 // treasury holds treasury() of the controller
+	treasuryWarned bool                 // the WARN line of an unset treasury_connection is written once per start
+	rangeSize      uint64               // log range size after splitting (EC-306); 0: log_range_max
+	processed      map[string]processed // connection ID → last processed block of its INCREMENTAL logs stream
+}
+
+// processed is the last processed block of an INCREMENTAL logs stream and when the connector last ran it.
+type processed struct {
+	block uint64
+	at    time.Time
 }
 
 func (c *Connector) network(code string) *network {
@@ -54,7 +61,7 @@ func (c *Connector) network(code string) *network {
 	defer c.mu.Unlock()
 	n, ok := c.networks[code]
 	if !ok {
-		n = &network{chainChecked: map[string]bool{}}
+		n = &network{chainChecked: map[string]bool{}, processed: map[string]processed{}}
 		c.networks[code] = n
 	}
 	return n
@@ -91,6 +98,8 @@ type session struct {
 	client   *chain.Client
 	endpoint string // EndpointPrimary or EndpointFallback; empty before the endpoint is chosen
 	ep       chain.Endpoint
+	final    uint64 // the final block of the run, when finalOK
+	finalOK  bool
 }
 
 // open chooses the endpoint of the run and runs the start checks. A failure of open fails the run.

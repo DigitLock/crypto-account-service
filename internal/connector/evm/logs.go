@@ -64,6 +64,7 @@ func (s *session) logs(ctx context.Context, mode connector.Mode, cur cursor, raw
 	if err != nil {
 		return connector.Page{}, err
 	}
+	s.final, s.finalOK = final, ok
 
 	// Step 3: skipped on the first run, which has no hash.
 	if cur.LastHash != "" {
@@ -105,4 +106,44 @@ func logRange(next, final, size uint64) (from, to uint64) {
 		to = next + size - 1
 	}
 	return next, to
+}
+
+// indexerLag updates evm_indexer_lag_blocks at the end of a run (§2.5.1): the final block minus the oldest last
+// processed block (next_block − 1) among the connections of the source whose logs stream is INCREMENTAL. The
+// connector keeps the last processed block of each connection it ran; a failed run keeps the previous value, a page
+// in BACKFILL removes it, and a value not updated for 3 × sync_interval.logs is dropped (a deleted connection).
+// Nothing is set before the final block of the run is known.
+func (s *session) indexerLag(page connector.Page, err error) {
+	if !s.finalOK {
+		return
+	}
+	now := s.c.now()
+	n := s.net
+	n.mu.Lock()
+	if err == nil {
+		c, perr := parseCursor(page.Cursor)
+		switch {
+		case page.Mode != connector.ModeIncremental:
+			delete(n.processed, s.conn.ID)
+		case perr == nil && c.NextBlock != nil && *c.NextBlock > 0:
+			n.processed[s.conn.ID] = processed{block: *c.NextBlock - 1, at: now}
+		}
+	}
+	var oldest uint64
+	found := false
+	for id, p := range n.processed {
+		if now.Sub(p.at) > 3*s.cfg.LogsInterval {
+			delete(n.processed, id)
+			continue
+		}
+		if !found || p.block < oldest {
+			oldest, found = p.block, true
+		}
+	}
+	n.mu.Unlock()
+	lag := uint64(0)
+	if found && s.final > oldest {
+		lag = s.final - oldest
+	}
+	s.c.metrics.IndexerLag(s.src.Code, lag)
 }

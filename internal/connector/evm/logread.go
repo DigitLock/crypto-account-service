@@ -225,7 +225,7 @@ type event struct {
 	authID   common.Hash    // Debited, Refunded
 	refundID common.Hash    // Refunded
 	amount   *big.Int
-	paired   bool
+	match    *event // the paired Transfer of a controller event, or the controller event of a paired Transfer
 }
 
 func decode(l chainLog) (*event, error) {
@@ -283,7 +283,7 @@ func pair(events []*event, token, treasury common.Address) {
 		var best *event
 		var bestDist uint64
 		for _, t := range events {
-			if t.name != eventTransfer || t.paired || t.log.TxHash != c.log.TxHash || t.log.Address != token ||
+			if t.name != eventTransfer || t.match != nil || t.log.TxHash != c.log.TxHash || t.log.Address != token ||
 				t.from != from || t.to != to || t.amount.Cmp(c.amount) != 0 {
 				continue
 			}
@@ -293,14 +293,22 @@ func pair(events []*event, token, treasury common.Address) {
 			}
 		}
 		if best != nil {
-			best.paired = true
+			best.match, c.match = c, best
 		}
 	}
 }
 
-// mapLogs is UC-303 step 8: the entries of the connection, in the order of the logs.
-func (s *session) mapLogs(logs []chainLog, times map[common.Hash]time.Time, account, token, treasury common.Address,
-	treasuryConn bool) ([]connector.Entry, error) {
+// SkipAmountTooLarge is the reason of evm_skipped_logs_total for an amount above the ledger amount type (EC-315).
+const SkipAmountTooLarge = "amount_too_large"
+
+// maxIntegerDigits is the largest number of integer digits of a ledger amount (SRS — Core Connector contract).
+const maxIntegerDigits = 20
+
+// mapLogs is UC-303 step 8: the entries of the connection, in the order of the logs. A controller event without its
+// Transfer still gives its entry and is counted (EC-311). A log whose amount does not fit the ledger gives no entry
+// and is counted (EC-315); its paired Transfer gives none either, as the pair is one operation.
+func (s *session) mapLogs(ctx context.Context, logs []chainLog, times map[common.Hash]time.Time, account, token,
+	treasury common.Address, treasuryConn bool) ([]connector.Entry, error) {
 	events := make([]*event, 0, len(logs))
 	for _, l := range logs {
 		e, err := decode(l)
@@ -324,7 +332,7 @@ func (s *session) mapLogs(logs []chainLog, times map[common.Hash]time.Time, acco
 			kind, direction, asset = entryCardRefund, directionOut, token
 		case e.name == eventRefunded && e.user == account:
 			kind, direction, asset = entryCardRefund, directionIn, token
-		case e.name != eventTransfer, e.paired, e.from == e.to, e.amount.Sign() == 0:
+		case e.name != eventTransfer, e.match != nil, e.from == e.to, e.amount.Sign() == 0:
 			continue
 		case e.to == account:
 			kind, direction = entryDeposit, directionIn
@@ -341,14 +349,25 @@ func (s *session) mapLogs(logs []chainLog, times map[common.Hash]time.Time, acco
 		if err != nil {
 			return nil, err
 		}
+		if e.name != eventTransfer && e.match == nil {
+			s.c.metrics.UnmatchedControllerEvent(s.src.Code)
+			s.c.logger.WarnContext(ctx, "controller event without its Transfer: the entry is created from the event (EC-311)",
+				"source", s.src.Code, "connection_id", s.conn.ID, "external_id", e.log.externalID(), "event", e.name)
+		}
+		amount := FormatUnits(e.amount, decimals)
+		if whole, _, _ := strings.Cut(amount, "."); len(whole) > maxIntegerDigits {
+			s.c.metrics.SkippedLog(s.src.Code, SkipAmountTooLarge)
+			s.c.logger.WarnContext(ctx, "log not imported: its amount has more than 20 integer digits (EC-315)",
+				"source", s.src.Code, "connection_id", s.conn.ID, "external_id", e.log.externalID(), "event", e.name)
+			continue
+		}
 		raw, err := storedLog(e)
 		if err != nil {
 			return nil, err
 		}
 		entries = append(entries, connector.Entry{
 			ExternalID: e.log.externalID(), Leg: legSingle, Type: kind, Direction: direction,
-			NativeAsset: alias.NativeAsset, Amount: FormatUnits(e.amount, decimals),
-			OccurredAt: times[e.log.BlockHash], Raw: raw,
+			NativeAsset: alias.NativeAsset, Amount: amount, OccurredAt: times[e.log.BlockHash], Raw: raw,
 		})
 	}
 	return entries, nil
@@ -415,7 +434,7 @@ func (s *session) readPage(ctx context.Context, mode connector.Mode, next, final
 			return connector.Page{}, err
 		}
 	}
-	entries, err := s.mapLogs(logs, times, who, token, treasury, treasuryConn)
+	entries, err := s.mapLogs(ctx, logs, times, who, token, treasury, treasuryConn)
 	if err != nil {
 		return connector.Page{}, err
 	}

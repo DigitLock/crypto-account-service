@@ -143,7 +143,7 @@ func TestT412_TooLargeTexts(t *testing.T) {
 		"query returned more than 10000 results": -32005,
 		// QuickNode (support: the 10,000 block range limit)
 		"eth_getLogs and eth_newFilter are limited to a 10,000 blocks range": -32614,
-		// geth --rpc.rangelimit
+		// geth --rpc.rangelimit: example not confirmed by a source; matched by "block range" of the sources above
 		"exceed maximum block range: 10000": -32000,
 		// Reth
 		"query exceeds max block range 100000": -32602,

@@ -1,7 +1,9 @@
 // Package rpcfixture records JSON-RPC calls into fixture files and serves them back (SRS — EVM Connector §2.6;
 // S3 D-13, S3 D-28). It is used only by tests.
 //
-// A fixture is one JSON file per case: a description and the ordered list of calls. A call has a method, its
+// A fixture is one JSON file per case: a description, optionally the context of the recording, and the ordered list
+// of calls. The context holds the values a replay needs to send the same requests, such as the addresses of the
+// deployment and the account: fictitious or local, never a URL or a key. A call has a method, its
 // params and exactly one answer: a result, a JSON-RPC error, or an HTTP status without a JSON-RPC body (such as
 // 429), written by hand. A batch request takes one entry per element, in order.
 //
@@ -22,8 +24,9 @@ import (
 
 // File is the content of one fixture file.
 type File struct {
-	Description string `json:"description"`
-	Calls       []Call `json:"calls"`
+	Description string            `json:"description"`
+	Context     map[string]string `json:"context,omitempty"`
+	Calls       []Call            `json:"calls"`
 }
 
 // Call is one JSON-RPC call and its answer. Exactly one of Result, Error and HTTPStatus is set.

@@ -16,6 +16,13 @@ type Metrics interface {
 	FallbackActive(source string, active bool)
 	// LogRangeBlocks sets evm_log_range_blocks{source}: the range size in use after splitting (EC-306).
 	LogRangeBlocks(source string, blocks uint64)
+	// IndexerLag sets evm_indexer_lag_blocks{source}: the final block minus the oldest last processed block of the
+	// logs streams of the source in mode INCREMENTAL.
+	IndexerLag(source string, blocks uint64)
+	// UnmatchedControllerEvent adds 1 to evm_unmatched_controller_events_total{source} (EC-311).
+	UnmatchedControllerEvent(source string)
+	// SkippedLog adds 1 to evm_skipped_logs_total{source,reason} (EC-315).
+	SkippedLog(source, reason string)
 }
 
 // Values of the label result of evm_rpc_requests_total.
@@ -33,6 +40,9 @@ type PromMetrics struct {
 	requests *prometheus.CounterVec
 	fallback *prometheus.GaugeVec
 	ranges   *prometheus.GaugeVec
+	lag      *prometheus.GaugeVec
+	unmatch  *prometheus.CounterVec
+	skipped  *prometheus.CounterVec
 }
 
 var _ Metrics = (*PromMetrics)(nil)
@@ -58,8 +68,17 @@ func NewPromMetrics(reg prometheus.Registerer) *PromMetrics {
 		ranges: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "evm_log_range_blocks", Help: "Log range size in use after splitting.",
 		}, []string{"source"}),
+		lag: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "evm_indexer_lag_blocks", Help: "Final block minus the oldest last processed block of the incremental logs streams.",
+		}, []string{"source"}),
+		unmatch: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "evm_unmatched_controller_events_total", Help: "Controller events without their Transfer.",
+		}, []string{"source"}),
+		skipped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "evm_skipped_logs_total", Help: "Logs not imported, by reason.",
+		}, []string{"source", "reason"}),
 	}
-	reg.MustRegister(m.final, m.reorgs, m.checks, m.requests, m.fallback, m.ranges)
+	reg.MustRegister(m.final, m.reorgs, m.checks, m.requests, m.fallback, m.ranges, m.lag, m.unmatch, m.skipped)
 	return m
 }
 
@@ -91,6 +110,21 @@ func (m *PromMetrics) LogRangeBlocks(source string, blocks uint64) {
 	m.ranges.WithLabelValues(source).Set(float64(blocks))
 }
 
+// IndexerLag implements Metrics.
+func (m *PromMetrics) IndexerLag(source string, blocks uint64) {
+	m.lag.WithLabelValues(source).Set(float64(blocks))
+}
+
+// UnmatchedControllerEvent implements Metrics.
+func (m *PromMetrics) UnmatchedControllerEvent(source string) {
+	m.unmatch.WithLabelValues(source).Inc()
+}
+
+// SkippedLog implements Metrics.
+func (m *PromMetrics) SkippedLog(source, reason string) {
+	m.skipped.WithLabelValues(source, reason).Inc()
+}
+
 func boolValue(b bool) float64 {
 	if b {
 		return 1
@@ -107,3 +141,6 @@ func (nopMetrics) StartCheck(string, string, bool)           {}
 func (nopMetrics) RPCRequest(string, string, string, string) {}
 func (nopMetrics) FallbackActive(string, bool)               {}
 func (nopMetrics) LogRangeBlocks(string, uint64)             {}
+func (nopMetrics) IndexerLag(string, uint64)                 {}
+func (nopMetrics) UnmatchedControllerEvent(string)           {}
+func (nopMetrics) SkippedLog(string, string)                 {}

@@ -37,16 +37,38 @@ type metricsRec struct {
 	requests map[string]int  // source/endpoint/method/result
 	fallback map[string]bool
 	ranges   map[string]uint64
+	lag      map[string]uint64
+	unmatch  map[string]int
+	skipped  map[string]int // source/reason
 }
 
 func newMetricsRec() *metricsRec {
 	return &metricsRec{final: map[string]uint64{}, reorgs: map[string]int{}, checks: map[string]bool{},
-		requests: map[string]int{}, fallback: map[string]bool{}, ranges: map[string]uint64{}}
+		requests: map[string]int{}, fallback: map[string]bool{}, ranges: map[string]uint64{},
+		lag: map[string]uint64{}, unmatch: map[string]int{}, skipped: map[string]int{}}
 }
 
 func (m *metricsRec) LogRangeBlocks(source string, n uint64) {
 	m.mu.Lock()
 	m.ranges[source] = n
+	m.mu.Unlock()
+}
+
+func (m *metricsRec) IndexerLag(source string, n uint64) {
+	m.mu.Lock()
+	m.lag[source] = n
+	m.mu.Unlock()
+}
+
+func (m *metricsRec) UnmatchedControllerEvent(source string) {
+	m.mu.Lock()
+	m.unmatch[source]++
+	m.mu.Unlock()
+}
+
+func (m *metricsRec) SkippedLog(source, reason string) {
+	m.mu.Lock()
+	m.skipped[source+"/"+reason]++
 	m.mu.Unlock()
 }
 

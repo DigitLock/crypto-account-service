@@ -28,6 +28,7 @@ type Connector struct {
 
 	mu       sync.Mutex
 	networks map[string]*network // by source code
+	now      func() time.Time    // the clock of evm_indexer_lag_blocks
 }
 
 var _ connector.EVMConnector = (*Connector)(nil)
@@ -46,7 +47,7 @@ func New(allowedChainIDs []uint64, endpoints map[string]Endpoints, metrics Metri
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Connector{allowed: allowed, endpoints: endpoints, metrics: metrics, logger: logger,
+	return &Connector{allowed: allowed, endpoints: endpoints, metrics: metrics, logger: logger, now: time.Now,
 		networks: map[string]*network{}}
 }
 
@@ -113,6 +114,7 @@ func (c *Connector) FetchPage(ctx context.Context, conn connector.Connection, st
 		page, err = s.logs(ctx, mode, cur, cursor)
 	}
 	s.close(err)
+	s.indexerLag(page, err)
 	return page, err
 }
 
