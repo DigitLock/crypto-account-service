@@ -36,11 +36,24 @@ type metricsRec struct {
 	checks   map[string]bool // source/check → failed
 	requests map[string]int  // source/endpoint/method/result
 	fallback map[string]bool
+	ranges   map[string]uint64
 }
 
 func newMetricsRec() *metricsRec {
 	return &metricsRec{final: map[string]uint64{}, reorgs: map[string]int{}, checks: map[string]bool{},
-		requests: map[string]int{}, fallback: map[string]bool{}}
+		requests: map[string]int{}, fallback: map[string]bool{}, ranges: map[string]uint64{}}
+}
+
+func (m *metricsRec) LogRangeBlocks(source string, n uint64) {
+	m.mu.Lock()
+	m.ranges[source] = n
+	m.mu.Unlock()
+}
+
+func (m *metricsRec) rangeOf(source string) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ranges[source]
 }
 
 func (m *metricsRec) FinalBlock(source string, n uint64) {

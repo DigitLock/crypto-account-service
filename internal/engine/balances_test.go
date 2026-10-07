@@ -156,12 +156,20 @@ func (h *harness) walletAt(t *testing.T, address common.Address) uuid.UUID {
 
 // useAnvil registers an EVM connector on the local chain c and sets the source anvil to its deployment: the
 // controller and the token as the alias row. backfill_floor lies far above the head, so the logs stream reads no
-// range and succeeds. rpc_rate_limit 100: the limiter waits on the fake clock, and a run of both streams sends more
-// than 5 requests. The config is restored at the end of the test.
+// range and succeeds.
 func (h *harness) useAnvil(t *testing.T, c *testchain.Chain) {
 	t.Helper()
+	h.useAnvilAt(t, c, c.RPCURL, `{"backfill_floor": 1000000000}`)
+}
+
+// useAnvilAt registers an EVM connector on url, an endpoint of the local chain c, and sets the source anvil to the
+// deployment of c and the values of config, a JSON object. rpc_rate_limit is 1000000 unless config sets it: the
+// limiter waits on the fake clock, and the runs of a test send more requests than 5 per second. The config is
+// restored at the end of the test.
+func (h *harness) useAnvilAt(t *testing.T, c *testchain.Chain, url, config string) {
+	t.Helper()
 	h.set.RegisterEVM(evm.New([]uint64{31337, 84532}, map[string]evm.Endpoints{
-		"anvil": {Primary: vault.NewSecret(c.RPCURL)},
+		"anvil": {Primary: vault.NewSecret(url)},
 	}, nil, h.logger))
 	var saved []byte
 	if err := h.owner.QueryRow(ctx, `SELECT config FROM sources WHERE code = 'anvil'`).Scan(&saved); err != nil {
@@ -169,7 +177,7 @@ func (h *harness) useAnvil(t *testing.T, c *testchain.Chain) {
 	}
 	t.Cleanup(func() { h.exec(t, `UPDATE sources SET config = $1 WHERE code = 'anvil'`, saved) })
 	h.exec(t, `UPDATE sources SET config = config || jsonb_build_object('controller_address', $1::text,
-		'backfill_floor', 1000000000, 'rpc_rate_limit', 100) WHERE code = 'anvil'`, c.Controller.Hex())
+		'rpc_rate_limit', 1000000) || $2::jsonb WHERE code = 'anvil'`, c.Controller.Hex(), config)
 	h.exec(t, `INSERT INTO asset_aliases (source_id, native_asset, asset, decimals)
 		SELECT id, $1, 'USDC', $2 FROM sources WHERE code = 'anvil'`, c.Token.Hex(), testchain.TokenDecimals)
 }

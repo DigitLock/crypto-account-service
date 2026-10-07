@@ -77,9 +77,9 @@ func TestT201_FinalBlockTag(t *testing.T) {
 	if want == nil {
 		t.Fatal("anvil has no finalized block")
 	}
-	_, err := a.logs(a.conn("w", a.source(`"finality_mode": "tag", "finality_tag": "finalized"`)), `{}`)
-	if !errors.Is(err, ErrNotBuilt) || !strings.Contains(err.Error(), fmt.Sprintf("blocks 0 to %d", uint64(want.Number))) {
-		t.Errorf("run: %v, want the range up to %d", err, uint64(want.Number))
+	page, err := a.logs(a.conn("w", a.source(`"finality_mode": "tag", "finality_tag": "finalized"`)), `{}`)
+	if err != nil || *cursorOf(t, page).NextBlock != uint64(want.Number)+1 {
+		t.Errorf("run: %v, page %+v; want the range up to %d", err, page, uint64(want.Number))
 	}
 	if got := a.m.final["anvil"]; got != uint64(want.Number) {
 		t.Errorf("evm_final_block = %d, want %d", got, uint64(want.Number))
@@ -105,9 +105,9 @@ func TestT202_FinalBlockConfirmations(t *testing.T) {
 
 	a.mine(t, 20)
 	final := a.head(t) - 10
-	_, err = a.logs(conn, `{}`)
-	if !errors.Is(err, ErrNotBuilt) || !strings.Contains(err.Error(), fmt.Sprintf("blocks 0 to %d", final)) {
-		t.Errorf("run above: %v, want the range 0 to %d", err, final)
+	page, err = a.logs(conn, `{}`)
+	if err != nil || *cursorOf(t, page).NextBlock != final+1 || page.Mode != connector.ModeIncremental {
+		t.Errorf("run above: %v, page %+v; want the range 0 to %d", err, page, final)
 	}
 	if a.m.final["anvil"] != final {
 		t.Errorf("evm_final_block = %d, want %d", a.m.final["anvil"], final)

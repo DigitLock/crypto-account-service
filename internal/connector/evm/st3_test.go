@@ -33,11 +33,13 @@ func TestT203_NoLogAboveFinal(t *testing.T) {
 	}
 
 	// Head 25, confirmations 10: F = 15; the cursor at 5 with the hash of block 4.
-	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 25).header(t, hexutil.EncodeUint64(4), 4, 1).file())
+	// The fixture holds the eth_getLogs of blocks 5 to 7 only, and the header of 7.
+	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 25).header(t, hexutil.EncodeUint64(4), 4, 1).
+		page(t, 5, 7).file())
 	r := newRig(srv.URL(), "")
-	_, err := r.logs(r.conn("w", fxSource(`"log_range_max": 3`)), cursorJSON(5, blockHash(4, 1)))
-	if !errors.Is(err, ErrNotBuilt) || !strings.Contains(err.Error(), "blocks 5 to 7") {
-		t.Errorf("run: %v, want the range 5 to 7 and ErrNotBuilt", err)
+	page, err := r.logs(r.conn("w", fxSource(`"log_range_max": 3`)), cursorJSON(5, blockHash(4, 1)))
+	if err != nil || *cursorOf(t, page).NextBlock != 8 || !page.More {
+		t.Errorf("run: %v, page %+v; want the range 5 to 7 and more", err, page)
 	}
 	if r.m.final["anvil"] != 15 {
 		t.Errorf("evm_final_block = %d, want 15", r.m.final["anvil"])
@@ -75,17 +77,18 @@ func TestT205_MissingBlockBelowCursor(t *testing.T) {
 
 // S3-T206 — Req: UC-303 step 3. The first run has no hash: no header of next_block − 1 is read.
 func TestT206_FirstRunWithoutGuard(t *testing.T) {
-	// Head 25: F = 15 ≥ backfill_floor 0, so the run goes on to step 5. No eth_getBlockByNumber is in the fixture.
+	// Head 25: F = 15 ≥ backfill_floor 0, so the run goes on to step 5. The only eth_getBlockByNumber of the
+	// fixture is the header of the range end, 15.
 	for _, cursor := range []string{`{}`, ``, `{"next_block": 3}`} {
-		srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 25).file())
-		r := newRig(srv.URL(), "")
-		_, err := r.logs(r.conn("w", fxSource("")), cursor)
-		want := "blocks 0 to 15"
+		from := uint64(0)
 		if cursor == `{"next_block": 3}` {
-			want = "blocks 3 to 15"
+			from = 3
 		}
-		if !errors.Is(err, ErrNotBuilt) || !strings.Contains(err.Error(), want) {
-			t.Errorf("cursor %q: %v, want %s", cursor, err, want)
+		srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 25).page(t, from, 15).file())
+		r := newRig(srv.URL(), "")
+		page, err := r.logs(r.conn("w", fxSource("")), cursor)
+		if err != nil || *cursorOf(t, page).NextBlock != 16 {
+			t.Errorf("cursor %q: %v, page %+v; want blocks %d to 15", cursor, err, page, from)
 		}
 		srv.AssertAllServed()
 	}

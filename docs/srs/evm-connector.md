@@ -269,7 +269,7 @@ See §2.1.1.
 | 3 | Reorg guard: read the header of block `next_block − 1`. It must exist and its hash must equal `last_hash` of the cursor. Skipped on the first run | `REORG_BELOW_FINAL`: step 10 |
 | 4 | `next_block` > F → end the run: nothing to read | — |
 | 5 | Range = `next_block` … min(`next_block` + range size − 1, F) | — |
-| 6 | Run the log filters of §2.1.2 for the range | Range or answer rejected as too large → halve the range and repeat. Other errors → stream failure |
+| 6 | Run the log filters of §2.1.2 for the range. Every log must be not removed, inside the range and from a contract of its filter | Range or answer rejected as too large → halve the range and repeat. A log that breaks the rule, or other errors → stream failure |
 | 7 | Read the header of the range end: it must exist; its hash becomes the new `last_hash`, its time the new `last_time` (S3 D-7). Read the time of every block that has logs | Stream failure |
 | 8 | Map the logs to ledger entries (table below) | — |
 | 9 | Return the entries and the new cursor: `next_block` = range end + 1. The engine commits both in one transaction (SRS — Core FR-107). A range that ends at F also returns the balance checkpoint of UC-304 when its step 1 holds | Rollback |
@@ -290,7 +290,7 @@ All entries have leg `SINGLE`.
 | `Transfer` with `from` = `to`, or with value 0 | Any | Not imported |
 
 - **One operation, one entry:** a debit emits a `Transfer` from the token and a `Debited` from the controller in the same transaction. Each controller event is paired with one `Transfer` of its transaction that has the same token, parties and amount; among several candidates, the one nearest by log index that is not paired yet. A paired `Transfer` produces no entry of its own.
-- **Parties:** a `Debited` pairs with a `Transfer` from `user` to the treasury, a `Refunded` with a `Transfer` from the treasury to `user`. The treasury address is `treasury()` of the controller, read with the start checks.
+- **Parties:** a `Debited` pairs with a `Transfer` from `user` to the treasury, a `Refunded` with a `Transfer` from the treasury to `user`. The treasury address is `treasury()` of the controller, read with the start checks; without a treasury connection it is read once per process, when a range first holds a controller event, without the comparison of the check.
 - **Mint and burn** are transfers from and to the zero address: `DEPOSIT` and `WITHDRAWAL`.
 - **Fields:** `external_id` = `tx_hash:log_index` of the log that produced the entry; `group_id` = `logs:` + `external_id`; `occurred_at` = block time; `asset` and `amount` from the token and its decimals; `raw` = the log with decoded fields (§2.4).
 
@@ -308,7 +308,7 @@ Stream `logs`, every 5 minutes; `TriggerSync`; connection created.
 
 | EC | Case | Handling |
 |---|---|---|
-| EC-306 | The provider rejects the block range or the size of the answer | Step 6: the range is halved, down to one block. The smaller size is kept in memory per network until a restart |
+| EC-306 | The provider rejects the block range or the size of the answer: HTTP 413, or a message of `eth_getLogs` that names a block range, a result count or a response size, recognised before a rate limit | Step 6: the range is halved, down to one block. The smaller size is kept in memory per network until a restart and starts the next run; it grows back only at a restart. One block still rejected: the run fails with an RPC error, so the next run uses the fallback (S3 D-33) |
 | EC-307 | The RPC node lags: it does not have the end of the range yet | Step 7: failure, not "no logs". An empty answer taken as final would skip blocks for good |
 | EC-308 | The last processed block is missing or its hash changed | Steps 3 and 10: critical alert; nothing is rewritten automatically |
 | EC-309 | The same log is read twice: retry, restart, overlapping range | Skipped by the idempotency key (SRS — Core EC-105) |
@@ -422,7 +422,7 @@ Content of `sync_cursors.cursor` per stream.
 ##### Stored log
 
 ###### Description
-Content of `ledger_entries.raw` for an entry of this connector: the log object as returned by the RPC, with the decoded event name and fields added.
+Content of `ledger_entries.raw` for an entry of this connector: the log object as returned by the RPC, every member kept, with the decoded event name and fields added.
 
 ###### Data model
 

@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -98,9 +97,6 @@ func (c *Connector) Budgets(src connector.Source) []connector.Budget {
 		{Name: EndpointFallback, Units: n, Window: time.Second},
 	}
 }
-
-// ErrNotBuilt is the end of a run at the reads that later stages of S3 build: the log filters.
-var ErrNotBuilt = errors.New("evm: not built in st4")
 
 // FetchPage runs the logs stream (UC-303).
 func (c *Connector) FetchPage(ctx context.Context, conn connector.Connection, stream string, mode connector.Mode, cursor json.RawMessage) (connector.Page, error) {

@@ -52,8 +52,7 @@ func (e *ReorgError) Error() string {
 	return fmt.Sprintf("evm: REORG_BELOW_FINAL: block %d: stored hash %s, found %s", e.Block, e.Stored, found)
 }
 
-// logs runs UC-303 steps 2 to 5 and 10 on the endpoint of the run; step 1 is open. The reads of steps 6 to 9 come
-// in st5: a range to read ends the run with ErrNotBuilt.
+// logs runs UC-303 steps 2 to 10 on the endpoint of the run; step 1 is open. Steps 5 to 9 are in logread.go.
 func (s *session) logs(ctx context.Context, mode connector.Mode, cur cursor, raw json.RawMessage) (connector.Page, error) {
 	next := s.cfg.BackfillFloor
 	if cur.NextBlock != nil {
@@ -94,9 +93,8 @@ func (s *session) logs(ctx context.Context, mode connector.Mode, cur cursor, raw
 		return connector.Page{Cursor: same, Mode: mode}, nil
 	}
 
-	// Step 5.
-	from, to := logRange(next, final, s.cfg.LogRangeMax)
-	return connector.Page{}, fmt.Errorf("%w: eth_getLogs of blocks %d to %d (UC-303 steps 6 to 9)", ErrNotBuilt, from, to)
+	// Steps 5 to 9 (logread.go).
+	return s.readPage(ctx, mode, next, final)
 }
 
 // logRange is UC-303 step 5: from next to min(next + size − 1, final). It never ends above final (FR-306). The

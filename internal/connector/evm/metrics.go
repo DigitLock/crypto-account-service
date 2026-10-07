@@ -14,6 +14,8 @@ type Metrics interface {
 	RPCRequest(source, endpoint, method, result string)
 	// FallbackActive sets evm_rpc_fallback_active{source}: 1 when the last run used the fallback endpoint.
 	FallbackActive(source string, active bool)
+	// LogRangeBlocks sets evm_log_range_blocks{source}: the range size in use after splitting (EC-306).
+	LogRangeBlocks(source string, blocks uint64)
 }
 
 // Values of the label result of evm_rpc_requests_total.
@@ -30,6 +32,7 @@ type PromMetrics struct {
 	checks   *prometheus.GaugeVec
 	requests *prometheus.CounterVec
 	fallback *prometheus.GaugeVec
+	ranges   *prometheus.GaugeVec
 }
 
 var _ Metrics = (*PromMetrics)(nil)
@@ -52,8 +55,11 @@ func NewPromMetrics(reg prometheus.Registerer) *PromMetrics {
 		fallback: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "evm_rpc_fallback_active", Help: "1 when the last run of the network used the fallback endpoint.",
 		}, []string{"source"}),
+		ranges: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "evm_log_range_blocks", Help: "Log range size in use after splitting.",
+		}, []string{"source"}),
 	}
-	reg.MustRegister(m.final, m.reorgs, m.checks, m.requests, m.fallback)
+	reg.MustRegister(m.final, m.reorgs, m.checks, m.requests, m.fallback, m.ranges)
 	return m
 }
 
@@ -80,6 +86,11 @@ func (m *PromMetrics) FallbackActive(source string, active bool) {
 	m.fallback.WithLabelValues(source).Set(boolValue(active))
 }
 
+// LogRangeBlocks implements Metrics.
+func (m *PromMetrics) LogRangeBlocks(source string, blocks uint64) {
+	m.ranges.WithLabelValues(source).Set(float64(blocks))
+}
+
 func boolValue(b bool) float64 {
 	if b {
 		return 1
@@ -95,3 +106,4 @@ func (nopMetrics) ReorgBelowFinal(string)                    {}
 func (nopMetrics) StartCheck(string, string, bool)           {}
 func (nopMetrics) RPCRequest(string, string, string, string) {}
 func (nopMetrics) FallbackActive(string, bool)               {}
+func (nopMetrics) LogRangeBlocks(string, uint64)             {}

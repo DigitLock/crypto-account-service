@@ -99,7 +99,7 @@ func (s *session) startChecks(ctx context.Context) error {
 				s.cfg.ControllerAddress, token.Hex()))
 		}
 		n.mu.Lock()
-		n.tokenChecked = true
+		n.token, n.tokenChecked = token, true
 		n.mu.Unlock()
 		s.checkPassed(CheckToken)
 	}
@@ -132,7 +132,7 @@ func (s *session) startChecks(ctx context.Context) error {
 				treasury.Hex(), address))
 		}
 		n.mu.Lock()
-		n.treasury, n.treasuryOK = treasury, true
+		n.treasury, n.treasuryOK, n.treasuryKnown = treasury, true, true
 		n.mu.Unlock()
 		s.checkPassed(CheckTreasury)
 	}

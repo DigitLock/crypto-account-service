@@ -41,9 +41,12 @@ type network struct {
 	onFallback     bool            // the next run uses the fallback
 	chainChecked   map[string]bool // endpoint → the chain ID check passed
 	tokenChecked   bool
-	treasury       common.Address // treasury() of the controller, once the treasury check passed
+	token          common.Address // token() of the controller, once the token check passed
+	treasury       common.Address // treasury() of the controller, once the treasury check passed or read for pairing
 	treasuryOK     bool
-	treasuryWarned bool // the WARN line of an unset treasury_connection is written once per start
+	treasuryKnown  bool   // treasury holds treasury() of the controller
+	treasuryWarned bool   // the WARN line of an unset treasury_connection is written once per start
+	rangeSize      uint64 // log range size after splitting (EC-306); 0: log_range_max
 }
 
 func (c *Connector) network(code string) *network {
@@ -183,6 +186,10 @@ func (s *session) call(ctx context.Context, result any, method string, args ...a
 	case ctx.Err() != nil:
 		// Stopped from outside: not a failure of the endpoint.
 		return ctx.Err()
+	case method == "eth_getLogs" && isTooLarge(err):
+		// Before the rate limit: some providers answer -32005 for both (EC-306).
+		s.c.metrics.RPCRequest(s.src.Code, s.endpoint, method, ResultFailure)
+		return &tooLargeError{&rpcFailure{variable: s.variable(), method: method, cause: s.client.DescribeErr(err, CallTimeout)}}
 	case chain.IsRateLimit(err):
 		pause, ok := retry.get()
 		if !ok {
