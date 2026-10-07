@@ -67,6 +67,7 @@ func newFakeNode(t *testing.T, answers map[string]any) (*fakeNode, string) {
 
 // useEVM registers an EVM connector with the endpoint of anvil (none when url is empty), sets the values of the
 // source anvil for the fixture addresses and its alias row; the config is restored at the end of the test.
+// rpc_rate_limit 100: the limiter waits on the fake clock, and a run of both streams can send more than 5 requests.
 func (h *harness) useEVM(t *testing.T, url string) {
 	t.Helper()
 	endpoints := map[string]evm.Endpoints{}
@@ -79,8 +80,8 @@ func (h *harness) useEVM(t *testing.T, url string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { h.exec(t, `UPDATE sources SET config = $1 WHERE code = 'anvil'`, saved) })
-	h.exec(t, `UPDATE sources SET config = config || jsonb_build_object('controller_address', $1::text, 'backfill_floor', 0)
-		WHERE code = 'anvil'`, evmController.Hex())
+	h.exec(t, `UPDATE sources SET config = config || jsonb_build_object('controller_address', $1::text, 'backfill_floor', 0,
+		'rpc_rate_limit', 100) WHERE code = 'anvil'`, evmController.Hex())
 	h.exec(t, `INSERT INTO asset_aliases (source_id, native_asset, asset, decimals)
 		SELECT id, $1, 'USDC', 6 FROM sources WHERE code = 'anvil' ON CONFLICT DO NOTHING`, evmToken.Hex())
 }
@@ -145,6 +146,8 @@ func TestT204_ReorgLeavesStoredDataUnchanged(t *testing.T) {
 		"eth_call":                       tokenAnswer(),
 		"eth_blockNumber":                hexutil.Uint64(100),
 		"eth_getBlockByNumber/" + "0x13": map[string]any{"number": "0x13", "hash": found, "timestamp": "0x1"},
+		// The balances stream: the head block; its balanceOf is answered by the eth_call above.
+		"eth_getBlockByNumber/latest": map[string]any{"number": "0x64", "hash": common.HexToHash("0x64"), "timestamp": "0x64"},
 	})
 	h.useEVM(t, url)
 	id := h.wallet(t)

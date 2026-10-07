@@ -2,6 +2,7 @@ package evm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -52,8 +53,9 @@ func (s *session) checkFailed(ctx context.Context, check, detail string) error {
 func (s *session) checkPassed(check string) { s.c.metrics.StartCheck(s.src.Code, check, false) }
 
 // startChecks runs the checks that have not passed yet (S3 D-23): the chain ID of the endpoint of the run, token()
-// of the controller among the tracked tokens, treasury() of the controller equal to treasury_address. A check that
-// passed is kept until the process stops. An RPC error of a check is an RPC error of the run, not a failed check.
+// of the controller among the tracked tokens and every tracked token with 0 to 18 decimals, treasury() of the
+// controller equal to treasury_address. A check that passed is kept until the process stops. An RPC error of a
+// check is an RPC error of the run, not a failed check; a controller without code is a failed check.
 func (s *session) startChecks(ctx context.Context) error {
 	n := s.net
 	n.mu.Lock()
@@ -79,7 +81,16 @@ func (s *session) startChecks(ctx context.Context) error {
 	}
 
 	if !tokenChecked {
+		// The decimals of every alias row first: a local check, no request.
+		for _, a := range s.src.Aliases {
+			if _, err := tokenDecimals(a); err != nil {
+				return s.checkFailed(ctx, CheckToken, err.Error())
+			}
+		}
 		token, err := s.controllerAddress(ctx, "token")
+		if errors.Is(err, errNoCode) {
+			return s.checkFailed(ctx, CheckToken, err.Error())
+		}
 		if err != nil {
 			return err
 		}
@@ -106,6 +117,9 @@ func (s *session) startChecks(ctx context.Context) error {
 	}
 	if !treasuryOK {
 		treasury, err := s.controllerAddress(ctx, "treasury")
+		if errors.Is(err, errNoCode) {
+			return s.checkFailed(ctx, CheckTreasury, err.Error())
+		}
 		if err != nil {
 			return err
 		}
@@ -135,18 +149,27 @@ func (s *session) tracked(address common.Address) bool {
 	return false
 }
 
+// errNoCode marks an empty answer of an eth_call to the controller: no contract at controller_address. It is a
+// failed start check, a configuration error, not an RPC error: the endpoint of the next run does not change.
+var errNoCode = errors.New("evm: no contract code")
+
 // controllerAddress calls a constant of the controller that returns an address: token() or treasury().
 func (s *session) controllerAddress(ctx context.Context, method string) (common.Address, error) {
 	data, err := controllerABI.Pack(method)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("evm: pack %s(): %w", method, err)
 	}
-	var out hexutil.Bytes
+	var out *hexutil.Bytes // nil for a null result
 	call := map[string]any{"to": common.HexToAddress(s.cfg.ControllerAddress), "data": hexutil.Bytes(data)}
 	if err := s.call(ctx, &out, "eth_call", call, "latest"); err != nil {
 		return common.Address{}, err
 	}
-	values, err := controllerABI.Unpack(method, out)
+	// "0x" or a null result: an address without code.
+	if out == nil || len(*out) == 0 {
+		return common.Address{}, fmt.Errorf("%w at controller_address %s: %s() answered no data",
+			errNoCode, s.cfg.ControllerAddress, method)
+	}
+	values, err := controllerABI.Unpack(method, *out)
 	if err != nil || len(values) != 1 {
 		return common.Address{}, fmt.Errorf("evm: %s: %s() of the controller %s: malformed answer: no contract at the address?",
 			s.variable(), method, s.cfg.ControllerAddress)

@@ -1,7 +1,7 @@
 // Package evm is the connector of EVM networks (SRS — EVM Connector). C1 holds the wallet address check of
 // UC-301 and the allow-list of chain IDs; S3 adds the parsing of sources.config (config.go), the RPC access with
-// one endpoint per run (rpc.go), the start checks (checks.go) and the log stream (logs.go). It holds no key and
-// sends no transaction (ADR-3, FR-313): read methods only.
+// one endpoint per run (rpc.go), the start checks (checks.go), the balance stream (balances.go) and the log stream
+// (logs.go). It holds no key and sends no transaction (ADR-3, FR-313): read methods only.
 package evm
 
 import (
@@ -99,8 +99,8 @@ func (c *Connector) Budgets(src connector.Source) []connector.Budget {
 	}
 }
 
-// ErrNotBuilt is the end of a run at the reads that later stages of S3 build: the log filters and the balances.
-var ErrNotBuilt = errors.New("evm: not built in st3")
+// ErrNotBuilt is the end of a run at the reads that later stages of S3 build: the log filters.
+var ErrNotBuilt = errors.New("evm: not built in st4")
 
 // FetchPage runs the logs stream (UC-303).
 func (c *Connector) FetchPage(ctx context.Context, conn connector.Connection, stream string, mode connector.Mode, cursor json.RawMessage) (connector.Page, error) {
@@ -120,15 +120,16 @@ func (c *Connector) FetchPage(ctx context.Context, conn connector.Connection, st
 	return page, err
 }
 
-// FetchSnapshot runs the balances stream (UC-302): the endpoint choice and the start checks of this stage; the
-// balance reads come in st4.
+// FetchSnapshot runs the balances stream (UC-302): the endpoint choice and the start checks, then the balances of
+// the tracked tokens at the head block (balances.go).
 func (c *Connector) FetchSnapshot(ctx context.Context, conn connector.Connection) (connector.Snapshot, error) {
 	s, err := c.open(ctx, conn)
+	var snap connector.Snapshot
 	if err == nil {
-		err = fmt.Errorf("%w: balances of UC-302 steps 2 to 4", ErrNotBuilt)
+		snap, err = s.snapshot(ctx)
 	}
 	s.close(err)
-	return connector.Snapshot{}, err
+	return snap, err
 }
 
 // CheckAddress applies UC-301 steps 1 to 3 and returns the address in EIP-55 form.

@@ -448,6 +448,18 @@ func (h *harness) apiClient(t *testing.T) (casv1.ConnectionServiceClient, contex
 // apiClientWithMetrics is apiClient with grpc_request_seconds registered in reg.
 func (h *harness) apiClientWithMetrics(t *testing.T, reg prometheus.Registerer) (casv1.ConnectionServiceClient, context.Context) {
 	t.Helper()
+	return casv1.NewConnectionServiceClient(h.apiConn(t, reg)), metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+h.token)
+}
+
+// dataClient is the AccountDataService of cmd/server on the same database and connections, as tenant-a.
+func (h *harness) dataClient(t *testing.T) (casv1.AccountDataServiceClient, context.Context) {
+	t.Helper()
+	return casv1.NewAccountDataServiceClient(h.apiConn(t, nil)), metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+h.token)
+}
+
+// apiConn serves the gRPC API of cmd/server over an in-memory listener until the end of the test.
+func (h *harness) apiConn(t *testing.T, reg prometheus.Registerer) *grpc.ClientConn {
+	t.Helper()
 	srv := api.NewServer(api.Deps{Credentials: repository.New(h.server), Connections: h.conns, Logger: h.logger, Metrics: reg})
 	lis := bufconn.Listen(1 << 20)
 	go func() { _ = srv.Serve(lis) }()
@@ -461,5 +473,5 @@ func (h *harness) apiClientWithMetrics(t *testing.T, reg prometheus.Registerer) 
 		_ = conn.Close()
 		srv.Stop()
 	})
-	return casv1.NewConnectionServiceClient(conn), metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+h.token)
+	return conn
 }

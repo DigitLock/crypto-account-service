@@ -35,7 +35,7 @@
 |---|---|---|---|
 | 1 | Contract, configuration, migrations | st2 | 8 |
 | 2 | Finality, reorg guard, start checks | st3 | 15 |
-| 3 | Balance stream | st4 | 6 |
+| 3 | Balance stream | st4 | 7 |
 | 4 | Log stream, connector suite | st5 | 20 |
 | 5 | Completeness and treasury | st6 | 9 |
 | 6 | Reconciliation | st7 | 16 |
@@ -88,6 +88,7 @@
 | S3-T304 | Base units to decimals | Balance 29866387 base units, `decimals` 6 | Run `balances` | `free` = `29.866387`; no float in the path | §2.1.1 Amounts | — |
 | S3-T305 | Interval and trigger | W created | Read the declared streams; call `TriggerSync` | `balances` every 15 min from `sources.config`; first run at creation; `TriggerSync` runs it | UC-302 trigger; Core FR-120 | — |
 | S3-T306 | Limiter | Limiter with a counting budget | One `balances` run | Every request reserves cost 1 in the budget of its endpoint before it is sent | Core FR-110; §3.2 | — |
+| S3-T307 | Oversized balance | A balance of W with more than 20 integer digits (mint on Anvil) | Run `balances` | The snapshot is refused as a whole (EC-117); the previous one is returned and becomes stale; the run fails | EC-319; Core EC-117; S3 D-37 | — |
 
 ### Phase 4 — Log stream, connector suite (st5)
 
@@ -202,6 +203,7 @@
 | EC-309 | T411 | EC-317 | T504, T802 |
 | EC-310 | T406 | EC-122 | T108, T506 |
 | EC-311 | T407 | EC-123 | T616 |
+| EC-319 | T307 | | |
 
 ### Coverage of the exit criteria
 

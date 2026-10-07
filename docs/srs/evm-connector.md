@@ -12,7 +12,7 @@
   - the authorization flow, the contract and the reconciliation rules: [SRS — Card Spend](card-spend.md);
   - real-time signals: `card-auth` tracks its own transactions (ADR-13). This connector reads logs from final blocks only.
 - **Parents:** [BRD](../brd.md) BR-1, BR-3, BR-4, BR-5, BR-12; [PRD — Card Spend](../prd/card-spend.md) US-13; [ADR](../adr/README.md) 2, 3, 5, 6, 8, 11, 13.
-- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); endpoint variables and network errors of `sources.config` (S3 D-29, S3 D-30); tracked tokens with the source, `treasury_address`, endpoint choice per source, call timeout and rate-limit pause, required `controller_address` and `backfill_floor` (S3 D-31 … S3 D-34, S3 D-36); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
+- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); endpoint variables and network errors of `sources.config` (S3 D-29, S3 D-30); tracked tokens with the source, `treasury_address`, endpoint choice per source, call timeout and rate-limit pause, required `controller_address` and `backfill_floor` (S3 D-31 … S3 D-34, S3 D-36); an oversized balance refuses the snapshot, EC-319 (S3 D-37); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
 - **Network facts:** finality stages and their timing are taken from the Base documentation for Base mainnet, checked on 2026-10-03. Base Sepolia may differ; the values are measured at S3.
 
 | Term | Meaning |
@@ -97,7 +97,7 @@ sequenceDiagram
 - **Read-only:** the connector holds no key and sends no transaction (ADR-3).
 - **Test networks only:** the chain ID of a source must be in the allow-list `EVM_ALLOWED_CHAIN_IDS`: 31337 (Anvil) and 84532 (Base Sepolia) by default (BRD §9.2). A source outside the list is not available: it is not offered and no connection is created on it. Checked from C1 (FR-318).
 - **Address:** 20 bytes. Stored and returned in EIP-55 form; compared without regard to case.
-- **Tracked tokens:** only tokens listed in `asset_aliases` are read; the connector gets them with the source (SRS — Core Connector contract, S3 D-31). MVP: `MockUSDC`. A tracked token must be a plain ERC-20: at most 18 decimals, no fee on transfer, no rebasing, a `Transfer` log for every balance change including mint and burn.
+- **Tracked tokens:** only tokens listed in `asset_aliases` are read; the connector gets them with the source (SRS — Core Connector contract, S3 D-31). MVP: `MockUSDC`. A tracked token must be a plain ERC-20: 0 to 18 decimals in its alias row, checked by the start check `token`, no fee on transfer, no rebasing, a `Transfer` log for every balance change including mint and burn.
 - **Amounts:** `uint256` base units → decimal amount with the token's `decimals` from `asset_aliases`. No floats.
 - **Logs: final blocks only.** No log above the final block is read (ADR-11).
 - **Balances: at the head.** A snapshot is replaced by the next one, so a reorg cannot leave a wrong value behind.
@@ -107,9 +107,9 @@ sequenceDiagram
   - the treasury connection is the one named in `treasury_connection` of the source, in the platform tenant `cas-platform`. It sees the transfers of the treasury and every `Debited` and `Refunded` event. Reconciliation reads its entries (§2.4).
 - **Start checks per network** (S3 D-23):
   - the chain ID of the endpoint equals `chain_id` of the source and is in the allow-list;
-  - `token()` of the controller is a tracked token;
+  - `token()` of the controller is a tracked token, and every alias row of the source has 0 to 18 decimals; a controller without code (`eth_call` answers no data) fails this check, and `treasury()` the next one;
   - the address of the treasury connection, `treasury_address` of `sources.config`, equals `treasury()` of the controller (S3 D-32).
-- **When the checks run:** before the first run of a stream of the network after `server` starts, and again before each run while a check fails. Checks that passed are kept until `server` stops. The fallback endpoint is checked when a run first uses it (UC-303 step 1).
+- **When the checks run:** before the first run of a stream of the network after `server` starts, and again before each run while a check fails. Checks that passed are kept until `server` stops. The fallback endpoint is checked when a run first uses it (UC-303 step 1). A change of `controller_address`, `treasury_address` or an alias row while `server` runs is checked after the next start.
 - **A failed check** fails the run: nothing else is read, the failure counts as any failed run (SRS — Core UC-102 step 8: backoff, `DEGRADED` after the threshold), `evm_start_check_failed{source,check}` is 1, critical alert.
 - **An RPC error during a check** is an RPC error of the run (S3 D-33): the endpoint of the next run changes, the check stays to be done. A wrong value is a failed check.
 - **No treasury connection yet:** `treasury_connection` of the source is not set. The treasury check is skipped with one WARN line per start; wallet streams run; reconciliation of the source does not run (SRS — Card Spend UC-4).
@@ -240,8 +240,9 @@ Steps 1–4.
 
 | EC | Case | Handling |
 |---|---|---|
-| EC-304 | One of the reads fails | Step 4: no partial snapshot; the previous one is still returned and becomes stale by age (SRS — Core §2.1.3) |
+| EC-304 | One of the reads fails | Step 4: no partial snapshot; the previous one is still returned and becomes stale by age (SRS — Core §2.1.3). A `balanceOf` without data (no contract at the address of an alias row) fails the run without an endpoint switch |
 | EC-305 | The endpoint reports another chain ID | Nothing is read; the stream fails; critical alert |
+| EC-319 | A balance has more than 20 integer digits. Anyone can mint `MockUSDC`, so a wallet can be given such a balance | Accepted as a limit of the demo (S3 D-37): the ledger writer refuses the whole snapshot (SRS — Core EC-117), the previous one stays and becomes stale by age. `docs/backlog.md` |
 
 ##### Acceptance Criteria
 
