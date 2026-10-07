@@ -98,15 +98,16 @@ func Migrator(t testing.TB) *migrate.Migrate {
 	return m
 }
 
-// Clean empties the tables of the test database and keeps the seeded sources.
+// Clean empties the tables of the test database and keeps the seeded sources and the alias of base-sepolia
+// seeded with them (migration 000007). A test that changes the config of a seeded source restores it.
 func Clean(t testing.TB) {
 	t.Helper()
 	pool := newPool(t, URL(t))
 	for _, stmt := range []string{
 		`TRUNCATE tenants, api_credentials, connections, sync_cursors, balance_snapshots, snapshot_balances,
 			ledger_entries, audit_log, cards, authorizations, authorization_events, returns, operator_txs,
-			operator_accounts RESTART IDENTITY CASCADE`,
-		`DELETE FROM asset_aliases`,
+			operator_accounts, reconciliation_runs, balance_checkpoints RESTART IDENTITY CASCADE`,
+		`DELETE FROM asset_aliases WHERE source_id NOT IN (SELECT id FROM sources WHERE code = 'base-sepolia')`,
 		`DELETE FROM sources WHERE code NOT IN ('anvil', 'base-sepolia')`,
 		// Every setup inserts the source fake again; without this the SMALLINT identity of sources.id
 		// grows with every run of the suite until it overflows.

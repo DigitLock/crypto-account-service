@@ -1,5 +1,6 @@
 // Package evm is the connector of EVM networks (SRS — EVM Connector). C1 holds the wallet address check
-// of UC-301 and the allow-list of chain IDs. It has no RPC client and imports nothing of the network.
+// of UC-301 and the allow-list of chain IDs; S3 adds the parsing of sources.config (config.go). It has no RPC
+// client and imports nothing of the network.
 package evm
 
 import (

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,7 +35,7 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Getenv, os.Stderr)
+	err := run(ctx, os.Getenv, envNames(os.Environ()), os.Stderr)
 	stop()
 	if err != nil {
 		// Errors of run name variables and never carry a secret.
@@ -43,10 +44,21 @@ func main() {
 	}
 }
 
-// run starts the servers and blocks until ctx is cancelled or a server fails.
+// envNames returns the names of the variables of environ, in the form of os.Environ.
+func envNames(environ []string) []string {
+	names := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		names = append(names, name)
+	}
+	return names
+}
+
+// run starts the servers and blocks until ctx is cancelled or a server fails. names are the names of the
+// variables of the environment (config.Load).
 // The database is not pinged here: an unreachable database makes /readyz answer 503.
-func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
-	cfg, err := config.Load(getenv)
+func run(ctx context.Context, getenv func(string) string, names []string, stderr io.Writer) error {
+	cfg, err := config.Load(getenv, names...)
 	if err != nil {
 		return err
 	}

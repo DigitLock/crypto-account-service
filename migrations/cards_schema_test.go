@@ -96,7 +96,7 @@ func TestT301_CardTablesUpDownUp(t *testing.T) {
 		t.Fatalf("migrate up from empty: %v", err)
 	}
 	assertVersion(t, m, migrations.Latest())
-	want := slices.Sorted(slices.Values(append(slices.Clone(coreTables), cardTables...)))
+	want := slices.Sorted(slices.Values(slices.Concat(coreTables, cardTables, s3Tables)))
 	if got := tables(t, owner); !slices.Equal(got, want) {
 		t.Errorf("tables = %v, want %v", got, want)
 	}

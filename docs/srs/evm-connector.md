@@ -12,7 +12,7 @@
   - the authorization flow, the contract and the reconciliation rules: [SRS — Card Spend](card-spend.md);
   - real-time signals: `card-auth` tracks its own transactions (ADR-13). This connector reads logs from final blocks only.
 - **Parents:** [BRD](../brd.md) BR-1, BR-3, BR-4, BR-5, BR-12; [PRD — Card Spend](../prd/card-spend.md) US-13; [ADR](../adr/README.md) 2, 3, 5, 6, 8, 11, 13.
-- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network (S3 D-12, S3 D-17); source without an RPC URL (S3 D-16); start checks (S3 D-23); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
+- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
 - **Network facts:** finality stages and their timing are taken from the Base documentation for Base mainnet, checked on 2026-10-03. Base Sepolia may differ; the values are measured at S3.
 
 | Term | Meaning |
@@ -397,7 +397,7 @@ Rows added by the migration that introduces a network, and the tenant and connec
 | Table | Row |
 |---|---|
 | `sources` | One row per network: `code = anvil` or `base-sepolia`, `kind = EVM`, `config` with the values of §3.1. The migrations of C1 add both rows, enabled, with `chain_id` only. A migration of S3 adds the values of §3.1 that do not depend on a deployment to both rows, and `controller_address` and `backfill_floor` to `base-sepolia`; it keeps a `treasury_connection` already written. The values of `anvil` that depend on its deployment are set with `casctl source set` (S3 D-17). S2 adds nothing here: `card-auth` reads the shared values from its own environment (SRS — Card Spend §3.1) |
-| `asset_aliases` | One row per tracked token: `native_asset` = token address, `asset` = `USDC`, `decimals` = 6 for `MockUSDC` |
+| `asset_aliases` | One row per tracked token: `native_asset` = token address in EIP-55 form, `asset` = `USDC`, `decimals` = 6 for `MockUSDC`. `base-sepolia`: added by the migration of S3. `anvil`: the address depends on the deployment, so `casctl source set anvil token_address=<address>` writes the row (S3 D-27) |
 | `tenants` | The platform tenant `cas-platform`: created once per database with `casctl tenant create cas-platform` (S3 D-1) |
 | `connections` | The treasury connection, after the contract is deployed: created through the API in the platform tenant, `CreateConnection` with the treasury address as `wallet`, `owner_ref` `treasury`, label `Treasury` (S3 D-22). Then `casctl source set-treasury <source> <connection_id>` checks that it is an `EVM_WALLET` connection of that source and writes its ID to `treasury_connection` (S3 D-2) |
 
@@ -487,7 +487,7 @@ Conditions are in the Alert column above. S3 exposes the metrics only (S3 D-11).
 | Local chain | Anvil with `MockUSDC` and the controller deployed, on the test database; scripted mint, transfers, debit, refund, then enough blocks to make them final | End to end: entries, snapshot, gap = 0. A reorg below the cursor is produced by returning the chain to a saved state and mining other blocks |
 | Public test network | Base Sepolia with the contracts deployed in S2 | Finality tags and their real distance from the head, range limits of the provider, state reads at the final block (§4) |
 
-- **Fixtures** (S3 D-13): one JSON file per case, the ordered list of `{method, params, result | error}`. Recorded from Anvil by a recording transport that stores no URL; error answers of a provider — range too large, rate limit, lagging node — are written by hand. Nothing is recorded from a public network. `testdata/` is scanned for secrets in CI.
+- **Fixtures** (S3 D-13, S3 D-28): one JSON file per case, the ordered list of `{method, params, result | error | http_status}`; `http_status` is an HTTP answer without a JSON-RPC body, such as a rate limit (429), written by hand. A batch request takes one entry per element, in order. Recorded from Anvil by a recording transport that stores no URL; error answers of a provider — range too large, rate limit, lagging node — are written by hand. Nothing is recorded from a public network. `testdata/` is scanned for secrets in CI.
 
 FR-316 and FR-317 apply from S3.
 
@@ -532,7 +532,7 @@ Values per network (S3 D-17). A dash: the default applies.
 | `treasury_connection` | `casctl source set-treasury` | `casctl source set-treasury` |
 | `log_range_max`, `rpc_rate_limit`, `completeness_interval`, `sync_interval` | — | — until the measurements of S3 (§4, issue 6) |
 
-- `casctl source set <source> <key>=<value>` accepts `controller_address` and `backfill_floor` only; tests write their own values.
+- `casctl source set <source> <key>=<value>` accepts `controller_address`, `backfill_floor` and `token_address` only; `token_address` writes the alias row of the tracked token (§2.4, S3 D-27); tests write their own values.
 
 ### 3.2 General Non-functional Requirements
 

@@ -1,4 +1,5 @@
-// Command casctl manages tenants, service tokens and processor credentials of CAS (SRS — Core UC-105).
+// Command casctl manages tenants, service tokens and processor credentials of CAS and sets values of EVM sources
+// (SRS — Core UC-105).
 // It connects with the owner role through CASCTL_DATABASE_URL only. The group sim plays the processor against the
 // API of card-auth (SRS — Card Spend §2.1.1) and never opens the database.
 package main
@@ -319,7 +320,32 @@ func (a *app) processorCmd() *cobra.Command {
 }
 
 func (a *app) sourceCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "source", Short: "Development seeds of sources"}
+	cmd := &cobra.Command{Use: "source", Short: "Set values of EVM sources; development seeds of sources"}
+	cmd.AddCommand(&cobra.Command{
+		Use: "set <source> <key>=<value>",
+		Short: "Set one value of an EVM source: controller_address, backfill_floor (sources.config) or " +
+			"token_address (alias of the tracked token, USDC with 6 decimals)",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key, value, ok := strings.Cut(args[1], "=")
+			if !ok {
+				return errors.New("the second argument must be <key>=<value>")
+			}
+			reg, err := a.registry(cmd.Context())
+			if err != nil {
+				return err
+			}
+			previous, stored, err := setSourceValue(cmd.Context(), reg, args[0], key, value)
+			if err != nil {
+				return err
+			}
+			if previous == "" {
+				previous = "unset"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Source %s, %s: previous %s, new %s\n", args[0], key, previous, stored)
+			return nil
+		},
+	})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "add-fake",
 		Short: "Add the source fake of the fake connector and the aliases of its assets. Development and demo only",

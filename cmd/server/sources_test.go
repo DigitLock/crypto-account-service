@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -35,7 +37,7 @@ func startServer(t *testing.T, env map[string]string) running {
 	logs := &syncBuffer{}
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- run(runCtx, getenvFrom(env), logs) }()
+	go func() { done <- run(runCtx, getenvFrom(env), slices.Collect(maps.Keys(env)), logs) }()
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {

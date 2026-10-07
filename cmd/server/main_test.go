@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -88,7 +89,7 @@ func runWithTimeout(t *testing.T, env map[string]string, stderr io.Writer) error
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return run(ctx, getenvFrom(env), stderr)
+	return run(ctx, getenvFrom(env), slices.Collect(maps.Keys(env)), stderr)
 }
 
 // C1-T101 — Req: §3.1
@@ -151,7 +152,7 @@ func TestT104_RunServesHealthPortAndGRPC(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, getenvFrom(env), &logs) }()
+	go func() { done <- run(ctx, getenvFrom(env), slices.Collect(maps.Keys(env)), &logs) }()
 	t.Cleanup(func() {
 		cancel()
 		<-done
@@ -219,6 +220,62 @@ func TestT104_RunServesHealthPortAndGRPC(t *testing.T) {
 			t.Errorf("log contains %q", s)
 		}
 	}
+}
+
+// S3-T105, the part of st2 — Req: SRS — EVM Connector §3.2 Security; S3 D-16. The endpoint URLs carry a fake key
+// generated at run time in the path and the query: the start log shows each variable as set or unset, and a
+// malformed value stops the start with an error that names the variable only. The failed runs come in st3.
+func TestT105_EVMEndpointsNotPrinted(t *testing.T) {
+	key := make([]byte, 16)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	fakeKey := base64.RawURLEncoding.EncodeToString(key)
+	primary := "http://127.0.0.1:" + strconv.Itoa(freePort(t)) + "/v2/" + fakeKey + "?apikey=" + fakeKey
+	fallback := "https://rpc.example.invalid/" + fakeKey + "?token=" + fakeKey
+
+	t.Run("start log", func(t *testing.T) {
+		env := testEnv(t)
+		env["EVM_RPC_URL_ANVIL"] = primary
+		env["EVM_RPC_FALLBACK_URL_ANVIL"] = fallback
+		env["EVM_RPC_FALLBACK_URL_BASE_SEPOLIA"] = fallback
+		var logs syncBuffer
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- run(ctx, getenvFrom(env), slices.Collect(maps.Keys(env)), &logs) }()
+		waitFor(t, "http://127.0.0.1:"+env["HEALTH_HTTP_PORT"]+"/healthz", http.StatusOK)
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		out := logs.String()
+		for _, want := range []string{
+			`"EVM_RPC_URL_ANVIL":"set"`, `"EVM_RPC_FALLBACK_URL_ANVIL":"set"`,
+			`"EVM_RPC_URL_BASE_SEPOLIA":"unset"`, `"EVM_RPC_FALLBACK_URL_BASE_SEPOLIA":"set"`,
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("start log without %s:\n%s", want, out)
+			}
+		}
+		for _, s := range []string{fakeKey, primary, fallback, "rpc.example.invalid", "/v2/"} {
+			if strings.Contains(out, s) {
+				t.Errorf("log contains a part of an endpoint URL: %q", s)
+			}
+		}
+	})
+
+	t.Run("malformed value", func(t *testing.T) {
+		env := testEnv(t)
+		env["EVM_RPC_URL_ANVIL"] = "ftp://rpc.example.invalid/" + fakeKey
+		var stderr bytes.Buffer
+		err := runWithTimeout(t, env, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "EVM_RPC_URL_ANVIL") {
+			t.Fatalf("run = %v, want an error that names EVM_RPC_URL_ANVIL", err)
+		}
+		if strings.Contains(err.Error()+stderr.String(), fakeKey) || strings.Contains(err.Error(), "rpc.example.invalid") {
+			t.Errorf("the error or the log prints the value: %v", err)
+		}
+	})
 }
 
 func status(t *testing.T, u string) int {

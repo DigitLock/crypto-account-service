@@ -44,6 +44,21 @@ func (q *Queries) AddFakeSource(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deleteSourceAliasesOfAsset = `-- name: DeleteSourceAliasesOfAsset :exec
+DELETE FROM asset_aliases
+WHERE source_id = $1 AND asset = $2
+`
+
+type DeleteSourceAliasesOfAssetParams struct {
+	SourceID int16
+	Asset    string
+}
+
+func (q *Queries) DeleteSourceAliasesOfAsset(ctx context.Context, arg DeleteSourceAliasesOfAssetParams) error {
+	_, err := q.db.Exec(ctx, deleteSourceAliasesOfAsset, arg.SourceID, arg.Asset)
+	return err
+}
+
 const getSourceByCode = `-- name: GetSourceByCode :one
 SELECT id, code, kind, enabled, config
 FROM sources
@@ -61,6 +76,61 @@ func (q *Queries) GetSourceByCode(ctx context.Context, code string) (Source, err
 		&i.Config,
 	)
 	return i, err
+}
+
+const insertSourceAlias = `-- name: InsertSourceAlias :exec
+INSERT INTO asset_aliases (source_id, native_asset, asset, decimals)
+VALUES ($1, $2, $3, $4)
+`
+
+type InsertSourceAliasParams struct {
+	SourceID    int16
+	NativeAsset string
+	Asset       string
+	Decimals    *int16
+}
+
+func (q *Queries) InsertSourceAlias(ctx context.Context, arg InsertSourceAliasParams) error {
+	_, err := q.db.Exec(ctx, insertSourceAlias,
+		arg.SourceID,
+		arg.NativeAsset,
+		arg.Asset,
+		arg.Decimals,
+	)
+	return err
+}
+
+const listSourceAliasesOfAsset = `-- name: ListSourceAliasesOfAsset :many
+SELECT native_asset
+FROM asset_aliases
+WHERE source_id = $1 AND asset = $2
+ORDER BY native_asset
+`
+
+type ListSourceAliasesOfAssetParams struct {
+	SourceID int16
+	Asset    string
+}
+
+// The aliases of a source that map to one canonical asset: the tracked token of an EVM source.
+func (q *Queries) ListSourceAliasesOfAsset(ctx context.Context, arg ListSourceAliasesOfAssetParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSourceAliasesOfAsset, arg.SourceID, arg.Asset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var native_asset string
+		if err := rows.Scan(&native_asset); err != nil {
+			return nil, err
+		}
+		items = append(items, native_asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listSources = `-- name: ListSources :many
@@ -94,4 +164,43 @@ func (q *Queries) ListSources(ctx context.Context) ([]Source, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockSourceByCode = `-- name: LockSourceByCode :one
+SELECT id, code, kind, enabled, config
+FROM sources
+WHERE code = $1
+FOR UPDATE
+`
+
+// casctl source set: the source row, locked until the end of the transaction.
+func (q *Queries) LockSourceByCode(ctx context.Context, code string) (Source, error) {
+	row := q.db.QueryRow(ctx, lockSourceByCode, code)
+	var i Source
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Kind,
+		&i.Enabled,
+		&i.Config,
+	)
+	return i, err
+}
+
+const setSourceConfigValue = `-- name: SetSourceConfigValue :exec
+UPDATE sources
+SET config = config || jsonb_build_object($1::text, $2::jsonb)
+WHERE id = $3
+`
+
+type SetSourceConfigValueParams struct {
+	Key   string
+	Value []byte
+	ID    int16
+}
+
+// One key of sources.config; the other keys are kept.
+func (q *Queries) SetSourceConfigValue(ctx context.Context, arg SetSourceConfigValueParams) error {
+	_, err := q.db.Exec(ctx, setSourceConfigValue, arg.Key, arg.Value, arg.ID)
+	return err
 }

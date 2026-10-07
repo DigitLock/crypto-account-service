@@ -396,7 +396,8 @@ func tenantRows(t *testing.T, pool *pgxpool.Pool) string {
 
 // C1-T407 — Req: FR-105. Every method of every service of cas.v1, read from the descriptors, so that a
 // method added later is covered. With a valid token a method must not answer UNAUTHENTICATED.
-// Since S2 st4 this covers CardService too: the 8 methods of C1 and the 6 of CardService.
+// Since S2 st4 this covers CardService too: the 8 methods of C1 and the 6 of CardService. Since S3 st2 also
+// GetReconciliationReport, which answers UNIMPLEMENTED until it is built in S3 st7.
 func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 	e := setup(t)
 	e.tenant(t, "tenant-a")
@@ -415,9 +416,10 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 		}
 		return true
 	})
-	if len(methods) != 14 {
-		t.Errorf("cas.v1 has %d methods, want 14", len(methods))
+	if len(methods) != 15 {
+		t.Errorf("cas.v1 has %d methods, want 15", len(methods))
 	}
+	notBuilt := map[string]bool{"GetReconciliationReport": true}
 
 	for _, md := range methods {
 		name := "/" + string(md.Parent().FullName()) + "/" + string(md.Name())
@@ -433,8 +435,11 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 			}
 			assertCode(t, "without a token", call(ctx), codes.Unauthenticated)
 			// With a valid token the method runs: any answer but UNAUTHENTICATED, and every method of cas.v1
-			// is implemented.
-			if err := call(bearer(tok.Value)); status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.Unimplemented {
+			// but the ones not built yet is implemented.
+			err := call(bearer(tok.Value))
+			if notBuilt[string(md.Name())] {
+				assertCode(t, "with a valid token, not built yet", err, codes.Unimplemented)
+			} else if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.Unimplemented {
 				t.Errorf("with a valid token: %v", err)
 			}
 		})

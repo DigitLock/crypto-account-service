@@ -14,7 +14,7 @@ import (
 func TestT204_CardServiceDescriptors(t *testing.T) {
 	fd := casv1.File_cas_v1_card_service_proto
 
-	t.Run("six methods", func(t *testing.T) {
+	t.Run("six methods of S2", func(t *testing.T) {
 		sd := fd.Services().ByName("CardService")
 		if sd == nil {
 			t.Fatal("CardService is missing")
@@ -30,7 +30,11 @@ func TestT204_CardServiceDescriptors(t *testing.T) {
 				t.Errorf("%s: messages %s and %s", md.Name(), md.Input().Name(), md.Output().Name())
 			}
 		}
-		want := []string{"RegisterCard", "UpdateCard", "GetCard", "ListCards", "GetAuthorization", "ListAuthorizations"}
+		// GetReconciliationReport of S3 follows them: S3-T101.
+		want := []string{
+			"RegisterCard", "UpdateCard", "GetCard", "ListCards", "GetAuthorization", "ListAuthorizations",
+			"GetReconciliationReport",
+		}
 		if !slices.Equal(got, want) {
 			t.Errorf("CardService methods = %v, want %v", got, want)
 		}
@@ -151,8 +155,9 @@ func TestT204_CardServiceDescriptors(t *testing.T) {
 			"ReturnType":   {"REVERSAL", "REFUND", "LATE_DEBIT"},                                                // SRS — Card Spend §2.4
 			"ReturnStatus": {"ACCEPTED", "SUBMITTED", "INCLUDED", "CONFIRMED", "RETRYING", "NOTHING_TO_RETURN"}, // §2.3.2
 		}
-		if fd.Enums().Len() != len(want) {
-			t.Errorf("card_service.proto has %d enums, want %d", fd.Enums().Len(), len(want))
+		// ReconciliationMismatchType of S3 is checked by S3-T101.
+		if fd.Enums().Len() != len(want)+1 {
+			t.Errorf("card_service.proto has %d enums, want %d", fd.Enums().Len(), len(want)+1)
 		}
 		for name, values := range want {
 			ed := fd.Enums().ByName(protoreflect.Name(name))
