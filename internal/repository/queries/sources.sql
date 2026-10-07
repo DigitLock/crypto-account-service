@@ -63,3 +63,10 @@ FROM asset_aliases a
 JOIN sources s ON s.id = a.source_id
 WHERE s.code = $1
 ORDER BY a.native_asset;
+
+-- name: GetConnectionOfSource :one
+-- casctl source set-treasury: a connection, its wallet address and the code and kind of its source.
+SELECT c.id, c.external_account, s.code AS source_code, s.kind AS source_kind
+FROM connections c
+JOIN sources s ON s.id = c.source_id
+WHERE c.id = $1;

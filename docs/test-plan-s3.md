@@ -124,10 +124,11 @@
 | S3-T503 | Gap found | A log skipped by T409, or `backfill_floor` set after a mint | Run `logs` to a checkpoint | Gap ≠ 0 stored and in the metric; the alert condition holds | FR-315 | — |
 | S3-T504 | State not served | Fixtures: `eth_call` at F answers "missing trie node" | Run `logs` | Entries and cursor committed; no checkpoint stored; `evm_completeness_skipped_total` +1 | EC-317 | — |
 | S3-T505 | Treasury connection created | Tenant `cas-platform` with a token | `CreateConnection` on `anvil` with the treasury address, `owner_ref` `treasury`, label `Treasury`; `casctl source set-treasury anvil <id>` | Connection `ACTIVE` with both cursors and audit `CONNECTION_CREATED`; `treasury_connection` holds its ID and `treasury_address` its address in EIP-55 form; old values printed | §2.4; Core UC-101, UC-105 row 9; S3 D-1, S3 D-2, S3 D-22, S3 D-32 | — |
-| S3-T506 | `set-treasury` refusals | Migrated database | Unknown source; unknown connection; a connection of another source; an exchange connection | Refused with a message; `config` unchanged | Core EC-122 | — |
+| S3-T506 | `set-treasury` refusals | Migrated database | Unknown source; a source of kind `EXCHANGE`; unknown or malformed connection ID; a connection of another source; an exchange connection | Refused with a message; `config` unchanged | Core EC-122 | — |
 | S3-T507 | Treasury sees every event | Debits and refunds of W and of a wallet of tenant B, final | Run `logs` of T | One `CARD_DEBIT IN` per `Debited` and one `CARD_REFUND OUT` per `Refunded` of both wallets; deposits and withdrawals of the treasury as `DEPOSIT`, `WITHDRAWAL` | §2.1.1 Roles, §2.1.2 filters | — |
 | S3-T508 | Zero gap, wallet and treasury | Mint, transfer in, transfer out, debit, refund, final | Run both connections to a checkpoint | `gap` 0 for W and T | FR-315 | — |
 | S3-T509 | Checkpoint of the treasury readable by reconciliation | T508 | Read `balance_checkpoints` of T with `TEST_DATABASE_URL_SERVER` | Row present with the block of the treasury's `logs` cursor or below | Card Spend UC-4 rule 5; S3 D-5 | — |
+| S3-T510 | Oversized checkpoint balance | W `INCREMENTAL`; checkpoint due; a balance of W with more than 20 integer digits (fixtures; mint on Anvil) | Run `logs` | No checkpoint; `evm_completeness_skipped_total` +1 and one WARN line without URL; the entries and cursor of the page committed, the stream not failed; the next due page with a normal balance carries a checkpoint | EC-319, EC-317; S3 D-39 | — |
 
 ### Phase 6 — Reconciliation (st7)
 
@@ -200,10 +201,10 @@
 | EC-306 | T412, T804 | EC-314 | T415 |
 | EC-307 | T413 | EC-315 | T409 |
 | EC-308 | T204, T205 | EC-316 | T419 |
-| EC-309 | T411 | EC-317 | T504, T802 |
+| EC-309 | T411 | EC-317 | T504, T510, T802 |
 | EC-310 | T406 | EC-122 | T108, T506 |
 | EC-311 | T407 | EC-123 | T616 |
-| EC-319 | T307 | | |
+| EC-319 | T307, T510 | | |
 
 ### Coverage of the exit criteria
 

@@ -79,14 +79,15 @@ type env struct {
 // nopReporter discards what the engine reports.
 type nopReporter struct{}
 
-func (nopReporter) RunFinished(string, string, bool)   {}
-func (nopReporter) EntriesInserted(string, int)        {}
-func (nopReporter) DuplicatesSkipped(string, int)      {}
-func (nopReporter) UnmappedAsset(string, string)       {}
-func (nopReporter) BudgetWaited(string, time.Duration) {}
-func (nopReporter) RateLimited(string)                 {}
-func (nopReporter) Connections(map[string]int)         {}
-func (nopReporter) Staleness(map[string]time.Duration) {}
+func (nopReporter) RunFinished(string, string, bool)         {}
+func (nopReporter) EntriesInserted(string, int)              {}
+func (nopReporter) DuplicatesSkipped(string, int)            {}
+func (nopReporter) UnmappedAsset(string, string)             {}
+func (nopReporter) BudgetWaited(string, time.Duration)       {}
+func (nopReporter) RateLimited(string)                       {}
+func (nopReporter) Connections(map[string]int)               {}
+func (nopReporter) Staleness(map[string]time.Duration)       {}
+func (nopReporter) LedgerGap(string, string, string, string) {}
 
 // engine is an engine on the pool of cas_server with the clock, connectors and limiters of the tests.
 func (e *env) engine() *engine.Engine {

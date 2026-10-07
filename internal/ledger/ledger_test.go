@@ -91,3 +91,37 @@ func TestT629_InvalidEntryOrBalance(t *testing.T) {
 		t.Errorf("an empty snapshot was refused: %v", err)
 	}
 }
+
+// S3-T502, the rules of a checkpoint — Req: Core Connector contract (Balance checkpoint), EC-117. A checkpoint follows
+// the rules of a snapshot balance, one balance per native asset; an invalid one refuses its page.
+func TestT502_CheckpointValidation(t *testing.T) {
+	block := uint64(30)
+	ok := connector.Balance{AccountType: "WALLET", NativeAsset: "0xToken", Free: "12.5", Locked: "0"}
+	page := func(cp *connector.Checkpoint) connector.Page {
+		return connector.Page{Mode: connector.ModeIncremental, Cursor: json.RawMessage(`{}`), Checkpoint: cp}
+	}
+	at := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	if err := ValidatePage(page(&connector.Checkpoint{BlockNumber: &block, BlockHash: "0x01", TakenAt: at,
+		Balances: []connector.Balance{ok}})); err != nil {
+		t.Errorf("a valid checkpoint refused: %v", err)
+	}
+	if err := ValidatePage(page(nil)); err != nil {
+		t.Errorf("a page without checkpoint refused: %v", err)
+	}
+	other := ok
+	other.AccountType = "SPOT"
+	big := uint64(1) << 63
+	for name, cp := range map[string]*connector.Checkpoint{
+		"no time":              {Balances: []connector.Balance{ok}},
+		"negative balance":     {TakenAt: at, Balances: []connector.Balance{{AccountType: "WALLET", NativeAsset: "0xToken", Free: "-1", Locked: "0"}}},
+		"21 integer digits":    {TakenAt: at, Balances: []connector.Balance{{AccountType: "WALLET", NativeAsset: "0xToken", Free: "1" + strings.Repeat("0", 20), Locked: "0"}}},
+		"unknown account type": {TakenAt: at, Balances: []connector.Balance{{AccountType: "MARGIN", NativeAsset: "0xToken", Free: "1", Locked: "0"}}},
+		"native asset twice":   {TakenAt: at, Balances: []connector.Balance{ok, other}},
+		"block above BIGINT":   {BlockNumber: &big, TakenAt: at, Balances: []connector.Balance{ok}},
+	} {
+		var inv *InvalidError
+		if err := ValidatePage(page(cp)); !errors.As(err, &inv) || !strings.Contains(err.Error(), "checkpoint") {
+			t.Errorf("%s: %v, want the page refused for its checkpoint", name, err)
+		}
+	}
+}

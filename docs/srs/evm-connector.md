@@ -12,7 +12,7 @@
   - the authorization flow, the contract and the reconciliation rules: [SRS — Card Spend](card-spend.md);
   - real-time signals: `card-auth` tracks its own transactions (ADR-13). This connector reads logs from final blocks only.
 - **Parents:** [BRD](../brd.md) BR-1, BR-3, BR-4, BR-5, BR-12; [PRD — Card Spend](../prd/card-spend.md) US-13; [ADR](../adr/README.md) 2, 3, 5, 6, 8, 11, 13.
-- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); endpoint variables and network errors of `sources.config` (S3 D-29, S3 D-30); tracked tokens with the source, `treasury_address`, endpoint choice per source, call timeout and rate-limit pause, required `controller_address` and `backfill_floor` (S3 D-31 … S3 D-34, S3 D-36); an oversized balance refuses the snapshot, EC-319 (S3 D-37); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
+- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); endpoint variables and network errors of `sources.config` (S3 D-29, S3 D-30); tracked tokens with the source, `treasury_address`, endpoint choice per source, call timeout and rate-limit pause, required `controller_address` and `backfill_floor` (S3 D-31 … S3 D-34, S3 D-36); an oversized balance refuses the snapshot and gives no balance checkpoint, EC-319 (S3 D-37, S3 D-39); completeness check as built in st6: when a checkpoint is due, which read failures skip it (EC-317); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
 - **Network facts:** finality stages and their timing are taken from the Base documentation for Base mainnet, checked on 2026-10-03. Base Sepolia may differ; the values are measured at S3.
 
 | Term | Meaning |
@@ -242,7 +242,7 @@ Steps 1–4.
 |---|---|---|
 | EC-304 | One of the reads fails | Step 4: no partial snapshot; the previous one is still returned and becomes stale by age (SRS — Core §2.1.3). A `balanceOf` without data (no contract at the address of an alias row) fails the run without an endpoint switch |
 | EC-305 | The endpoint reports another chain ID | Nothing is read; the stream fails; critical alert |
-| EC-319 | A balance has more than 20 integer digits. Anyone can mint `MockUSDC`, so a wallet can be given such a balance | Accepted as a limit of the demo (S3 D-37): the ledger writer refuses the whole snapshot (SRS — Core EC-117), the previous one stays and becomes stale by age. `docs/backlog.md` |
+| EC-319 | A balance has more than 20 integer digits. Anyone can mint `MockUSDC`, so a wallet can be given such a balance | Accepted as a limit of the demo (S3 D-37): the ledger writer refuses the whole snapshot (SRS — Core EC-117), the previous one stays and becomes stale by age. In a balance checkpoint (UC-304) the connector returns no checkpoint, as EC-317, so the page is imported (S3 D-39). `docs/backlog.md` |
 
 ##### Acceptance Criteria
 
@@ -346,8 +346,8 @@ N/A — one read per tracked token at the end of a `logs` run, then a comparison
 
 | # | Step |
 |---|---|
-| 1 | A run of an `INCREMENTAL` `logs` stream ended at the final block F, and `completeness_interval` has passed since the last check |
-| 2 | The connector reads `balanceOf(address)` at block F, pinned by its hash, for every tracked token and returns them with the page as a balance checkpoint: block number, block hash, balance per native asset (`Page.Checkpoint`, SRS — Core Connector contract, S3 D-3) |
+| 1 | A page of a `logs` stream that is already `INCREMENTAL` ends at the final block F, and `completeness_interval` has passed since the last checkpoint of the connection. The time of the last checkpoint is kept in memory per connection and set when the connector returns one; after a restart the first such page carries one. A run that reads no range because F has not moved (UC-303 step 4) returns no page and no checkpoint |
+| 2 | The connector reads `balanceOf(address)` at block F, pinned by its hash, for every tracked token and returns them with the page as a balance checkpoint: block number, block hash, block time, balance per native asset (`Page.Checkpoint`, SRS — Core Connector contract, S3 D-3). Each read reserves cost 1 |
 | 3 | In the transaction that commits the page, the ledger writer computes per token: ledger total = Σ `IN` − Σ `OUT` over the entries of the connection, those of the page included. All of them are at or below block F |
 | 4 | Gap = checkpoint balance − ledger total |
 | 5 | Store the checkpoint per connection and token in `balance_checkpoints` of SRS — Core: block, balance, ledger total, gap, time; it replaces the previous one (S3 D-5). Expose the gap as the metric `ledger_gap` (SRS — Core §2.5, S3 D-19). Reconciliation reads the stored checkpoint of the treasury connection (SRS — Card Spend UC-4 rule 5) |
@@ -367,8 +367,9 @@ Steps 1–5 with every gap equal to 0.
 
 | EC | Case | Handling |
 |---|---|---|
-| EC-317 | The node no longer serves the state of block F | The check is skipped and counted; the import is not affected. See §4, issue 2 |
+| EC-317 | A read of the checkpoint fails for a reason other than a rate limit: the node no longer serves the state of block F, a transport error, a timeout, a malformed answer | The check is skipped: no checkpoint, `evm_completeness_skipped_total` +1, one WARN line without URL. The page is imported as usual. The time of the last checkpoint is not set, so the next page of step 1 tries again. A rate limit fails the run (EC-313). See §4, issue 2 |
 
+- A balance of the checkpoint with more than 20 integer digits (EC-319) is handled as EC-317: the ledger writer would refuse the whole page (SRS — Core EC-117; S3 D-39).
 - Unlike an exchange (SRS — Binance UC-204), a chain keeps its whole history: a non-zero gap is an error. Causes: a skipped log (EC-315), a token that is not a plain ERC-20, a `backfill_floor` set too late.
 
 ##### Acceptance Criteria
@@ -468,7 +469,7 @@ Added to the metrics of SRS — Core §2.5. The gap of UC-304 is the metric `led
 | server | `evm_indexer_lag_blocks{source}` | At most the blocks of one `sync_interval.logs` | More than 3 intervals | Final block minus the oldest last processed block among the connections of the source whose `logs` stream is `INCREMENTAL`; kept in memory of the process, an entry not updated for 3 intervals dropped; 0 before the first such run after a start | BR-4 |
 | server | `evm_reorg_below_final_total{source}` | 0 | Any, critical | Reorg guard hits | BR-4 |
 | server | `evm_start_check_failed{source,check}` | 0 | Any, critical | 1 while a start check fails; `check`: `config`, `chain_id`, `token`, `treasury` | BRD §9.2 |
-| server | `evm_completeness_skipped_total{source}` | 0 | No completed check for 24 h | Checks skipped because the state was not served | BR-12 |
+| server | `evm_completeness_skipped_total{source}` | 0 | No completed check for 24 h | Completeness checks skipped: a read failed (EC-317) or a balance out of range (EC-319) | BR-12 |
 | server | `evm_unmatched_controller_events_total{source}` | 0 | Any | Controller events without their `Transfer` | BR-12 |
 | server | `evm_skipped_logs_total{source,reason}` | 0 | Any | Logs not imported (EC-315) | BR-4 |
 | server | `evm_log_range_blocks{source}` | `log_range_max` | — | Range size in use after splitting | BR-4 |

@@ -16,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
@@ -320,7 +321,7 @@ func (a *app) processorCmd() *cobra.Command {
 }
 
 func (a *app) sourceCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "source", Short: "Set values of EVM sources; development seeds of sources"}
+	cmd := &cobra.Command{Use: "source", Short: "Set values and the treasury connection of EVM sources; development seeds of sources"}
 	cmd.AddCommand(&cobra.Command{
 		Use: "set <source> <key>=<value>",
 		Short: "Set one value of an EVM source: controller_address, backfill_floor (sources.config) or " +
@@ -343,6 +344,38 @@ func (a *app) sourceCmd() *cobra.Command {
 				previous = "unset"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Source %s, %s: previous %s, new %s\n", args[0], key, previous, stored)
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use: "set-treasury <source> <connection_id>",
+		Short: "Name the treasury connection of an EVM source: its ID to treasury_connection and its wallet address " +
+			"to treasury_address",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := uuid.Parse(args[1])
+			if err != nil || len(args[1]) != 36 {
+				return errors.New("the connection ID must be a UUID in its 36-character form")
+			}
+			reg, err := a.registry(cmd.Context())
+			if err != nil {
+				return err
+			}
+			previous, current, err := reg.SetTreasury(cmd.Context(), args[0], id)
+			if err != nil {
+				return err
+			}
+			unset := func(s string) string {
+				if s == "" {
+					return "unset"
+				}
+				return s
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "Source %s, %s: previous %s, new %s\n", args[0], registry.KeyTreasuryConnection,
+				unset(previous.Connection), current.Connection)
+			fmt.Fprintf(out, "Source %s, %s: previous %s, new %s\n", args[0], registry.KeyTreasuryAddress,
+				unset(previous.Address), current.Address)
 			return nil
 		},
 	})

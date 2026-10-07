@@ -67,6 +67,9 @@ type Reporter interface {
 	Connections(byStatus map[string]int)
 	// Staleness: per available source, now minus the oldest last_success_at of the streams the engine runs.
 	Staleness(bySource map[string]time.Duration)
+	// LedgerGap: the gap of the balance checkpoint of a connection and asset, a plain decimal, after the commit of its
+	// page (S3 D-19).
+	LedgerGap(source, connection, asset, gap string)
 }
 
 // Config are the settings of SRS — Core §3.1.
@@ -581,6 +584,9 @@ func (e *Engine) runStream(ctx context.Context, r *run, s connector.Stream) outc
 			e.reporter.DuplicatesSkipped(r.source.Code, res.Skipped)
 		}
 		e.reportUnmapped(ctx, r, res.Unmapped)
+		for _, g := range res.Gaps {
+			e.reporter.LedgerGap(r.source.Code, r.id.String(), g.Asset, g.Gap)
+		}
 		mode, cursor = page.Mode, page.Cursor
 		switch {
 		case !page.More:

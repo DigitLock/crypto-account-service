@@ -181,3 +181,123 @@ func TestT108_SourceSet(t *testing.T) {
 		}
 	})
 }
+
+// insertConnection inserts a connection of tenant on source with the wallet address, as CreateConnection stores it,
+// and returns its ID. The connections of these tests are rows only: no stream runs.
+func insertConnection(t *testing.T, pool *pgxpool.Pool, tenant, source, address string) string {
+	t.Helper()
+	var id string
+	if err := pool.QueryRow(ctx, `INSERT INTO connections (tenant_id, owner_ref, source_id, external_account, label)
+		SELECT t.id, 'treasury', s.id, $3, 'Treasury' FROM tenants t, sources s WHERE t.name = $1 AND s.code = $2
+		RETURNING id::text`, tenant, source, address).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// keepAnvilConfig restores the config of the seeded source anvil at the end of the test.
+func keepAnvilConfig(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	var saved []byte
+	if err := pool.QueryRow(ctx, `SELECT config FROM sources WHERE code = 'anvil'`).Scan(&saved); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, `UPDATE sources SET config = $1 WHERE code = 'anvil'`, saved); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+// S3-T505, the casctl part — Req: SRS — Core UC-105 row 9; S3 D-2, S3 D-32. set-treasury writes the ID of the
+// connection and its address in EIP-55 form, keeps the other keys, prints the previous and new values; no audit row.
+// The connection created through the API and the start check are shown in internal/engine.
+func TestT505_SetTreasury(t *testing.T) {
+	pool := setup(t)
+	keepAnvilConfig(t, pool)
+	mustCasctl(t, "tenant", "create", "cas-platform")
+	_, first := randomAddress(t)
+	_, second := randomAddress(t)
+	id1 := insertConnection(t, pool, "cas-platform", "anvil", first)
+	id2 := insertConnection(t, pool, "cas-platform", "anvil", second)
+	before := anvilConfig(t, pool)
+	audit := func() int {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	auditBefore := audit() // TENANT_CREATED
+
+	r := mustCasctl(t, "source", "set-treasury", "anvil", id1)
+	want := "Source anvil, treasury_connection: previous unset, new " + id1 + "\n" +
+		"Source anvil, treasury_address: previous unset, new " + first + "\n"
+	if r.stdout != want {
+		t.Errorf("stdout = %q, want %q", r.stdout, want)
+	}
+	r = mustCasctl(t, "source", "set-treasury", "anvil", id2)
+	want = "Source anvil, treasury_connection: previous " + id1 + ", new " + id2 + "\n" +
+		"Source anvil, treasury_address: previous " + first + ", new " + second + "\n"
+	if r.stdout != want {
+		t.Errorf("stdout = %q, want %q", r.stdout, want)
+	}
+
+	got := anvilConfig(t, pool)
+	if string(got["treasury_connection"]) != `"`+id2+`"` || string(got["treasury_address"]) != `"`+second+`"` {
+		t.Errorf("config %v, want the second connection and its address", got)
+	}
+	for k, v := range before {
+		if string(got[k]) != string(v) {
+			t.Errorf("config %s = %s, was %s", k, got[k], v)
+		}
+	}
+	if len(got) != len(before)+2 {
+		t.Errorf("config %v, want the keys before and two more", got)
+	}
+	if n := audit() - auditBefore; n != 0 {
+		t.Errorf("%d audit rows written by set-treasury, want 0", n)
+	}
+}
+
+// S3-T506 — Req: SRS — Core EC-122. set-treasury refuses with a message and changes nothing: an unknown source, an
+// unknown or malformed connection ID, a connection of another source, an exchange connection, a source of kind
+// EXCHANGE.
+func TestT506_SetTreasuryRefusals(t *testing.T) {
+	pool := setup(t)
+	keepAnvilConfig(t, pool)
+	mustCasctl(t, "source", "add-fake")
+	mustCasctl(t, "tenant", "create", "cas-platform")
+	_, address := randomAddress(t)
+	_, other := randomAddress(t)
+	onAnvil := insertConnection(t, pool, "cas-platform", "anvil", address)
+	onSepolia := insertConnection(t, pool, "cas-platform", "base-sepolia", other)
+	exchange := insertConnection(t, pool, "cas-platform", "fake", "account-1")
+	snapshot := databaseText(t, pool)
+	config := anvilConfig(t, pool)
+
+	for name, c := range map[string]struct {
+		args    []string
+		message string
+	}{
+		"unknown source":             {[]string{"polygon", onAnvil}, "no source with this code"},
+		"unknown connection":         {[]string{"anvil", "0b0b0b0b-0000-4000-8000-00000000dead"}, "no such connection"},
+		"malformed connection ID":    {[]string{"anvil", "not-a-uuid"}, "must be a UUID"},
+		"connection ID without dash": {[]string{"anvil", strings.ReplaceAll(onAnvil, "-", "")}, "must be a UUID"},
+		"connection of base-sepolia": {[]string{"anvil", onSepolia}, "belongs to another source"},
+		"exchange connection":        {[]string{"anvil", exchange}, "not of kind EVM_WALLET"},
+		"source of kind EXCHANGE":    {[]string{"fake", exchange}, "not of kind EVM"},
+		"one argument":               {[]string{"anvil"}, "accepts 2 arg"},
+	} {
+		r := casctl(t, append([]string{"source", "set-treasury"}, c.args...)...)
+		if r.code == 0 || !strings.Contains(r.stderr, c.message) || r.stdout != "" {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want an error with %q", name, r.code, r.stdout, r.stderr, c.message)
+		}
+	}
+	if got := databaseText(t, pool); got != snapshot {
+		t.Error("a refused change changed the database")
+	}
+	if got := anvilConfig(t, pool); len(got) != len(config) || got["treasury_connection"] != nil {
+		t.Errorf("config of anvil changed: %v", got)
+	}
+}

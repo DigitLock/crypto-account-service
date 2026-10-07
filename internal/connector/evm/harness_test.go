@@ -40,12 +40,13 @@ type metricsRec struct {
 	lag      map[string]uint64
 	unmatch  map[string]int
 	skipped  map[string]int // source/reason
+	complete map[string]int
 }
 
 func newMetricsRec() *metricsRec {
 	return &metricsRec{final: map[string]uint64{}, reorgs: map[string]int{}, checks: map[string]bool{},
 		requests: map[string]int{}, fallback: map[string]bool{}, ranges: map[string]uint64{},
-		lag: map[string]uint64{}, unmatch: map[string]int{}, skipped: map[string]int{}}
+		lag: map[string]uint64{}, unmatch: map[string]int{}, skipped: map[string]int{}, complete: map[string]int{}}
 }
 
 func (m *metricsRec) LogRangeBlocks(source string, n uint64) {
@@ -63,6 +64,12 @@ func (m *metricsRec) IndexerLag(source string, n uint64) {
 func (m *metricsRec) UnmatchedControllerEvent(source string) {
 	m.mu.Lock()
 	m.unmatch[source]++
+	m.mu.Unlock()
+}
+
+func (m *metricsRec) CompletenessSkipped(source string) {
+	m.mu.Lock()
+	m.complete[source]++
 	m.mu.Unlock()
 }
 

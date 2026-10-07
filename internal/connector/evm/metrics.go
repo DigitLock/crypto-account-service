@@ -23,6 +23,8 @@ type Metrics interface {
 	UnmatchedControllerEvent(source string)
 	// SkippedLog adds 1 to evm_skipped_logs_total{source,reason} (EC-315).
 	SkippedLog(source, reason string)
+	// CompletenessSkipped adds 1 to evm_completeness_skipped_total{source}: EC-317, or EC-319 (S3 D-39).
+	CompletenessSkipped(source string)
 }
 
 // Values of the label result of evm_rpc_requests_total.
@@ -43,6 +45,7 @@ type PromMetrics struct {
 	lag      *prometheus.GaugeVec
 	unmatch  *prometheus.CounterVec
 	skipped  *prometheus.CounterVec
+	complete *prometheus.CounterVec
 }
 
 var _ Metrics = (*PromMetrics)(nil)
@@ -77,8 +80,12 @@ func NewPromMetrics(reg prometheus.Registerer) *PromMetrics {
 		skipped: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "evm_skipped_logs_total", Help: "Logs not imported, by reason.",
 		}, []string{"source", "reason"}),
+		complete: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "evm_completeness_skipped_total",
+			Help: "Completeness checks skipped: state not served (EC-317) or a balance out of range (EC-319).",
+		}, []string{"source"}),
 	}
-	reg.MustRegister(m.final, m.reorgs, m.checks, m.requests, m.fallback, m.ranges, m.lag, m.unmatch, m.skipped)
+	reg.MustRegister(m.final, m.reorgs, m.checks, m.requests, m.fallback, m.ranges, m.lag, m.unmatch, m.skipped, m.complete)
 	return m
 }
 
@@ -125,6 +132,9 @@ func (m *PromMetrics) SkippedLog(source, reason string) {
 	m.skipped.WithLabelValues(source, reason).Inc()
 }
 
+// CompletenessSkipped implements Metrics.
+func (m *PromMetrics) CompletenessSkipped(source string) { m.complete.WithLabelValues(source).Inc() }
+
 func boolValue(b bool) float64 {
 	if b {
 		return 1
@@ -144,3 +154,4 @@ func (nopMetrics) LogRangeBlocks(string, uint64)             {}
 func (nopMetrics) IndexerLag(string, uint64)                 {}
 func (nopMetrics) UnmatchedControllerEvent(string)           {}
 func (nopMetrics) SkippedLog(string, string)                 {}
+func (nopMetrics) CompletenessSkipped(string)                {}

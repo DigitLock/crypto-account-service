@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/DigitLock/crypto-account-service/internal/connector"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 )
@@ -86,4 +88,63 @@ func lockEVMSource(ctx context.Context, q *repository.Queries, code string) (rep
 		return repository.Source{}, ErrSourceNotEVM
 	}
 	return src, nil
+}
+
+// Errors of casctl source set-treasury (EC-122).
+var (
+	ErrConnectionNotEVMWallet = errors.New("the connection is not of kind EVM_WALLET")
+	ErrConnectionOtherSource  = errors.New("the connection belongs to another source")
+)
+
+// Keys of sources.config written by SetTreasury (S3 D-2, S3 D-32).
+const (
+	KeyTreasuryConnection = "treasury_connection"
+	KeyTreasuryAddress    = "treasury_address"
+)
+
+// Treasury is the treasury connection of an EVM source and its wallet address; empty when unset.
+type Treasury struct {
+	Connection, Address string
+}
+
+// SetTreasury names the treasury connection of an EVM source (SRS — Core UC-105 row 9; S3 D-2, S3 D-32): the
+// connection must exist, be of kind EVM_WALLET and belong to the source. Its ID and its wallet address, stored in
+// EIP-55 form by the address check of UC-301, are written to treasury_connection and treasury_address of
+// sources.config in one transaction; the other keys are kept. It returns the previous and the new values. No audit
+// row: sources is not tenant data.
+func (r *Registry) SetTreasury(ctx context.Context, code string, connectionID uuid.UUID) (previous, current Treasury, err error) {
+	err = r.inTx(ctx, func(q *repository.Queries) error {
+		src, err := lockEVMSource(ctx, q, code)
+		if err != nil {
+			return err
+		}
+		conn, err := q.GetConnectionOfSource(ctx, connectionID)
+		if err != nil {
+			return notFound(err, ErrConnectionNotFound)
+		}
+		switch {
+		case conn.SourceKind != connector.KindEVM:
+			return ErrConnectionNotEVMWallet
+		case conn.SourceCode != src.Code:
+			return ErrConnectionOtherSource
+		}
+		var config map[string]json.RawMessage
+		if err := json.Unmarshal(src.Config, &config); err != nil {
+			return errors.New("sources.config of the source is not a JSON object")
+		}
+		_ = json.Unmarshal(config[KeyTreasuryConnection], &previous.Connection)
+		_ = json.Unmarshal(config[KeyTreasuryAddress], &previous.Address)
+		current = Treasury{Connection: conn.ID.String(), Address: conn.ExternalAccount}
+		for key, value := range map[string]string{KeyTreasuryConnection: current.Connection, KeyTreasuryAddress: current.Address} {
+			raw, _ := json.Marshal(value)
+			if err := q.SetSourceConfigValue(ctx, repository.SetSourceConfigValueParams{ID: src.ID, Key: key, Value: raw}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Treasury{}, Treasury{}, err
+	}
+	return previous, current, nil
 }

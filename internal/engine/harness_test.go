@@ -122,6 +122,7 @@ type recorder struct {
 	rateLimited int
 	connections map[string]int
 	staleness   map[string]time.Duration
+	gaps        map[string]string // source/connection/asset → gap
 }
 
 func (r *recorder) RunFinished(source, family string, success bool) {
@@ -168,6 +169,22 @@ func (r *recorder) Connections(byStatus map[string]int) {
 	r.mu.Lock()
 	r.connections = byStatus
 	r.mu.Unlock()
+}
+
+func (r *recorder) LedgerGap(source, connection, asset, gap string) {
+	r.mu.Lock()
+	if r.gaps == nil {
+		r.gaps = map[string]string{}
+	}
+	r.gaps[source+"/"+connection+"/"+asset] = gap
+	r.mu.Unlock()
+}
+
+func (r *recorder) gap(source, connection, asset string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g, ok := r.gaps[source+"/"+connection+"/"+asset]
+	return g, ok
 }
 
 func (r *recorder) Staleness(bySource map[string]time.Duration) {

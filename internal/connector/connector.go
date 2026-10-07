@@ -139,6 +139,20 @@ type Page struct {
 	Mode   Mode
 	// More reports that more pages follow now.
 	More bool
+	// Checkpoint is the optional balance checkpoint of the account where the records of the page end (S3 D-3).
+	// nil: none. The ledger writer compares it with the ledger in the transaction of the page.
+	Checkpoint *Checkpoint
+}
+
+// Checkpoint is a balance checkpoint: the balances of the account at the point the records of a page end, one per
+// native asset, by the rules of a snapshot balance (SRS — Core Connector contract; EVM: UC-304).
+type Checkpoint struct {
+	// BlockNumber and BlockHash are the block of an EVM checkpoint; nil and empty for other sources.
+	BlockNumber *uint64
+	BlockHash   string
+	// TakenAt is the time of the checkpoint at the source: the block time on EVM.
+	TakenAt  time.Time
+	Balances []Balance
 }
 
 // Entry is one movement of one asset, as the connector maps it (SRS — Core §2.1.4, ADR-5).

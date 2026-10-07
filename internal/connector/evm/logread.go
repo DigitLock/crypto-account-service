@@ -301,8 +301,17 @@ func pair(events []*event, token, treasury common.Address) {
 // SkipAmountTooLarge is the reason of evm_skipped_logs_total for an amount above the ledger amount type (EC-315).
 const SkipAmountTooLarge = "amount_too_large"
 
-// maxIntegerDigits is the largest number of integer digits of a ledger amount (SRS — Core Connector contract).
+// maxIntegerDigits is the largest number of integer digits of a ledger amount and of a snapshot or checkpoint
+// balance: the limit the ledger writer applies (SRS — Core Connector contract, EC-117).
 const maxIntegerDigits = 20
+
+// fitsLedger reports whether a plain decimal of FormatUnits has at most maxIntegerDigits integer digits. Anyone can
+// mint MockUSDC, so a chain amount can exceed it: a log is then skipped (EC-315), a checkpoint not returned (EC-319,
+// S3 D-39), before the ledger writer would refuse the whole page.
+func fitsLedger(amount string) bool {
+	whole, _, _ := strings.Cut(amount, ".")
+	return len(whole) <= maxIntegerDigits
+}
 
 // mapLogs is UC-303 step 8: the entries of the connection, in the order of the logs. A controller event without its
 // Transfer still gives its entry and is counted (EC-311). A log whose amount does not fit the ledger gives no entry
@@ -355,7 +364,7 @@ func (s *session) mapLogs(ctx context.Context, logs []chainLog, times map[common
 				"source", s.src.Code, "connection_id", s.conn.ID, "external_id", e.log.externalID(), "event", e.name)
 		}
 		amount := FormatUnits(e.amount, decimals)
-		if whole, _, _ := strings.Cut(amount, "."); len(whole) > maxIntegerDigits {
+		if !fitsLedger(amount) {
 			s.c.metrics.SkippedLog(s.src.Code, SkipAmountTooLarge)
 			s.c.logger.WarnContext(ctx, "log not imported: its amount has more than 20 integer digits (EC-315)",
 				"source", s.src.Code, "connection_id", s.conn.ID, "external_id", e.log.externalID(), "event", e.name)
@@ -439,6 +448,14 @@ func (s *session) readPage(ctx context.Context, mode connector.Mode, next, final
 		return connector.Page{}, err
 	}
 
+	// UC-304 steps 1 and 2: a stream already INCREMENTAL whose range ends at F, once per completeness_interval.
+	var checkpoint *connector.Checkpoint
+	if mode == connector.ModeIncremental && to == final && s.checkpointDue() {
+		if checkpoint, err = s.checkpoint(ctx, who, end); err != nil {
+			return connector.Page{}, err
+		}
+	}
+
 	// Step 9: BACKFILL until the first page that ends at the final block.
 	nextBlock := to + 1
 	cur, err := json.Marshal(cursor{NextBlock: &nextBlock, LastHash: end.Hash.Hex(),
@@ -449,5 +466,5 @@ func (s *session) readPage(ctx context.Context, mode connector.Mode, next, final
 	if to == final {
 		mode = connector.ModeIncremental
 	}
-	return connector.Page{Entries: entries, Cursor: cur, Mode: mode, More: to < final}, nil
+	return connector.Page{Entries: entries, Cursor: cur, Mode: mode, More: to < final, Checkpoint: checkpoint}, nil
 }

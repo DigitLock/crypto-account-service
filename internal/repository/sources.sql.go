@@ -7,6 +7,8 @@ package repository
 
 import (
 	"context"
+
+	"github.com/google/uuid"
 )
 
 const addFakeAlias = `-- name: AddFakeAlias :execrows
@@ -57,6 +59,33 @@ type DeleteSourceAliasesOfAssetParams struct {
 func (q *Queries) DeleteSourceAliasesOfAsset(ctx context.Context, arg DeleteSourceAliasesOfAssetParams) error {
 	_, err := q.db.Exec(ctx, deleteSourceAliasesOfAsset, arg.SourceID, arg.Asset)
 	return err
+}
+
+const getConnectionOfSource = `-- name: GetConnectionOfSource :one
+SELECT c.id, c.external_account, s.code AS source_code, s.kind AS source_kind
+FROM connections c
+JOIN sources s ON s.id = c.source_id
+WHERE c.id = $1
+`
+
+type GetConnectionOfSourceRow struct {
+	ID              uuid.UUID
+	ExternalAccount string
+	SourceCode      string
+	SourceKind      string
+}
+
+// casctl source set-treasury: a connection, its wallet address and the code and kind of its source.
+func (q *Queries) GetConnectionOfSource(ctx context.Context, id uuid.UUID) (GetConnectionOfSourceRow, error) {
+	row := q.db.QueryRow(ctx, getConnectionOfSource, id)
+	var i GetConnectionOfSourceRow
+	err := row.Scan(
+		&i.ID,
+		&i.ExternalAccount,
+		&i.SourceCode,
+		&i.SourceKind,
+	)
+	return i, err
 }
 
 const getSourceByCode = `-- name: GetSourceByCode :one

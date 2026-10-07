@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -60,10 +61,20 @@ func NewWriter(db DB, now func() time.Time) *Writer {
 // PageResult is the outcome of a page.
 type PageResult struct {
 	Inserted, Skipped int
+	// Gaps are the gaps of the balance checkpoint of the page, one per native asset; none without a checkpoint.
+	Gaps []Gap
 	// Unmapped lists the native asset of every inserted entry that has no alias: stored under its native code.
 	Unmapped []string
 	// Gone: the connection was deleted; nothing was written and the run stops without a failure.
 	Gone bool
+}
+
+// Gap is the comparison of one checkpoint balance with the ledger (SRS — Core Connector contract, Balance
+// checkpoint): LedgerTotal = Σ IN − Σ OUT of the connection for the native asset, Gap = balance − LedgerTotal.
+// Plain decimals, possibly negative.
+type Gap struct {
+	NativeAsset, Asset string
+	LedgerTotal, Gap   string
 }
 
 // SnapshotResult is the outcome of a snapshot.
@@ -73,7 +84,9 @@ type SnapshotResult struct {
 }
 
 // WritePage stores the entries of a page of a ledger stream and moves its cursor and mode, in one
-// transaction (FR-107). stream is the full stream name; family is stored as ledger_entries.stream.
+// transaction (FR-107). stream is the full stream name; family is stored as ledger_entries.stream. A balance
+// checkpoint of the page is compared with the ledger after the entries, in the same transaction, and stored in
+// balance_checkpoints (S3 D-5); the same rule for every source.
 func (w *Writer) WritePage(ctx context.Context, connectionID uuid.UUID, stream, family string, page connector.Page) (PageResult, error) {
 	if err := ValidatePage(page); err != nil {
 		return PageResult{}, err
@@ -97,7 +110,7 @@ func (w *Writer) WritePage(ctx context.Context, connectionID uuid.UUID, stream, 
 		if err != nil {
 			return fmt.Errorf("lock the connection: %w", err)
 		}
-		aliases, err := aliasesOf(ctx, q, conn.SourceID, entryAssets(page.Entries))
+		aliases, err := aliasesOf(ctx, q, conn.SourceID, append(entryAssets(page.Entries), checkpointAssets(page.Checkpoint)...))
 		if err != nil {
 			return err
 		}
@@ -132,7 +145,9 @@ func (w *Writer) WritePage(ctx context.Context, connectionID uuid.UUID, stream, 
 		if n == 0 {
 			return fmt.Errorf("move the cursor: no cursor of stream %s", stream)
 		}
-		return nil
+		gaps, unmapped, err := w.storeCheckpoint(ctx, q, connectionID, page.Checkpoint, aliases)
+		res.Gaps, res.Unmapped = gaps, append(res.Unmapped, unmapped...)
+		return err
 	})
 	if err != nil {
 		return PageResult{}, err
@@ -201,6 +216,9 @@ func ValidatePage(page connector.Page) error {
 	if len(page.Cursor) > 0 && !json.Valid(page.Cursor) {
 		return &InvalidError{Reason: "the cursor of the page is not JSON"}
 	}
+	if err := ValidateCheckpoint(page.Checkpoint); err != nil {
+		return err
+	}
 	for i, e := range page.Entries {
 		item := fmt.Sprintf("entry %d", i+1)
 		switch {
@@ -222,6 +240,83 @@ func ValidatePage(page connector.Page) error {
 		if err := checkAmount(e.Amount, true); err != nil {
 			return &InvalidError{Reason: item + ": amount " + err.Error()}
 		}
+	}
+	return nil
+}
+
+// storeCheckpoint compares each balance of a checkpoint with the entries of the connection, those of the page
+// included, and replaces the row of the connection and native asset in balance_checkpoints.
+func (w *Writer) storeCheckpoint(ctx context.Context, q *repository.Queries, connectionID uuid.UUID, cp *connector.Checkpoint,
+	aliases map[string]string) ([]Gap, []string, error) {
+	if cp == nil {
+		return nil, nil, nil
+	}
+	var block *int64
+	if cp.BlockNumber != nil {
+		n := int64(*cp.BlockNumber)
+		block = &n
+	}
+	var hash *string
+	if cp.BlockHash != "" {
+		hash = &cp.BlockHash
+	}
+	checkedAt := w.now().UTC().Truncate(time.Microsecond)
+	var gaps []Gap
+	var unmapped []string
+	for _, b := range cp.Balances {
+		asset, mapped := aliases[b.NativeAsset]
+		if !mapped {
+			asset = b.NativeAsset
+			unmapped = append(unmapped, b.NativeAsset)
+		}
+		row, err := q.UpsertBalanceCheckpoint(ctx, repository.UpsertBalanceCheckpointParams{
+			ConnectionID: connectionID, NativeAsset: b.NativeAsset, Asset: asset, BlockNumber: block, BlockHash: hash,
+			TakenAt: cp.TakenAt, CheckedAt: checkedAt, Free: b.Free, Locked: b.Locked,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("store the balance checkpoint: %w", err)
+		}
+		gaps = append(gaps, Gap{NativeAsset: b.NativeAsset, Asset: asset, LedgerTotal: row.LedgerTotal, Gap: row.Gap})
+	}
+	return gaps, unmapped, nil
+}
+
+func checkpointAssets(cp *connector.Checkpoint) []string {
+	if cp == nil {
+		return nil
+	}
+	natives := make([]string, 0, len(cp.Balances))
+	for _, b := range cp.Balances {
+		natives = append(natives, b.NativeAsset)
+	}
+	return natives
+}
+
+// ValidateCheckpoint checks a balance checkpoint by the rules of a snapshot balance, one balance per native asset;
+// an invalid checkpoint refuses its page (EC-117).
+func ValidateCheckpoint(cp *connector.Checkpoint) error {
+	if cp == nil {
+		return nil
+	}
+	if cp.TakenAt.IsZero() {
+		return &InvalidError{Reason: "the balance checkpoint has no time"}
+	}
+	if cp.BlockNumber != nil && *cp.BlockNumber > math.MaxInt64 {
+		return &InvalidError{Reason: "the block of the balance checkpoint is out of range"}
+	}
+	seen := make(map[string]bool, len(cp.Balances))
+	for i, b := range cp.Balances {
+		if seen[b.NativeAsset] {
+			return &InvalidError{Reason: fmt.Sprintf("checkpoint balance %d: the native asset appears twice", i+1)}
+		}
+		seen[b.NativeAsset] = true
+	}
+	if err := ValidateSnapshot(connector.Snapshot{TakenAt: cp.TakenAt, Balances: cp.Balances}); err != nil {
+		var inv *InvalidError
+		if errors.As(err, &inv) {
+			return &InvalidError{Reason: "balance checkpoint: " + inv.Reason}
+		}
+		return err
 	}
 	return nil
 }
