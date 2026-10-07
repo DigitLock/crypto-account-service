@@ -13,7 +13,7 @@
   - the EVM connector (event indexer) — [SRS — EVM Connector](evm-connector.md);
   - tenant self-onboarding, credential rotation through the API, data retention jobs — §4.
 - **Parents:** [BRD](../brd.md) BR-1 … BR-5, BR-13; [PRD — Card Spend](../prd/card-spend.md) US-6, US-7, US-8, US-13; [PRD — Exchange Accounts](../prd/exchange-accounts.md) US-204, US-205, US-208 … US-210, US-213; [ADR](../adr/README.md) 1–7, 11, 13.
-- **Version:** 1.3, 2026-10-05. Completed by the discovery of S2: the methods of `CardService`, processor credentials in `casctl`, rights of the role `cas_card_auth`, EC-114 without card removal. Completed in S2 st10a, 2026-10-06, to match the code: `owner_ref` length of `RegisterCard`, pagination of `ListCards` and `ListAuthorizations`, rights of `cas_server` on the card-auth tables, `ON DELETE RESTRICT` of `cards.connection_id`. Owner's answers of 2026-10-06: leading zeros of `daily_limit`, the validation of `GetCard`, `GetAuthorization` and the filters of `ListAuthorizations`, tombstones under a card filter, `casctl processor list [<tenant>]`, a repeated revoke. Version 1.2, 2026-10-05. Completed while C1 was built: tenant name and key length rules, `wallet_address`, ID and page token rules, connector contract as built, rate limiter on every account check, source availability in the engine, page limit per run, invalid balances, key check cases, format of `sources.config`, metric labels. Version 1.1, 2026-10-04: completed by the discovery of C1. Version 1.0 approved 2026-10-04.
+- **Version:** 1.4, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): `GetReconciliationReport` and its mismatch types (S3 D-10, S3 D-21); the balance checkpoint in the connector contract and `balance_checkpoints` (S3 D-3, S3 D-5); the metric `ledger_gap` (S3 D-19); `reconciliation_runs` per source (S3 D-6, S3 D-7); the reconciliation worker (S3 D-8); `casctl source set`, `source set-treasury`, `reconcile` (S3 D-2, S3 D-8, S3 D-17); rights of `cas_server` for S3 (S3 D-7). Version 1.3, 2026-10-05. Completed by the discovery of S2: the methods of `CardService`, processor credentials in `casctl`, rights of the role `cas_card_auth`, EC-114 without card removal. Completed in S2 st10a, 2026-10-06, to match the code: `owner_ref` length of `RegisterCard`, pagination of `ListCards` and `ListAuthorizations`, rights of `cas_server` on the card-auth tables, `ON DELETE RESTRICT` of `cards.connection_id`. Owner's answers of 2026-10-06: leading zeros of `daily_limit`, the validation of `GetCard`, `GetAuthorization` and the filters of `ListAuthorizations`, tombstones under a card filter, `casctl processor list [<tenant>]`, a repeated revoke. Version 1.2, 2026-10-05. Completed while C1 was built: tenant name and key length rules, `wallet_address`, ID and page token rules, connector contract as built, rate limiter on every account check, source availability in the engine, page limit per run, invalid balances, key check cases, format of `sources.config`, metric labels. Version 1.1, 2026-10-04: completed by the discovery of C1. Version 1.0 approved 2026-10-04.
 
 | Term | Meaning |
 |---|---|
@@ -49,6 +49,7 @@ flowchart LR
         limiter[Rate limiter]
         conn[Connectors<br/>binance, evm]
         ledger[Ledger writer]
+        recon[Reconciliation worker]
     end
 
     db[(PostgreSQL)]
@@ -67,6 +68,7 @@ flowchart LR
     engine --> ledger
     ledger --> db
     engine --> db
+    recon -- "read cursors, entries, card tables, write runs" --> db
 ```
 
 | Component | Responsibility |
@@ -77,7 +79,8 @@ flowchart LR
 | Sync engine | Schedules streams, keeps cursors and health, drives connectors |
 | Rate limiter | One limiter per source. Its budgets are defined by the connector and shared by the connections they cover. The connector reserves the cost of every request in it |
 | Connectors | Source-specific requests, signing, pagination, normalization |
-| Ledger writer | Single writer of ledger entries and snapshots |
+| Ledger writer | Single writer of ledger entries and snapshots; computes the gap of a balance checkpoint |
+| Reconciliation worker | From S3: runs SRS — Card Spend UC-4 per source when the treasury connection has new final data; stores the run (S3 D-8) |
 
 ##### Sequence diagram
 
@@ -171,7 +174,31 @@ Methods with non-obvious rules are specified below. The others follow the common
 | `GetCard` | `card_ref`, 1 to 64 characters | The card of §2.1.5 | S2. `card_ref` empty or longer: `INVALID_ARGUMENT`. Unknown in the tenant: `NOT_FOUND` |
 | `ListCards` | `owner_ref`, optional, ≤ 128; `page_size`, `page_token` | `cards[]`: the card of §2.1.5; `next_page_token` | S2. Order: `created_at`, `card_ref`. Pagination as `ListConnections` |
 | `GetAuthorization` | `auth_id`, 1 to 64 characters | The authorization of SRS — Card Spend §2.1.4: the same fields, `returns` and `history` included, plus `card_ref`, `received_at`, `decided_at`; timestamps as `Timestamp`; `tx_hash` as SRS — Card Spend §2.1.4 | S2. `auth_id` empty or longer: `INVALID_ARGUMENT`; the length is counted in characters, the character rule of the processor API is not applied. Unknown in the tenant: `NOT_FOUND`. A tombstone is returned as in SRS — Card Spend §2.1.4 |
+| `GetReconciliationReport` | `source`, required; `run_id`, optional | `run`: the reconciliation run below | S3 (S3 D-10). `source` empty: `INVALID_ARGUMENT`; unknown: `NOT_FOUND`. `run_id` malformed: `INVALID_ARGUMENT`. Empty `run_id`: the newest run of the caller's tenant for the source. A `run_id` of another tenant or another source, or no run at all: `NOT_FOUND`. No list method |
 | `ListAuthorizations` | optional `card_ref` ≤ 64, `owner_ref` ≤ 128, `status`, `received_from`, `received_to`; `page_size`, `page_token` | `authorizations[]`: the authorization without `returns` and `history`; `next_page_token` | S2. Filters combine with AND; `received_from` inclusive, `received_to` exclusive; an unknown `status`, a longer `card_ref` or `owner_ref`, and an invalid `received_from` or `received_to` are `INVALID_ARGUMENT`. Order: `received_at` descending, `auth_id`. Tombstones are included without these two filters: a tombstone has no card, so a `card_ref` or `owner_ref` filter, which is the owner of the card, does not return it |
+
+###### Reconciliation run
+
+Returned by `GetReconciliationReport`; stored in `reconciliation_runs` (§2.4). Rules: SRS — Card Spend UC-4.
+
+| Field | Type | Description |
+|---|---|---|
+| `run_id` | String, UUID | ID of the run |
+| `source` | String | Source code: `base-sepolia` |
+| `period_from`, `period_to` | Timestamp | Checked period (SRS — Card Spend UC-4) |
+| `to_block` | String, integer | Last block whose logs the run read: `next_block − 1` of the treasury's `logs` cursor |
+| `totals` | Object | `authorizations_checked`, `debits_count`, `debits_amount`, `returns_checked`, `refunds_count`, `refunds_amount`. Amounts in token base units |
+| `mismatches[]` | Array | One object per mismatch, fields below |
+| `created_at` | Timestamp | When the run was stored |
+
+| Mismatch field | Type | Present for |
+|---|---|---|
+| `type` | Enum | Always: `MISSING_DEBIT`, `AMOUNT_MISMATCH`, `UNKNOWN_DEBIT`, `UNEXPECTED_DEBIT`, `MISSING_REFUND`, `UNKNOWN_REFUND`, `TREASURY_MISMATCH` (S3 D-21) |
+| `auth_id`, `return_id` | String | Mismatches of the caller's own authorizations and returns. Never an ID of another tenant |
+| `chain_auth_id`, `chain_refund_id` | String, 0x + 64 hex | Every mismatch of a debit or a refund |
+| `tx_hash` | String | The transaction of the event; for `MISSING_*`, the transaction of `card-auth` by the rule of SRS — Card Spend §2.1.4, when there is one |
+| `expected_amount`, `actual_amount` | String, integer | Token base units: the amount of CAS and the amount of the event |
+| `asset`, `checkpoint_balance`, `ledger_total` | String; decimals in asset units | `TREASURY_MISMATCH` only |
 
 ##### Connector contract
 
@@ -194,7 +221,7 @@ type Limiter interface {
 ```
 
 - `Connection` carries the connection ID, the source, the account identity, the decrypted key when there is one and the limiter of the source.
-- `Page`: entries, next cursor, next mode, more pages. `Entry`: `external_id`, leg, type, direction, native asset, amount, `occurred_at`, raw record. `Snapshot`: time and balances. `Balance`: account type, native asset, free, locked.
+- `Page`: entries, next cursor, next mode, more pages and, from S3, an optional balance checkpoint: block number, block hash, block time and balances per native asset (S3 D-3). `Entry`: `external_id`, leg, type, direction, native asset, amount, `occurred_at`, raw record. `Snapshot`: time and balances. `Balance`: account type, native asset, free, locked.
 - Typed errors: `ErrKeyRejected`, `ErrUnreachable`, `KeyNotReadOnlyError`, `RateLimitError`, `InvalidInputError`.
 - ADR-2 shows the first sketch of this interface; the names differ, the decision does not.
 
@@ -205,6 +232,7 @@ type Limiter interface {
 | Account check | Returns the account identity and, for a key, its permissions. Used by `CreateConnection` and by the periodic key check; both pass the limiter of the source (FR-110) |
 | Streams | The connector declares the streams of a connection: name, family, interval, first mode, first cursor. It reads the interval from `sources.config` |
 | Page | One call returns entries, the next cursor, the mode and whether more pages follow. Only final records are returned |
+| Balance checkpoint | From S3. A page may carry the balances of the account at the point its records end (EVM: the final block, SRS — EVM Connector UC-304). Balances follow the rules of a snapshot balance; an invalid checkpoint refuses the page (EC-117). In the transaction of the page the ledger writer computes per native asset: ledger total = Σ `IN` − Σ `OUT` of the connection, gap = checkpoint balance − ledger total; it stores the result in `balance_checkpoints` and reports `ledger_gap`. The same rule for every source: no branch by source (ADR-2) |
 | Snapshot | One call returns all balances of the connection and their time, or fails as a whole. A balance has `free` and `locked` not negative, with at most 18 decimal places and 20 integer digits, a known account type, and appears once per account type and native asset. A snapshot that breaks this is refused as a whole (EC-117) |
 | Rate limiter | One limiter per source for the whole process, built on first use from the budgets the connector declares. The engine and `CreateConnection` hand it to the connector. The connector reserves the cost before every request and reports the limit answers of the source. A budget is a number of cost units per time window: a reservation waits until the window allows it. A window starts with the first reservation after the previous window ended. A pause demanded by the source blocks its budget until the pause ends |
 | Errors | Typed: key rejected, key not read-only, rate limit with the pause the source demands, source unreachable. Anything else is a plain failure of the run |
@@ -563,7 +591,7 @@ See §2.1.1.
 | 2 | Reserve the request cost in the source's rate limiter; wait if the budget is spent | — |
 | 3 | The connector fetches one page from the cursor | Step 8 |
 | 4 | The connector maps native records to canonical entries or a snapshot; native asset codes are resolved through `asset_aliases` | An unknown code is kept as the canonical code and counted |
-| 5 | Ledger stream: in one transaction insert the entries, skip those whose idempotency key exists, move the cursor | Rollback; step 8 |
+| 5 | Ledger stream: in one transaction insert the entries, skip those whose idempotency key exists, move the cursor; with a balance checkpoint, store its gaps (Connector contract) | Rollback; step 8 |
 | 6 | Balance stream: insert a new snapshot with its balances; a snapshot without balances is stored too | Rollback; step 8 |
 | 7 | More pages → step 2, up to `max_pages_per_run` pages in one run. Otherwise set `last_success_at`, zero the failure counter, set `next_run_at`. A run that stops at the page limit is a success too, and its stream is due at once, behind the streams that were already due | — |
 | 8 | Failure: store `last_error`, increase the failure counter, set `next_run_at` with exponential backoff | — |
@@ -721,6 +749,9 @@ N/A — database operations only.
 | 5 | List | `casctl tenant list`, `casctl token list`, `casctl processor list [<tenant>]`: the processor credentials of every tenant or of one, with username, tenant, created and revoked times. No secret and no hash is shown |
 | 6 | Issue a processor credential, from S2 | `casctl processor issue <tenant>`: a Basic pair for the processor API of `card-auth` (SRS — Card Spend §2.1.1). Username = `key_id`, 12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters. Printed once as `username:password`; `api_credentials` keeps `kind = PROCESSOR_BASIC`, `key_id` and the SHA-256 hash of the 32 password bytes. Audit `CREDENTIAL_ISSUED` |
 | 7 | Revoke a processor credential, from S2 | `casctl processor revoke <username>`: sets `revoked_at`; the next request with the pair is `401`. Audit `CREDENTIAL_REVOKED`. A revoked pair again: `nothing changed`, no audit row. An unknown username: an error |
+| 8 | Set a value of an EVM source, from S3 | `casctl source set <source> <key>=<value>`: keys `controller_address` (an address, UC-301 rules) and `backfill_floor` (a block number ≥ 0) only; other keys of `sources.config` are kept (S3 D-17). Prints the previous and the new value. No audit row: `sources` is not tenant data |
+| 9 | Name the treasury connection, from S3 | `casctl source set-treasury <source> <connection_id>`: the connection must exist, be of kind `EVM_WALLET` and belong to that source; its ID is written to `treasury_connection` of the source; a value already there is replaced and printed (S3 D-2). No audit row, as row 8 |
+| 10 | Reconcile on demand, from S3 | `casctl reconcile <source>`: runs SRS — Card Spend UC-4 for the source in the process of `casctl`, with the owner role, and stores the runs as the worker does (S3 D-8). Prints one line per run: tenant, run ID, count of mismatches by type. Exit code 0 when the runs are stored, mismatches included; not 0 when nothing could be stored |
 
 - Authentication of a request: the credential is found by `key_id`; the SHA-256 hash of the presented secret is compared in constant time.
 - A tenant may hold several valid tokens at a time: a new one is issued, the consumer switches, the old one is revoked. A token is never shared between tenants or services (ADR-7).
@@ -741,6 +772,8 @@ Rows 1 and 3; the token is handed to the consuming system.
 |---|---|---|
 | EC-120 | A tenant with this name exists | Refused; nothing is stored |
 | EC-121 | A request carries a token of a disabled tenant | `UNAUTHENTICATED`, as for an unknown token |
+| EC-122 | `casctl source set` or `set-treasury`: unknown source, source not of kind `EVM`, a key outside the list, a malformed value, an unknown connection, a connection of another kind or source | Refused with a message; nothing is changed |
+| EC-123 | `casctl reconcile`: the source has no `treasury_connection` | Refused with a message; no run is stored (SRS — EVM Connector §2.1.1) |
 
 ##### Acceptance Criteria
 
@@ -772,6 +805,8 @@ erDiagram
     connections ||--o{ cards : "funds"
     tenants ||--o{ audit_log : "records"
     tenants ||--o{ reconciliation_runs : "reports"
+    sources ||--o{ reconciliation_runs : "reconciles"
+    connections ||--o{ balance_checkpoints : "checks"
 ```
 
 `cards` is the parent of `authorizations` in SRS — Card Spend §2.4.
@@ -807,7 +842,7 @@ Service tokens for gRPC and Basic credentials for the processor API of `card-aut
 
 ##### sources
 ###### Description
-Exchanges and EVM networks. Business configuration lives here; system configuration lives in the environment. The migrations of C1 add the EVM networks (SRS — EVM Connector §2.4); an exchange is added with its connector. The row `fake` of the fake connector is a development seed, not a migration: `casctl source add-fake` adds it as an enabled `EXCHANGE` source with the aliases of its two assets; a second run changes nothing.
+Exchanges and EVM networks. Business configuration lives here; system configuration lives in the environment. The migrations of C1 add the EVM networks (SRS — EVM Connector §2.4); an exchange is added with its connector. The row `fake` of the fake connector is a development seed, not a migration: `casctl source add-fake` adds it as an enabled `EXCHANGE` source with the aliases of its two assets; a second run changes nothing. From S3, `casctl source set` and `source set-treasury` change single values of `config` of an EVM source (UC-105).
 
 ###### Data model
 
@@ -960,7 +995,7 @@ Append-only record of changes made through the API or the CLI, and of the status
 
 ##### reconciliation_runs
 ###### Description
-One row per reconciliation run (SRS — Card Spend UC-4). Milestone S3.
+One row per reconciliation run of one tenant on one source (SRS — Card Spend UC-4). Milestone S3. Append-only; every run is stored (S3 D-9); retention: `docs/backlog.md`.
 
 ###### Data model
 
@@ -968,11 +1003,32 @@ One row per reconciliation run (SRS — Card Spend UC-4). Milestone S3.
 |---|---|---|---|
 | id | UUID | Yes | Primary key |
 | tenant_id | UUID | Yes | Tenant |
+| source_id | SMALLINT | Yes | Source (S3 D-6) |
 | period_from | TIMESTAMPTZ | Yes | Start of the checked period |
-| period_to | TIMESTAMPTZ | Yes | End of the checked period |
-| totals | JSONB | Yes | Counts and sums of debits and refunds |
-| mismatches | JSONB | Yes | List of mismatches: type, IDs, amounts |
+| period_to | TIMESTAMPTZ | Yes | End of the checked period: `last_time` of the treasury's `logs` cursor (S3 D-7) |
+| to_block | BIGINT | Yes | `next_block − 1` of the treasury's `logs` cursor |
+| totals | JSONB | Yes | Counts and sums of debits and refunds: the fields of `totals` of §2.1.1 Reconciliation run |
+| mismatches | JSONB | Yes | List of mismatches: the fields of §2.1.1 Reconciliation run |
 | created_at | TIMESTAMPTZ | Yes | — |
+
+##### balance_checkpoints
+###### Description
+The last balance checkpoint per connection and native asset, with its gap (Connector contract; SRS — EVM Connector UC-304). Milestone S3 (S3 D-5). A new checkpoint replaces the row. Removed only by the cascade of a deleted connection.
+
+###### Data model
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| connection_id | UUID | Yes | Primary key, part 1 |
+| native_asset | TEXT | Yes | Primary key, part 2 |
+| asset | TEXT | Yes | Canonical code |
+| block_number | BIGINT | No | EVM: the block of the checkpoint |
+| block_hash | TEXT | No | EVM: its hash |
+| taken_at | TIMESTAMPTZ | Yes | Time of the checkpoint at the source: the block time on EVM |
+| balance | NUMERIC(38,18) | Yes | Balance at the source, not negative |
+| ledger_total | NUMERIC(38,18) | Yes | Σ `IN` − Σ `OUT` of the connection for the asset. A difference, so it may be negative; not a ledger amount |
+| gap | NUMERIC(38,18) | Yes | `balance − ledger_total`; 0 when complete |
+| checked_at | TIMESTAMPTZ | Yes | When the row was written |
 
 ---
 
@@ -981,7 +1037,7 @@ One row per reconciliation run (SRS — Card Spend UC-4). Milestone S3.
 #### 2.5.1 Metrics
 
 - Exposed in the Prometheus text format at `/metrics` on the health port.
-- Every metric of the table exists from C1.
+- Every metric of the table exists from C1, except `ledger_gap` from S3.
 
 | Service | Metric name | Value | Alert | Description | Requestor |
 |---|---|---|---|---|---|
@@ -994,6 +1050,7 @@ One row per reconciliation run (SRS — Card Spend UC-4). Milestone S3.
 | server | `rate_limit_wait_seconds{source}` | — | p95 > 30 s | Time spent waiting for the budget | BRD §9.2 |
 | server | `rate_limit_rejections_total{source}` | 0 | Any | "Rate limit exceeded" answers from the source | BRD §9.2 |
 | server | `grpc_request_seconds{method}` | Reads p95 ≤ 100 ms | p95 > 300 ms for 5 min | API latency. `method` is the service and the method: `ConnectionService/ListSources` | BR-3 |
+| server | `ledger_gap{source,connection,asset}` | 0 | Any non-zero | Gap of the last balance checkpoint (Connector contract; SRS — EVM Connector UC-304). From S3 (S3 D-19) | BR-12 |
 
 #### 2.5.2 Alerts
 Conditions are in the Alert column above. Delivery channel: N/A — defined with the deployment.
@@ -1038,7 +1095,8 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
   - the sync engine runs in one `server` instance at a time, guarded by a database advisory lock: one process owns the rate budgets of each source. An instance without the lock serves the API and tries to take the lock every `SYNC_LOCK_RETRY`. An instance that loses the lock stops its runs and tries again;
   - API instances are stateless and can be many. C1 runs one instance: §4, issue 5;
   - the ledger has one writer, so `seq` order equals commit order (FR-114): every transaction that writes ledger entries first takes one database lock, so the entries of different connections are committed one after another;
-  - connections sync concurrently, at most `SYNC_WORKERS` at a time; the streams of one connection run one after another; a stream never runs twice at once.
+  - connections sync concurrently, at most `SYNC_WORKERS` at a time; the streams of one connection run one after another; a stream never runs twice at once;
+  - the reconciliation worker runs in the instance that holds the engine lock. Every `SYNC_TICK` it compares the `logs` cursor of the treasury connection of each source with `to_block` of the source's newest run; a moved cursor starts a run (SRS — Card Spend UC-4, S3 D-8). `casctl reconcile` may run beside it: two runs only store two rows.
 - **Audit log:** `audit_log` for changes; `ledger_entries.raw` for imported data; no secrets in either.
 - **Performance:** read methods p95 ≤ 100 ms: database only. Sync speed is bounded by the source's rate budget, not by CAS.
 - **Reliability:**
@@ -1051,7 +1109,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
   - service tokens and processor passwords stored as hashes;
   - tenant filter on every query (FR-105), covered by an automated test with two tenants;
   - database roles: `cas_server` for `server`, `cas_card_auth` for `card-auth` (S2). The operator creates a role once per environment; the migrations run under the owner role and grant the rights below;
-  - `cas_server` reads `authorizations`, `authorization_events`, `returns` and the columns of `operator_txs` of the table below, and writes none of them; it has no right on `operator_accounts`; `cas_card_auth` reads `cards` but cannot write them; the operator key is not in the database;
+  - `cas_server` reads `authorizations`, `authorization_events`, `returns` and the columns of `operator_txs` of the table below, and writes none of them; from S3 the reconciliation worker reads them; it has no right on `operator_accounts`; `cas_card_auth` reads `cards` but cannot write them; the operator key is not in the database;
   - `cas_card_auth` has no right on the column `connections.credentials_enc`: its `SELECT` on `connections` is granted per column, every column but that one;
   - `casctl` connects with the owner role: neither runtime role can create a tenant or a credential.
 
@@ -1062,7 +1120,9 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 | `balance_snapshots`, `snapshot_balances`, `ledger_entries` | `SELECT`, `INSERT`. Rows are removed only by the cascade of a deleted connection |
 | `cards`, from S2 | `SELECT`, `INSERT`, `UPDATE` |
 | `authorizations`, `authorization_events`, `returns`, from S2 | `SELECT` |
-| `operator_txs`, from S2 | `SELECT` on `authorization_id`, `return_row_id`, `purpose`, `status`, `tx_hash`, `created_at` |
+| `operator_txs`, from S2 | `SELECT` on `authorization_id`, `return_row_id`, `purpose`, `status`, `tx_hash`, `created_at`; from S3 also `block_number`, for the eligibility of a return in reconciliation (S3 D-7) |
+| `balance_checkpoints`, from S3 | `SELECT`, `INSERT`, `UPDATE`. Rows are removed only by the cascade of a deleted connection |
+| `reconciliation_runs`, from S3 | `SELECT`, `INSERT`. Append-only |
 | `audit_log` | `INSERT` |
 | `tenants`, `api_credentials`, `sources`, `asset_aliases` | `SELECT` |
 | `schema_migrations` | `SELECT`, for `/readyz` |

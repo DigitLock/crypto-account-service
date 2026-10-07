@@ -16,7 +16,7 @@
 | 1 | S1 | Contracts | `v0.1.0` | `feature/v0.1.0` | Done | 2026-10-04 |
 | 2 | C1 | Core | `v0.2.0` | `feature/v0.2.0` | Done | 2026-10-05 |
 | 3 | S2 | card-auth | `v0.3.0` | `feature/v0.3.0` | Done | 2026-10-07 |
-| 4 | S3 | EVM connector, reconciliation | `v0.4.0` | `feature/v0.4.0` | Planned | — |
+| 4 | S3 | EVM connector, reconciliation | `v0.4.0` | `feature/v0.4.0` | In progress | — |
 | 5 | X1 | Binance balances | `v0.5.0` | `feature/v0.5.0` | Planned | — |
 | 6 | X2 | Binance history | `v0.6.0` | `feature/v0.6.0` | Planned | — |
 | 7 | W1 | Real-time triggers | `v0.7.0` | `feature/v0.7.0` | Planned | — |
