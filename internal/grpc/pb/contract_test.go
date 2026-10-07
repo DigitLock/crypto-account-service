@@ -15,6 +15,9 @@ import (
 
 const pkg protoreflect.FullName = "cas.v1"
 
+// c1Files are the files of the contract of C1. CardService of S2 (card_service.proto) is checked by S2-T204.
+var c1Files = map[string]bool{"cas/v1/connection_service.proto": true, "cas/v1/account_data_service.proto": true}
+
 // files returns the descriptors of the files of package cas.v1.
 func files(t *testing.T) []protoreflect.FileDescriptor {
 	t.Helper()
@@ -88,6 +91,9 @@ func TestT202_MethodCatalogue(t *testing.T) {
 
 	got := map[string][]string{}
 	for _, fd := range files(t) {
+		if !c1Files[fd.Path()] {
+			continue
+		}
 		for i := range fd.Services().Len() {
 			sd := fd.Services().Get(i)
 			var methods []string
@@ -219,6 +225,9 @@ func TestT203_MessagesAgainstSRS(t *testing.T) {
 
 		seen := map[string]bool{}
 		for _, fd := range fds {
+			if !c1Files[fd.Path()] {
+				continue
+			}
 			for i := range fd.Enums().Len() {
 				ed := fd.Enums().Get(i)
 				name := string(ed.Name())

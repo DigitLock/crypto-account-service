@@ -1,0 +1,18 @@
+# Go code of the vendored CRS contract (third_party/proto/currency_rate, make crs-proto). The proto is kept
+# unchanged: managed mode only replaces its go_package, which points into the CRS repository.
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package
+      path: currency_rate/v1/service.proto
+      value: github.com/DigitLock/crypto-account-service/internal/crs/pb
+inputs:
+  - directory: third_party/proto
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: module=github.com/DigitLock/crypto-account-service
+  - local: protoc-gen-go-grpc
+    out: .
+    opt: module=github.com/DigitLock/crypto-account-service

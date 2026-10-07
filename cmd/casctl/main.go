@@ -1,5 +1,6 @@
-// Command casctl manages tenants and service tokens of CAS (SRS — Core UC-105).
-// It connects with the owner role through CASCTL_DATABASE_URL only.
+// Command casctl manages tenants, service tokens and processor credentials of CAS (SRS — Core UC-105).
+// It connects with the owner role through CASCTL_DATABASE_URL only. The group sim plays the processor against the
+// API of card-auth (SRS — Card Spend §2.1.1) and never opens the database.
 package main
 
 import (
@@ -87,11 +88,11 @@ func safeError(err error) error {
 func (a *app) rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "casctl",
-		Short:         "Manage tenants and service tokens of CAS",
+		Short:         "Manage tenants, service tokens and processor credentials of CAS; simulate the processor",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.sourceCmd())
+	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd(), a.simCmd())
 	return root
 }
 
@@ -235,6 +236,80 @@ func (a *app) tokenCmd() *cobra.Command {
 					fmt.Fprintf(cmd.OutOrStdout(), "Token %s revoked\n", args[0])
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "Token %s is already revoked: nothing changed\n", args[0])
+				}
+				return nil
+			},
+		},
+	)
+	return cmd
+}
+
+func (a *app) processorCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "processor", Short: "Issue, list and revoke Basic credentials of the processor API of card-auth"}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "issue <tenant>",
+			Short: "Issue a processor credential; the pair is printed once as username:password",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				reg, err := a.registry(cmd.Context())
+				if err != nil {
+					return err
+				}
+				pair, err := reg.IssueProcessorCredential(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				// The pair alone on stdout, so that it can be captured; the note on stderr.
+				fmt.Fprintln(cmd.OutOrStdout(), pair.Username+":"+pair.Password)
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"Processor credential %s of tenant %s. It is shown only once and cannot be recovered: store it now.\n",
+					pair.Username, pair.Tenant)
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "list [<tenant>]",
+			Short: "List processor credentials, of all tenants or of one",
+			Args:  cobra.MaximumNArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				reg, err := a.registry(cmd.Context())
+				if err != nil {
+					return err
+				}
+				var tenant string
+				if len(args) == 1 {
+					tenant = args[0]
+				}
+				pairs, err := reg.ListProcessorCredentials(cmd.Context(), tenant)
+				if err != nil {
+					return err
+				}
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "USERNAME\tTENANT\tCREATED\tREVOKED")
+				for _, p := range pairs {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.KeyID, p.Tenant, formatTime(&p.CreatedAt), formatTime(p.RevokedAt))
+				}
+				return w.Flush()
+			},
+		},
+		&cobra.Command{
+			Use:   "revoke <username>",
+			Short: "Revoke a processor credential",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				reg, err := a.registry(cmd.Context())
+				if err != nil {
+					return err
+				}
+				changed, err := reg.RevokeProcessorCredential(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				if changed {
+					fmt.Fprintf(cmd.OutOrStdout(), "Processor credential %s revoked\n", args[0])
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "Processor credential %s is already revoked: nothing changed\n", args[0])
 				}
 				return nil
 			},

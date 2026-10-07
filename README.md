@@ -9,8 +9,8 @@
 | Part | State |
 |---|---|
 | Requirements and design | Written for milestones C1, S1–S3, X1–X2, W1. X3, X4, E1: outlined in the BRD |
-| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI. C1 — Core done: `server` with the gRPC API `cas.v1`, `casctl`, encrypted secrets, sync engine and ledger on PostgreSQL, a fake connector, CI |
-| Milestone | Next: S2 — card-auth, `v0.3.0`. Closed: S1 — Contracts, `v0.1.0`; C1 — Core, `v0.2.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
+| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI. C1 — Core done: `server` with the gRPC API `cas.v1`, `casctl`, encrypted secrets, sync engine and ledger on PostgreSQL, a fake connector, CI. S2 — card-auth done: `card-auth` with the processor API, decision, operator queue, tracker and chain listener; `CardService` in `server`; `casctl sim` and `casctl processor`; contracts deployed on Base Sepolia, decision p95 0.696 s ([Deployment Guide](docs/deployment-guide.md)) |
+| Milestone | Next: S3 — EVM connector, reconciliation, `v0.4.0`. Closed: S1 — Contracts, `v0.1.0`; C1 — Core, `v0.2.0`; S2 — card-auth, `v0.3.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
 
 ## Design highlights
 
@@ -54,32 +54,42 @@ Tracks S and X are independent. Details and dependencies: BRD §7.3.
 
 ## Repository layout
 
-`testdata/` and `cmd/card-auth` are planned; the rest exists.
+`testdata/` is planned; the rest exists.
 
 ```
 docs/         requirements and design
 contracts/    CardSpendController, MockUSDC, Foundry tests      S1 (done)
-proto/        cas/v1 gRPC contract and its frozen image         C1 (done)
-cmd/          server, casctl; card-auth                         C1 (done); S2
-internal/     API, registry, vault, connectors, sync engine,    C1 (done); card spend from S2
-              rate limiter, ledger
-migrations/   database schema                                   C1 (done)
+proto/        cas/v1 gRPC contract and its frozen image         C1, S2 (done)
+api/          OpenAPI of the processor API and its frozen copy  S2 (done)
+cmd/          server, casctl, card-auth                         C1, S2 (done)
+internal/     API, registry, vault, connectors, sync engine,    C1, S2 (done)
+              rate limiter, ledger; card spend: decision,
+              operator queue, signer, tracker, chain listener,
+              card registry
+migrations/   database schema                                   C1, S2 (done)
+scripts/      sepolia/: deployment on Base Sepolia              S2 (done)
+third_party/  CRS gRPC contract, vendored unchanged             S2 (done)
+.github/      CI workflows: contracts, go, proto, secrets       S1, C1, S2 (done)
 testdata/     recorded fixtures of source responses             X1
 ```
 
 ## Run locally
 
-Needs Go 1.27 and PostgreSQL 16; `buf`, `sqlc`, `migrate` and `gitleaks` on the PATH in the versions of [the test plan](docs/test-plan-c1.md) §1. Connection strings and the master key live in an ignored `.env`; `.env.example` lists the variables.
+Needs Go 1.27 and PostgreSQL 16; `buf`, `sqlc`, `migrate` and `gitleaks` on the PATH in the versions of [the test plan of C1](docs/test-plan-c1.md) §1; Foundry 1.8.3 (`anvil`, `forge`, `cast`) on the PATH for the chain tests, as [the test plan of S2](docs/test-plan-s2.md) §1 states. Connection strings and the master key live in an ignored `.env`; `.env.example` lists the variables.
 
 | Step | Command |
 |---|---|
 | Code generators of the contract, into `./bin` | `make tools` |
-| Database role of `server`, once per database | `CREATE ROLE cas_server LOGIN PASSWORD '…'`, by the owner role |
+| Database roles of `server` and `card-auth`, once per database, before the schema | `CREATE ROLE cas_server LOGIN PASSWORD '…'`, `CREATE ROLE cas_card_auth LOGIN PASSWORD '…'`, by the owner role |
 | Schema | `make migrate-up` |
 | Tenant and service token | `make casctl ARGS="tenant create demo"`, `make -s casctl ARGS="token issue demo"` |
 | Fake source for a demo, with `ENABLE_FAKE_SOURCE=true` | `make casctl ARGS="source add-fake"` |
 | Server: gRPC 50053, health and metrics 8091 | `make run` |
-| Checks before a commit | `make check`, `make sqlc-check`, `make proto-check`, `make secrets` |
+| Checks before a commit | `make check`, `make sqlc-check`, `make bindings-check`, `make proto-check`, `make crs-proto-check`, `make openapi-check`, `make secrets` |
+| Processor simulator against a running `card-auth`, test networks only | `go run ./cmd/casctl sim authorize --auth-id a-1 --card-ref card_A --amount 25.40 --currency USD`; also `sim return`, `sim get` |
+| Deployment on Base Sepolia: contracts, setup, registration, `card-auth`, p95 measurement | `scripts/sepolia/`, steps in the [Deployment Guide](docs/deployment-guide.md) |
+
+- `casctl sim` plays the processor through the API of `card-auth` ([SRS — Card Spend](docs/srs/card-spend.md) §2.1.1) and never opens the database. It reads `CASCTL_CARD_AUTH_URL`, `CASCTL_PROCESSOR_USERNAME` and `CASCTL_PROCESSOR_PASSWORD` and never prints the password. Output: one JSON line per answer, `{"status": …, "body": …}`; exit code 0 for any answer of the API, 4xx included, not 0 for a transport error or a 5xx. `authorize --repeat N --parallel P` sends the same request N times, P at a time.
 
 ## Related services
 

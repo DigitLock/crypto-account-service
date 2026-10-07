@@ -12,6 +12,10 @@ on:
       - "Makefile"
       - "migrations/**"
       - "sqlc.yaml"
+      - "contracts/src/**"
+      - "contracts/script/**"
+      - "contracts/abi/**"
+      - "scripts/**"
       - ".github/workflows/go.yml"
   pull_request:
     branches:
@@ -23,6 +27,10 @@ on:
       - "Makefile"
       - "migrations/**"
       - "sqlc.yaml"
+      - "contracts/src/**"
+      - "contracts/script/**"
+      - "contracts/abi/**"
+      - "scripts/**"
       - ".github/workflows/go.yml"
 
 permissions:
@@ -32,9 +40,22 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# The tests run in three parallel jobs, balanced by the time per package. The packages of the dedicated jobs are
+# listed here; the job rest runs every other package of go list ./... and asserts that the jobs together run each
+# package exactly once.
+env:
+  PACKAGES_PROCESSORAPI: ./internal/processorapi
+  PACKAGES_HARDTEST: ./internal/hardtest ./internal/rehearsal
+  TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/cas_test?sslmode=disable
+  TEST_DATABASE_URL_SERVER: postgres://cas_server:cas_server@localhost:5432/cas_test?sslmode=disable
+  TEST_DATABASE_URL_CARD_AUTH: postgres://cas_card_auth:cas_card_auth@localhost:5432/cas_test?sslmode=disable
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  # Format, vet, build and the generated-code checks, the package-union guard, and the tests of every package
+  # that has no job of its own.
+  rest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
     services:
       postgres:
         image: postgres:16
@@ -48,11 +69,10 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-    env:
-      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/cas_test?sslmode=disable
-      TEST_DATABASE_URL_SERVER: postgres://cas_server:cas_server@localhost:5432/cas_test?sslmode=disable
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - uses: actions/setup-go@v7
         with:
@@ -60,6 +80,44 @@ jobs:
 
       - name: Go version
         run: go version
+
+      # Every package of go list ./... runs in exactly one job: the dedicated lists, and the rest computed here.
+      - name: Package lists
+        run: |
+          set -euo pipefail
+          go list ./... | sort > "$RUNNER_TEMP/all"
+          : > "$RUNNER_TEMP/dedicated"
+          for pkg in $PACKAGES_PROCESSORAPI $PACKAGES_HARDTEST; do
+            go list "$pkg" >> "$RUNNER_TEMP/dedicated"
+          done
+          sort "$RUNNER_TEMP/dedicated" -o "$RUNNER_TEMP/dedicated"
+          comm -23 "$RUNNER_TEMP/all" "$RUNNER_TEMP/dedicated" > "$RUNNER_TEMP/rest"
+          echo "Dedicated jobs:"; cat "$RUNNER_TEMP/dedicated"
+          echo "Job rest:"; cat "$RUNNER_TEMP/rest"
+
+      - name: Every package runs exactly once
+        run: |
+          set -euo pipefail
+          twice="$(cat "$RUNNER_TEMP/dedicated" "$RUNNER_TEMP/rest" | sort | uniq -d)"
+          if [ -n "$twice" ]; then
+            echo "Packages run by more than one job:"; echo "$twice"; exit 1
+          fi
+          unknown="$(comm -13 "$RUNNER_TEMP/all" "$RUNNER_TEMP/dedicated")"
+          if [ -n "$unknown" ]; then
+            echo "Packages of a dedicated job outside go list ./...:"; echo "$unknown"; exit 1
+          fi
+          if ! cat "$RUNNER_TEMP/dedicated" "$RUNNER_TEMP/rest" | sort | cmp -s - "$RUNNER_TEMP/all"; then
+            echo "The jobs together do not run go list ./..."; exit 1
+          fi
+          echo "$(wc -l < "$RUNNER_TEMP/all") packages, each in one job"
+
+      # anvil and forge for the chain tests of cmd/card-auth and internal/debit (internal/testchain).
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.3
+
+      - name: Forge version
+        run: forge --version
 
       - name: Format check
         run: |
@@ -88,8 +146,122 @@ jobs:
       - name: Generated data access code is current
         run: make sqlc-check
 
+      - name: Generated contract bindings are current
+        run: make bindings-check
+
       - name: Create the role cas_server
         run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_server LOGIN PASSWORD 'cas_server';"
 
+      - name: Create the role cas_card_auth
+        run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_card_auth LOGIN PASSWORD 'cas_card_auth';"
+
       - name: Test
-        run: go test -race -count=1 -p 1 ./...
+        run: |
+          # shellcheck disable=SC2046
+          go test -race -count=1 -p 1 $(cat "$RUNNER_TEMP/rest")
+
+  # The processor API with the decision, the operator queue, returns, the tracker and the listener on Anvil.
+  processorapi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cas_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Go version
+        run: go version
+
+      # anvil and forge for the chain tests (internal/testchain).
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.3
+
+      - name: Forge version
+        run: forge --version
+
+      - name: Create the role cas_server
+        run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_server LOGIN PASSWORD 'cas_server';"
+
+      - name: Create the role cas_card_auth
+        run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_card_auth LOGIN PASSWORD 'cas_card_auth';"
+
+      - name: Test
+        run: |
+          # shellcheck disable=SC2086
+          go test -race -count=1 -p 1 $PACKAGES_PROCESSORAPI
+
+  # The hard tests of card-auth and casctl as processes, and the rehearsal of scripts/sepolia/ on Anvil.
+  hardtest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cas_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Go version
+        run: go version
+
+      # anvil, forge and cast for the hard tests and the rehearsal (internal/testchain).
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.3
+
+      - name: Forge version
+        run: forge --version
+
+      # buf curl for scripts/sepolia/register.sh in the rehearsal (internal/rehearsal); the pin of proto.yml.
+      - name: Install buf
+        run: |
+          mkdir -p "$RUNNER_TEMP/buf"
+          curl -sSfL -o "$RUNNER_TEMP/buf/buf" \
+            https://github.com/bufbuild/buf/releases/download/v1.73.0/buf-Linux-x86_64
+          echo "8f2986298ad08f0cc1bf999b9797b7c383adf32d7edf0f73d6f1e1a701baeac1  $RUNNER_TEMP/buf/buf" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/buf/buf"
+          echo "$RUNNER_TEMP/buf" >> "$GITHUB_PATH"
+
+      - name: Create the role cas_server
+        run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_server LOGIN PASSWORD 'cas_server';"
+
+      - name: Create the role cas_card_auth
+        run: psql "$TEST_DATABASE_URL" -c "CREATE ROLE cas_card_auth LOGIN PASSWORD 'cas_card_auth';"
+
+      - name: Test
+        run: |
+          # shellcheck disable=SC2086
+          go test -race -count=1 -p 1 $PACKAGES_HARDTEST

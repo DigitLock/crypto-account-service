@@ -168,8 +168,13 @@ func TestT301_ApplyOnCleanDatabase(t *testing.T) {
 		t.Fatalf("migrate up: %v", err)
 	}
 	assertVersion(t, m, migrations.Latest())
-	if got := tables(t, owner); !slices.Equal(got, coreTables) {
-		t.Errorf("tables = %v, want %v", got, coreTables)
+	// The tables of C1. The card tables of S2 are checked by S2-T301.
+	got := tables(t, owner)
+	for _, table := range coreTables {
+		if !slices.Contains(got, table) {
+			t.Errorf("tables = %v, want %v among them", got, coreTables)
+			break
+		}
 	}
 }
 

@@ -62,23 +62,68 @@ contract ScriptsTest is CardSpendControllerBase {
         assertEq(MockUSDC(deployedToken).balanceOf(deployedController), 0);
     }
 
-    // S1-T704 — Req: Handoff §4
+    string internal constant DEPLOY_GUARD = "Deploy: chain ID is not 31337 (Anvil) or 84532 (Base Sepolia)";
+    string internal constant SCENARIO_GUARD = "Scenario: chain ID is not 31337 (Anvil) or 84532 (Base Sepolia)";
+
+    // S1-T704 — Req: Handoff §4. Since S2 (owner's decision D-3) 84532 is accepted: S2-T801.
     function test_T704_chainGuard() public {
         Deploy deployScript = new Deploy();
         Scenario scenario = new Scenario();
-        uint256[3] memory chainIds = [uint256(1), 8453, 84_532];
+        uint256[3] memory chainIds = [uint256(1), 8453, 11_155_111];
 
         for (uint256 i; i < chainIds.length; ++i) {
             vm.chainId(chainIds[i]);
 
-            vm.expectRevert(bytes("Deploy: chain ID is not 31337 (local Anvil only)"));
+            vm.expectRevert(bytes(DEPLOY_GUARD));
             deployScript.run();
 
-            vm.expectRevert(bytes("Deploy: chain ID is not 31337 (local Anvil only)"));
+            vm.expectRevert(bytes(DEPLOY_GUARD));
             deployScript.deploy(deployer, address(0), treasury, admin, operator);
 
-            vm.expectRevert(bytes("Scenario: chain ID is not 31337 (local Anvil only)"));
+            vm.expectRevert(bytes(SCENARIO_GUARD));
             scenario.run();
         }
+    }
+
+    // The guard accepts chainId when the script gets past it: Deploy.deploy needs no environment; Scenario.run
+    // reads the environment right after the guard, so any revert other than the guard's own is a pass.
+    function assertGuardAccepts(uint256 chainId) internal {
+        Deploy deployScript = new Deploy();
+        Scenario scenario = new Scenario();
+        vm.chainId(chainId);
+        (address deployedToken, address deployedController) =
+            deployScript.deploy(deployer, address(0), treasury, admin, operator);
+        assertDeployed(deployedToken, deployedController);
+
+        try scenario.run() {}
+        catch Error(string memory reason) {
+            assertNotEq(reason, SCENARIO_GUARD, "Scenario refuses the chain");
+        } catch {}
+    }
+
+    // S2-T801 — Req: S1 summary §6, package 1.6, owner's decision D-3
+    function test_S2_T801_acceptsAnvil() public {
+        assertGuardAccepts(31_337);
+    }
+
+    // S2-T801 — Req: S1 summary §6, package 1.6, owner's decision D-3
+    function test_S2_T801_acceptsBaseSepolia() public {
+        assertGuardAccepts(84_532);
+    }
+
+    // S2-T801 — Req: S1 summary §6, package 1.6, owner's decision D-3
+    function test_S2_T801_rejectsMainnet() public {
+        Deploy deployScript = new Deploy();
+        Scenario scenario = new Scenario();
+        vm.chainId(1);
+
+        vm.expectRevert(bytes(DEPLOY_GUARD));
+        deployScript.run();
+
+        vm.expectRevert(bytes(DEPLOY_GUARD));
+        deployScript.deploy(deployer, address(0), treasury, admin, operator);
+
+        vm.expectRevert(bytes(SCENARIO_GUARD));
+        scenario.run();
     }
 }

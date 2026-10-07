@@ -38,11 +38,60 @@ type AuditLog struct {
 	CreatedAt    time.Time
 }
 
+type Authorization struct {
+	ID             uuid.UUID
+	TenantID       uuid.UUID
+	AuthID         string
+	ChainAuthID    []byte
+	ParentAuthID   *string
+	CardID         *uuid.UUID
+	RequestHash    []byte
+	FiatAmount     pgtype.Numeric
+	FiatCurrency   *string
+	Rate           pgtype.Numeric
+	BufferBps      *int32
+	Token          *string
+	TokenAmount    pgtype.Numeric
+	DebitedAmount  pgtype.Numeric
+	ReturnedAmount pgtype.Numeric
+	WalletAddress  []byte
+	ChainID        *int64
+	Status         string
+	DeclineReason  *string
+	Merchant       []byte
+	ReceivedAt     time.Time
+	DeadlineAt     *time.Time
+	ValidUntil     *time.Time
+	DecidedAt      *time.Time
+}
+
+type AuthorizationEvent struct {
+	ID              int64
+	AuthorizationID uuid.UUID
+	FromStatus      *string
+	ToStatus        string
+	Reason          *string
+	Details         []byte
+	CreatedAt       time.Time
+}
+
 type BalanceSnapshot struct {
 	ID           uuid.UUID
 	ConnectionID uuid.UUID
 	TakenAt      time.Time
 	CreatedAt    time.Time
+}
+
+type Card struct {
+	ID           uuid.UUID
+	TenantID     uuid.UUID
+	CardRef      string
+	OwnerRef     string
+	ConnectionID uuid.UUID
+	Status       string
+	DailyLimit   pgtype.Numeric
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type Connection struct {
@@ -78,6 +127,43 @@ type LedgerEntry struct {
 	OccurredAt   time.Time
 	Raw          []byte
 	CreatedAt    time.Time
+}
+
+type OperatorAccount struct {
+	ChainID   int64
+	Address   []byte
+	NextNonce int64
+}
+
+type OperatorTx struct {
+	ID              uuid.UUID
+	ChainID         int64
+	OperatorAddress []byte
+	Nonce           int64
+	Purpose         string
+	AuthorizationID *uuid.UUID
+	ReturnRowID     *uuid.UUID
+	TxHash          []byte
+	ReplacedHashes  [][]byte
+	Status          string
+	BlockNumber     *int64
+	BlockHash       []byte
+	CreatedAt       time.Time
+}
+
+type Return struct {
+	ID              uuid.UUID
+	TenantID        uuid.UUID
+	AuthorizationID uuid.UUID
+	ReturnID        string
+	ChainRefundID   []byte
+	Type            string
+	RequestHash     []byte
+	FiatAmount      pgtype.Numeric
+	TokenAmount     pgtype.Numeric
+	Status          string
+	Attempts        int32
+	CreatedAt       time.Time
 }
 
 type SnapshotBalance struct {

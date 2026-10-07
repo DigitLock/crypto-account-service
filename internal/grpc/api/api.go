@@ -42,7 +42,9 @@ type Deps struct {
 	Credentials CredentialStore
 	// Connections manages the connections of a tenant.
 	Connections *registry.Connections
-	Logger      *slog.Logger
+	// Cards manages the card registry of a tenant and reads its authorizations.
+	Cards  *registry.Cards
+	Logger *slog.Logger
 	// Metrics receives grpc_request_seconds (SRS — Core §2.5.1); nil keeps it unregistered.
 	Metrics prometheus.Registerer
 }
@@ -64,6 +66,7 @@ func NewServer(deps Deps, opts ...grpc.ServerOption) *grpc.Server {
 	srv := grpc.NewServer(opts...)
 	casv1.RegisterConnectionServiceServer(srv, &connectionService{conns: deps.Connections, logger: deps.Logger})
 	casv1.RegisterAccountDataServiceServer(srv, &accountDataService{conns: deps.Connections, logger: deps.Logger})
+	casv1.RegisterCardServiceServer(srv, &cardService{cards: deps.Cards, logger: deps.Logger})
 	reflection.Register(srv)
 	return srv
 }

@@ -40,7 +40,8 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Treasury | Address that receives debited tokens and funds refunds. CAS watches it as a connection of the platform's own tenant. |
 | Nonce | Sequence number of a sender's transactions. One operator key has one sequence. |
 | Gas | Fee paid for a transaction in the network's native coin. The operator pays it. |
-| Preconfirmation | Early signal from the block builder that a transaction will be in the next block. On Base it arrives about every 200 ms. It can still be dropped. |
+| Preconfirmation | Early signal from the block builder that a transaction will be in the next block. On Base it arrives about every 200 ms. It can still be dropped. A preconfirmed log or receipt carries a zero block hash. |
+| Flashblocks | Base's preconfirmation mechanism: a partial block every 200 ms. Reached with the `pending` block tag and the WebSocket subscription `pendingLogs` of a Flashblocks-capable RPC provider. |
 | Sealed block | Block that has been produced and published. On Base every 2 s. |
 | Finality | Point after which a block cannot change. |
 | Block tag | Named block in an RPC request: `latest`, `pending`, `safe`, `finalized`. |
@@ -96,6 +97,6 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Lost debit | Approved debit that was dropped by the network and could not be repeated. Issuer exposure. |
 | Tombstone | Record of a reversal that arrived before its authorization. Makes the late authorization decline. |
 | Event listener | Component of `server` that holds a WebSocket connection to an exchange and turns account events into sync triggers. |
-| Chain listener | Component of `card-auth` that subscribes to preconfirmed logs and new blocks and reports inclusion signals. |
+| Chain listener | Component of `card-auth` that subscribes to the `Debited` logs of the controller (`pendingLogs` or `logs`), never to new blocks, and reports inclusion signals. |
 | Tracker | Background worker of `card-auth`: follows debits and returns to their final status. |
 | Event indexer | The EVM connector of `server`: reads contract and token event logs from final blocks into the ledger. |

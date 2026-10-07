@@ -21,6 +21,7 @@ service ConnectionService {
   // GetConnection returns one connection with the health of its streams.
   rpc GetConnection(GetConnectionRequest) returns (GetConnectionResponse);
   // DeleteConnection removes a connection with its secret, cursors, snapshots and ledger entries.
+  // FAILED_PRECONDITION reason: CONNECTION_HAS_CARDS.
   rpc DeleteConnection(DeleteConnectionRequest) returns (DeleteConnectionResponse);
   // TriggerSync makes every stream of a connection due now.
   // RESOURCE_EXHAUSTED inside the cooldown. FAILED_PRECONDITION reason: CREDENTIALS_INVALID.

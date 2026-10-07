@@ -183,3 +183,4 @@ Batches run in the QA stage in phase order; one line per batch and attempt. Cycl
 - Mutation check of the invariant suite (st6): four temporary mutations of the contract — over-refund allowed, `authId` reuse allowed, limit check removed, `refundId` not recorded — were each caught by the matching invariants. The contract was restored unchanged.
 - Live Anvil run of st7: `Deploy` from account 0, `Scenario` with accounts 1–4 as admin, operator, treasury and wallet; the on-chain values read back with `cast call` equalled the script's checks.
 - Known issues and backlog: none opened in S1.
+- Since S2 (owner's decision D-3 of 2026-10-05) the scripts also accept chain ID 84532, Base Sepolia. The test of S1-T704 was changed with it: chain IDs 1, 8453 and 11155111 are refused; 84532 is covered by S2-T801 in `docs/test-plan-s2.md`.

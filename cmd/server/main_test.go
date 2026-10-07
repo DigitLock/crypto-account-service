@@ -193,7 +193,8 @@ func TestT104_RunServesHealthPortAndGRPC(t *testing.T) {
 		}
 	}
 	slices.Sort(services)
-	if want := []string{"cas.v1.AccountDataService", "cas.v1.ConnectionService"}; !slices.Equal(services, want) {
+	// CardService since S2 st4.
+	if want := []string{"cas.v1.AccountDataService", "cas.v1.CardService", "cas.v1.ConnectionService"}; !slices.Equal(services, want) {
 		t.Errorf("gRPC services = %v, want %v", services, want)
 	}
 	_ = stream.CloseSend()

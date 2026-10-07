@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.37;
 
-// Deploys MockUSDC (unless TOKEN is given) and CardSpendController on a local Anvil (chain ID 31337) only.
-// Env: DEPLOYER (broadcast sender), TREASURY, ADMIN, OPERATOR; TOKEN optional. No private key: run with
+// Deploys MockUSDC (unless TOKEN is given) and CardSpendController on a test network only: local Anvil
+// (chain ID 31337) or Base Sepolia (chain ID 84532). Any other chain ID reverts.
+// Env: DEPLOYER (broadcast sender), TREASURY, ADMIN, OPERATOR; TOKEN optional. On Anvil no private key: run with
 // `forge script --unlocked --sender $DEPLOYER` against Anvil's unlocked accounts. See contracts/README.md.
 
 import {CardSpendController} from "../src/CardSpendController.sol";
@@ -12,10 +13,11 @@ import {Script, console} from "forge-std/Script.sol";
 
 contract Deploy is Script {
     uint256 internal constant ANVIL_CHAIN_ID = 31_337;
+    uint256 internal constant BASE_SEPOLIA_CHAIN_ID = 84_532;
 
     /// @notice Reads the addresses from the environment and deploys.
     function run() external returns (address token, address controller) {
-        _requireAnvil();
+        _requireTestNetwork();
         return deploy(
             vm.envAddress("DEPLOYER"),
             vm.envOr("TOKEN", address(0)),
@@ -30,7 +32,7 @@ contract Deploy is Script {
         public
         returns (address, address)
     {
-        _requireAnvil();
+        _requireTestNetwork();
         vm.startBroadcast(deployer);
         if (token == address(0)) token = address(new MockUSDC());
         address controller = address(new CardSpendController(IERC20(token), treasury, admin, operator));
@@ -41,7 +43,10 @@ contract Deploy is Script {
         return (token, controller);
     }
 
-    function _requireAnvil() internal view {
-        require(block.chainid == ANVIL_CHAIN_ID, "Deploy: chain ID is not 31337 (local Anvil only)");
+    function _requireTestNetwork() internal view {
+        require(
+            block.chainid == ANVIL_CHAIN_ID || block.chainid == BASE_SEPOLIA_CHAIN_ID,
+            "Deploy: chain ID is not 31337 (Anvil) or 84532 (Base Sepolia)"
+        );
     }
 }

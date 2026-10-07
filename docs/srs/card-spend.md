@@ -9,7 +9,7 @@
 - **Milestones:** S1 (contract), S2 (`card-auth`), S3 (reconciliation, UC-4).
 - **Out of scope:** tenants, card registry (US-6) and ledger — SRS — Core; event indexer — [SRS — EVM Connector](evm-connector.md). Items marked `Design only` in the PRD are outlined in §2.3.5.
 - **Parents:** [PRD — Card Spend](../prd/card-spend.md) (`US-n`, `EC-n`), [BRD](../brd.md) (`BR-n`), [ADR](../adr/README.md) 3, 7–13.
-- **Version:** 1.1, 2026-10-04. §2.1.5 completed by the discovery of S1: constructor, roles, check order, `ZeroAddress`, `MockUSDC`. Version 1.0 approved 2026-10-04.
+- **Version:** 1.2, 2026-10-05. Completed by the discovery of S2: error bodies and validation of the processor API, processor credentials, request normalization, lock and waiter rules, read block tag, fees, preconfirmed receipts, the `PLANNED` slot after a restart, start checks, fallback endpoint, TLS, tombstone response, rate precision and age; §4 issues 1 and 5 closed. Completed in S2 st10a, 2026-10-06, to match the code: `quote` absent for USD, the cases of `RATE_UNAVAILABLE` and `TIMEOUT`, the output and exit code of `casctl sim`, the unique `chain_auth_id` and `chain_refund_id`, what `inclusion_signals_total` counts; the reference point of the decision deadline, the quote in base units, the release of a `PLANNED` slot, a stuck release, the finality tags, the ranges checked at start, the probe of the primary, the fallback counter, the connect timeout of the listener. Owner's answers of 2026-10-06: the exception of FR-20 for refunds; `TIMEOUT` when the deadline ends a step; `INTERNAL_ERROR` of step 6; `405` and the plain-text answers of the router; `returns_not_confirmed` as built; a rate limit at a refund attempt and at the start; the treasury address read again by the metric update while unset (2026-10-07); the write-ahead of a resubmitted debit; the scope of `rpc_read_timeout`; at most 50 returns per cycle. Version 1.1, 2026-10-04: §2.1.5 completed by the discovery of S1. Version 1.0 approved 2026-10-04.
 
 | Term | Meaning |
 |---|---|
@@ -18,6 +18,8 @@
 | Debit | On-chain transfer wallet → treasury for one authorization. |
 | Return | On-chain transfer treasury → wallet: reversal, refund, or automatic refund of a late debit. Executed by the contract function `refund`. |
 | Inclusion signal | Evidence that the debit executed: a `Debited` log with the `authId`, preconfirmed or in a sealed block, or a receipt with status `success`. |
+| Preconfirmed | Executed in a Flashblock, not yet in a sealed block. A preconfirmed log or receipt carries a zero `blockHash`; a sealed one carries the real hash. |
+| Flashblocks | Base's preconfirmations: a partial block every 200 ms. Served by the `pending` block tag and by the WebSocket subscription `pendingLogs` (§4, issue 1). |
 | Operator | The `card-auth` key that holds the `OPERATOR` role in the contract. |
 | Base units | Integer token amount. 1 USDC = 1 000 000 base units. |
 
@@ -57,7 +59,7 @@ flowchart LR
     engine --> queue
     queue -- "send transaction" --> rpc
     tracker -- "receipts, blocks" --> rpc
-    rpc -- "preconfirmed logs, new blocks" --> listener
+    rpc -- "preconfirmed logs" --> listener
     listener -- "inclusion signal" --> engine
     tracker --> queue
     rpc --> ctrl
@@ -73,7 +75,7 @@ flowchart LR
 | Quote | Fiat amount → token base units |
 | Operator queue | Nonce allocation, signing, sending, replacement of stuck transactions |
 | Tracker | Background worker: finality, late debits, lost debits, return execution |
-| Chain listener | WebSocket subscription to preconfirmed logs and new blocks; reconnects on its own; passes inclusion signals to the decision engine (ADR-13) |
+| Chain listener | One WebSocket subscription to preconfirmed logs, filtered by the controller address and the `Debited` topic; no subscription to new blocks; reconnects on its own; passes inclusion signals to the decision engine (ADR-13) |
 
 ##### Sequence diagram
 
@@ -114,9 +116,13 @@ sequenceDiagram
 
 ##### Common rules
 
-- **Base path:** `/v1`. Media type: `application/json`.
-- **Authorization:** HTTP Basic over TLS. One credential pair maps to one tenant. mTLS and request signing are out of MVP.
-- **Amounts:** fiat amounts are decimal strings; token amounts are base-unit integer strings.
+- **Contract:** `api/openapi/card-auth.yaml`, OpenAPI 3.0.3. Frozen copy: `api/openapi/frozen/card-auth.yaml`; `make openapi-check` compares the two and runs `oasdiff breaking`. A change of the contract needs the owner's decision and an update of this SRS first. Changed after the freeze of st3, before any consumer existed: by the owner's decisions D-17 … D-19 of 2026-10-06, and by the `500` of `POST …/returns` that D-18 announced for st6 (S2 st6a, 2026-10-06, an added response only).
+- **Base path:** `/v1`. Media type: `application/json`. A request body above 16 KiB is `422`.
+- **Authorization:** HTTP Basic. One credential pair maps to one tenant. The pair is issued by `casctl processor issue <tenant>` and printed once: username = `key_id`, 12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters. Stored in `api_credentials` with `kind = PROCESSOR_BASIC` and the SHA-256 hash of the password bytes; verified in constant time (SRS — Core UC-105). `casctl processor list` and `revoke` as for service tokens. mTLS and request signing are out of MVP.
+- **TLS:** terminated in front of the service by the deployment (Deployment Guide). `card-auth` itself listens on plain HTTP; S2 runs it locally that way.
+- **Amounts:** fiat amounts are decimal strings; token amounts are base-unit integer strings. Responses carry decimal amounts without trailing zeros and without exponent, as SRS — Core §2.1.1; a request may carry trailing zeros.
+- **Validation, every endpoint:** `auth_id` and `return_id` are 1 to 64 printable ASCII characters (0x20–0x7E); `card_ref` is 1 to 64 characters, as in `RegisterCard` (D-19); `amount` is a decimal string greater than 0 with at most 14 digits before the point and at most 4 decimal places, no exponent: it fits `NUMERIC(18,4)` (D-17); `currency` is three upper-case letters; unknown fields are ignored.
+- **Normalized request:** the body compared for idempotency is the canonical form of the request: keys sorted, no whitespace, `amount` as a decimal without trailing zeros, `currency` upper case, `merchant` canonicalized the same way. `request_hash` is the SHA-256 of that form, so `"25.40"` and `"25.4"` and a different key order are the same request.
 - **HTTP status codes:**
 
 | Code | Meaning |
@@ -126,8 +132,24 @@ sequenceDiagram
 | `404` | `auth_id` not found (status query only). |
 | `409` | Conflict: same `auth_id` or `return_id` with a different body, or a return for an authorization that is still being decided. |
 | `422` | Invalid request. |
+| `500` | Internal failure of a status query or a return; never for an authorization (D-18). |
+| `405` | Method not allowed on a path of the API: answered by the router as plain text, without the error body. |
 
 - An internal error during an authorization returns `200` with `DECLINED / INTERNAL_ERROR`: the processor always gets a decision.
+- **Error body** of `401`, `404`, `409`, `422` and `500` of the routes of the API: `{ "error": { "code": "<code>", "message": "<text>" } }`. The message carries no secret and no internal detail. A path that is not a route of the API answers `404` and a wrong method on a route `405`, both from the router as plain text, without the error body.
+
+| Code | Status | When |
+|---|---|---|
+| `UNAUTHENTICATED` | `401` | Missing or malformed header, unknown username, wrong password, revoked pair, disabled tenant: one body for all |
+| `INVALID_REQUEST` | `422` | A validation rule above fails, or the body is not JSON |
+| `AUTH_ID_CONFLICT` | `409` | Known `auth_id` with a different normalized body |
+| `RETURN_ID_CONFLICT` | `409` | Known `return_id` with a different normalized body |
+| `AUTHORIZATION_IN_PROGRESS` | `409` | Return while the authorization is `RECEIVED` or `DEBIT_SUBMITTED` |
+| `RETURN_EXCEEDS_DEBIT` | `422` | Return amount above the part not yet returned |
+| `NOT_FOUND` | `404` | Unknown `auth_id` in the status query |
+| `INTERNAL` | `500` | Internal failure of a status query or a return: the database cannot be read. The message carries no internal detail (D-18) |
+
+- **Processor simulator:** `casctl sim authorize | return | get`, test networks only (owner's decision, 2026-10-06). It plays the processor through this API and never opens the database. Environment: `CASCTL_CARD_AUTH_URL`, `CASCTL_PROCESSOR_USERNAME`, `CASCTL_PROCESSOR_PASSWORD`; the password is never printed. Output: one JSON line per answer, `{"status": <HTTP status>, "body": <body>}`; exit code 0 for any answer of the API, `4xx` included, not 0 for a transport error or a `5xx`; 30 s per request. `authorize` takes `--repeat N` and `--parallel P`, each at least 1, to send the same request N times, P at a time.
 
 #### 2.1.2 Authorize
 
@@ -155,7 +177,7 @@ See Common rules.
 | Parameter | Type | Required | Description | Example |
 |---|---|---|---|---|
 | auth_id | String, ≤ 64 | Yes | Processor's authorization ID. Unique per tenant. Reused on retries. | `9f1c2a7e-…` |
-| card_ref | String | Yes | Opaque card reference registered by the partner. | `card_7Q2M` |
+| card_ref | String, 1 to 64 characters | Yes | Opaque card reference registered by the partner. | `card_7Q2M` |
 | amount | String, decimal | Yes | Amount in `currency`, > 0. | `25.40` |
 | currency | String, ISO 4217 | Yes | Authorization currency. | `EUR` |
 | merchant | Object | No | Stored for audit. Not used in the decision in MVP. | — |
@@ -179,7 +201,7 @@ See Common rules.
   "auth_id": "9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11",
   "decision": "DECLINED",
   "status": "DECLINED",
-  "reason": "INSUFFICIENT_ALLOWANCE"
+  "decline_reason": "INSUFFICIENT_ALLOWANCE"
 }
 ```
 
@@ -188,13 +210,16 @@ See Common rules.
 | auth_id | String | Yes | Echo of the request. | — |
 | decision | Enum | Yes | `APPROVED` or `DECLINED`. | `APPROVED` |
 | status | Enum | Yes | Authorization state, §2.3.1. | `APPROVED` |
-| reason | Enum | If declined | Decline reason, table below. | `TIMEOUT` |
+| decline_reason | Enum | If declined | Decline reason, table below. The same name in the status query, the gRPC API and the database. | `TIMEOUT` |
 | token | String | If approved | Funding token symbol. | `USDC` |
 | token_amount | String, integer | If approved | Debited amount in base units. | `29866387` |
-| quote | Object | If approved | Rate and buffer used. `rate` = USD per one unit of `currency`; absent for USD. | — |
+| quote | Object | If approved in a currency other than USD | Rate and buffer used. `rate` = USD per one unit of `currency`. Absent for USD: no rate and no buffer apply | — |
 | tx_hash | String | If approved | Debit transaction hash. | `0x4be1…` |
 
 Quote example: 1 EUR = 1.1642 USD. 25.40 EUR × 1.1642 × 1.01 = 29.8663868 USD → rounded up to 29 866 387 base units.
+
+- **Rate source:** CRS `v0.2.0` or later, checked on 2026-10-05. `card-auth` calls `GetRate(from_currency = currency, to_currency = USD)` and reads `rate_decimal`: USD per one unit of the authorization currency, the stored `NUMERIC(20,10)` as text with exactly 10 fractional digits, parsed as a decimal. The `double` field `rate` is never used. Pairs served: `EUR→USD`, `RSD→USD`, `GBP→USD`, `CHF→USD`; a pair is served only in that direction, so nothing is inverted. CRS answers `NOT_FOUND` for an unknown pair and also for a known pair before its first poll after a CRS start: both are `CURRENCY_NOT_SUPPORTED` (owner's decision D-14, fail-closed). An empty `rate_decimal` — a CRS older than `v0.2.0` — is `RATE_UNAVAILABLE` (D-15). `quote.rate` of a response follows the amount format of §2.1.1: `"1.1642000000"` is returned as `"1.1642"`.
+- **Rate age:** CRS rates are daily; accepted by the owner on 2026-10-05. ECB rates (Frankfurter, the primary for `EUR`, `GBP`, `CHF`) are published on working days only: on a weekend or before the day's publication the newest rate is from the previous working day, so a rate may be up to three days old. `updated_at` of CRS is the time of its poll, not the date of the rate; `is_outdated` means a failed poll, not the age. `RATE_UNAVAILABLE` is returned on `is_outdated`, never on age alone. An intraday rate source is a backlog item here and in CRS.
 
 ###### Decline reasons
 
@@ -203,14 +228,14 @@ Quote example: 1 EUR = 1.1642 USD. 25.40 EUR × 1.1642 × 1.01 = 29.8663868 USD 
 | `CARD_NOT_FOUND` | `card_ref` is unknown for the tenant |
 | `CARD_FROZEN` | Card status is `FROZEN` |
 | `PROGRAM_PAUSED` | The contract is paused |
-| `CURRENCY_NOT_SUPPORTED` | No rate pair for the currency |
-| `RATE_UNAVAILABLE` | CRS is unavailable or marks the rate stale |
+| `CURRENCY_NOT_SUPPORTED` | No rate pair for the currency: CRS answers `NOT_FOUND` |
+| `RATE_UNAVAILABLE` | CRS is unavailable, answers after the rate budget, marks the rate `is_outdated`, or returns no `rate_decimal`; or no rate source is configured (`CRS_ADDRESS` unset) and the currency is not USD |
 | `LIMIT_EXCEEDED` | Card daily limit or wallet daily limit would be exceeded |
 | `INSUFFICIENT_FUNDS` | Wallet balance < token amount |
 | `INSUFFICIENT_ALLOWANCE` | Allowance < token amount |
 | `CHAIN_UNAVAILABLE` | RPC error or read timeout |
 | `DEBIT_REVERTED` | The debit transaction reverted: state changed between read and debit |
-| `TIMEOUT` | No decision by the deadline: no inclusion signal, or the card lock was not acquired in time |
+| `TIMEOUT` | No decision by the deadline: no inclusion signal; the card lock not acquired in time; less than `min_send_window` left before step 10 (step 9a); a failure of step 11 before the send; or the deadline of step 4 ends a step before it finishes — the CRS call of step 7, the chain read of step 9, a database call of steps 3 to 9 — whatever the step would have answered |
 | `REVERSED_BEFORE_AUTH` | A reversal for this `auth_id` arrived first |
 | `INTERNAL_ERROR` | Unexpected failure |
 
@@ -258,9 +283,10 @@ See Common rules.
 | return_id | String | Yes | Echo of the request. | — |
 | auth_id | String | Yes | Echo of the request. | — |
 | status | Enum | Yes | Return state, §2.3.2. `NOTHING_TO_RETURN` when there is nothing to return. | `ACCEPTED` |
-| token_amount | String, integer | Yes | Tokens to return, base units. | `11758420` |
+| token_amount | String, integer | Yes | Tokens to return, base units. `0` for `NOTHING_TO_RETURN`. | `11758420` |
 
 - `422 RETURN_EXCEEDS_DEBIT` when the amount is above the part not yet returned.
+- A `NOTHING_TO_RETURN` answer is stored as a return row with that status, so a repeated `return_id` gets the same answer (step 2 of UC-2).
 - Token amount example: 29 866 387 × 10.00 / 25.40 = 11 758 420, rounded down.
 
 #### 2.1.4 Get authorization
@@ -285,7 +311,7 @@ See Common rules.
 {
   "auth_id": "9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11",
   "status": "DEBIT_CONFIRMED",
-  "amount": "25.40",
+  "amount": "25.4",
   "currency": "EUR",
   "token_amount": "29866387",
   "debited_amount": "29866387",
@@ -311,6 +337,12 @@ See Common rules.
 | returns | Array of objects | Yes | Returns of this authorization. | — |
 | history | Array of objects | Yes | Status changes in order. | — |
 
+- `quote` is absent for an authorization in USD. `amount`, `currency`, `token_amount`, `tx_hash` and `quote` are absent when the authorization has none: a tombstone (UC-2, step 3) answers `200` with `status: DECLINED`, `decline_reason: REVERSED_BEFORE_AUTH`, `debited_amount: "0"`, the return that created it in `returns` with status `NOTHING_TO_RETURN`, and a history of one record.
+- `decline_reason` is returned for `DECLINED` and `TIMED_OUT`.
+- `tx_hash`, of the authorization and of each return: the hash of its `DEBIT` row of `operator_txs` (for a return, of its `REFUND` rows) that is `INCLUDED` or `CONFIRMED`; if none, of its newest such row that has a hash; else absent. The same rule applies to this status query and to `GetAuthorization` and `ListAuthorizations` of SRS — Core.
+- Another tenant's `auth_id` is `404`; so is an `auth_id` in the path that breaks the validation rules: no such authorization can exist.
+- `token` is returned with `token_amount`, as in the authorization response.
+
 #### 2.1.5 Contract interface
 
 `CardSpendController`. Token and treasury addresses are immutable. The contract never holds tokens.
@@ -332,7 +364,7 @@ See Common rules.
 | `refundUsed(refundId)` | `bool` |
 | `token()`, `treasury()` | The immutable addresses |
 
-- `authId = keccak256(tenant_id, auth_id)`; `refundId = keccak256(tenant_id, return_id)`. IDs of different tenants cannot collide.
+- `authId = keccak256(tenant_uuid ‖ auth_id)`, `refundId = keccak256(tenant_uuid ‖ return_id)`: the 16 bytes of the tenant UUID followed by the UTF-8 bytes of the processor's ID, no separator, no length (D-16). The prefix has a fixed length, so two tenants with the same `auth_id` or `return_id` hash different inputs and get different IDs.
 - A known `authId` is one whose stored `user` is not the zero address. This is why `debit` rejects a zero `user`. A zero `authId` has no special rule.
 - Day = UTC day: `block.timestamp / 1 days`. A refund does not restore the day's limit.
 - `validUntil` is a Unix time in whole seconds; it is the last second at which the debit is accepted. `block.timestamp` advances by the block time (2 s on Base), so the expiry takes effect at a block boundary.
@@ -373,17 +405,18 @@ See §2.1.1.
 |---|---|---|
 | 1 | Authenticate the processor, resolve the tenant | `401` |
 | 2 | Validate the request | `422` |
-| 3 | Look up `(tenant, auth_id)`. Tombstone of an earlier reversal → `DECLINED / REVERSED_BEFORE_AUTH`. Found with the same body → wait for its decision and return it. Found with a different body → `409`. | — |
-| 4 | Insert the authorization as `RECEIVED`; `deadline_at = received_at + decision_deadline` | `INTERNAL_ERROR` |
-| 5 | Take the per-card lock: one in-flight authorization per card | `TIMEOUT` if not acquired by the deadline |
-| 6 | Load the card; check that it is `ACTIVE` | `CARD_NOT_FOUND`, `CARD_FROZEN` |
-| 7 | Quote. USD: `amount × 10^decimals`. Other: `amount × rate × (1 + buffer)`, rounded up to a base unit. `rate` = USD per one unit of the authorization currency. If CRS serves the pair the other way round, it is inverted in decimal arithmetic | `CURRENCY_NOT_SUPPORTED`, `RATE_UNAVAILABLE` |
-| 8 | Card daily limit: today's token amounts of the card's approved authorizations (`APPROVED`, `DEBIT_CONFIRMED`, `DEBIT_LOST`) + this amount ≤ limit | `LIMIT_EXCEEDED` |
-| 9 | Read on-chain: balance, allowance, remaining wallet daily limit, pause flag | `CHAIN_UNAVAILABLE`, `INSUFFICIENT_FUNDS`, `INSUFFICIENT_ALLOWANCE`, `LIMIT_EXCEEDED`, `PROGRAM_PAUSED` |
+| 3 | Look up `(tenant, auth_id)`. Tombstone of an earlier reversal → `DECLINED / REVERSED_BEFORE_AUTH`. Found with the same normalized body → wait for its decision and return it (§3.2). Found with a different body → `409`. | — |
+| 4 | Insert the authorization as `RECEIVED`; `deadline_at = received_at + decision_deadline`. The decision itself runs against the arrival of the HTTP request + `decision_deadline`, never later than `deadline_at`; the checks of steps 5–9a and the wait of step 12 end `min(50 ms, decision_deadline / 10)` earlier, kept for storing the decision | `INTERNAL_ERROR` |
+| 5 | Take the per-card lock: one in-flight authorization per card (§3.2) | `TIMEOUT` if not acquired by the deadline |
+| 6 | Load the card; check that it is `ACTIVE` | `CARD_NOT_FOUND`, `CARD_FROZEN`. `INTERNAL_ERROR` when the wallet address of the card's connection is malformed, or the wallet is on another chain than `chain_id`: no decline reason of its own, the enum is frozen in the OpenAPI and the proto. `TIMEOUT` when the deadline ends the read |
+| 7 | Quote. USD: `amount × 10^decimals`. Other: `amount × rate × (1 + buffer) × 10^decimals`, rounded up to a base unit. `rate` = USD per one unit of the authorization currency, as CRS serves it (§2.1.2) | `CURRENCY_NOT_SUPPORTED`, `RATE_UNAVAILABLE`; `TIMEOUT` when the deadline ends the CRS call |
+| 8 | Card daily limit: today's token amounts of the card's approved authorizations (`APPROVED`, `DEBIT_CONFIRMED`, `DEBIT_LOST`) + this amount ≤ limit. Day = UTC day, as in the contract | `LIMIT_EXCEEDED` |
+| 9 | Read on-chain with the `pending` block tag, the four reads in one batch: balance, allowance, remaining wallet daily limit, pause flag | `CHAIN_UNAVAILABLE`, `INSUFFICIENT_FUNDS`, `INSUFFICIENT_ALLOWANCE`, `LIMIT_EXCEEDED`, `PROGRAM_PAUSED`; `TIMEOUT` when the deadline ends the read |
+| 9a | Time left before step 10: if the deadline of step 4 − now < `min_send_window`, decline at once. No nonce is reserved, no `operator_txs` row is written, nothing is sent; the status is `DECLINED`, nothing was submitted (D-20). A debit sent without the time for its signal could only become a late debit | `TIMEOUT` |
 | 10 | In one database transaction: reserve the next operator nonce, store the debit intent, set `DEBIT_SUBMITTED` | `INTERNAL_ERROR` |
-| 11 | Sign and send `debit` with `validUntil = received_at + debit_validity`, rounded down to a whole second | Send result unknown → treat as sent |
-| 12 | Wait until `deadline_at` for whichever comes first: the inclusion signal from the chain listener, or the receipt from polling every `receipt_poll_interval` | — |
-| 13 | Success → `APPROVED`. Reverted → `DECLINED / DEBIT_REVERTED`. Deadline → `TIMED_OUT`, response `DECLINED / TIMEOUT` | — |
+| 11 | Sign and send `debit` with `validUntil = received_at + debit_validity`, rounded down to a whole second; fees by §3.2. The hash is stored on the `operator_txs` row, status `SENT`, before `eth_sendRawTransaction`, so a restart finds every hash it may have sent | Any error of `eth_sendRawTransaction` is treated as sent (EC-15): logged without secrets, step 12 continues; a transaction that never lands is resolved by the tracker (UC-3 rows 7–8). A failure before the send — fee read, signature, storing the hash — sends nothing: the slot stays `PLANNED` (UC-3 row 9) and the answer is `TIMED_OUT`, `DECLINED / TIMEOUT` |
+| 12 | Wait until the deadline of step 4 for whichever comes first: the inclusion signal from the chain listener, or the receipt from polling every `receipt_poll_interval`. A preconfirmed receipt counts | — |
+| 13 | Success → `APPROVED`. Reverted → `DECLINED / DEBIT_REVERTED`. Deadline → `TIMED_OUT`, response `DECLINED / TIMEOUT`. The answer keeps its deadline (FR-1); the outcome is stored even when the answer has already gone out at the deadline: its write runs detached from the request deadline with its own timeout of 2 s, as the decline writes of steps 5 to 9a do. Once the deadline's answer has gone out, only `TIMED_OUT` is stored: a signal found during a late write never turns into an approval the processor did not see (D-21). A write that still fails is logged; the row stays `DEBIT_SUBMITTED` for UC-3 row 11 | — |
 
 ##### Preconditions
 - The card is registered for the tenant and bound to a wallet connection (SRS — Core).
@@ -443,7 +476,7 @@ stateDiagram-v2
 | EC-10 | RPC or CRS unavailable, rate stale | Steps 7, 9: decline |
 | EC-11 | Paused, frozen, limit exceeded | Steps 6, 8, 9: decline |
 | EC-13 | Two authorizations for one card at the same time | Step 5: processed one after another |
-| EC-14 | A reversal for this `auth_id` arrived first | Step 3 finds the tombstone: `REVERSED_BEFORE_AUTH` |
+| EC-14 | Defined in UC-2: the tombstone it creates | Step 3 finds the tombstone: `REVERSED_BEFORE_AUTH` |
 | EC-15 | Send result unknown (RPC timeout on send) | Step 11: treated as sent; the outcome is resolved by step 12 or UC-3 |
 | EC-19 | The chain listener is disconnected | Step 12 relies on polling alone; authorizations continue. If polling sees only sealed blocks, more decisions end in `TIMEOUT`; alert on `chain_listener_connected` |
 
@@ -502,7 +535,17 @@ sequenceDiagram
 | 5 | Token amount = `debited_amount × amount / fiat_amount`, rounded down. A return that completes the fiat amount takes the whole remainder. | `422 RETURN_EXCEEDS_DEBIT` |
 | 6 | Insert the return as `ACCEPTED`, increase `returned_amount`, respond | — |
 | 7 | Tracker: send `refund`; follow it to `CONFIRMED` | Retry, step 8 |
-| 8 | Refund reverted or not sent → `RETRYING`; repeat after `return_retry_interval`; alert | — |
+| 8 | Refund reverted or not sent → `RETRYING`; repeat after `return_retry_interval`; alert. A tracker cycle sends at most 50 due returns; the rest wait for the next cycle | — |
+
+- **Rules of S2 st6a** (owner's acceptance, 2026-10-06):
+  - The normalized request of a return includes the `auth_id` of the path: the same `return_id` sent for another authorization is `409 RETURN_ID_CONFLICT`.
+  - A repeated `return_id` with the same body answers the return's current status (for example `CONFIRMED`), not the status of its first answer.
+  - A return worth 0 tokens — nothing left, or an amount that rounds down to 0 — is stored and answered as `NOTHING_TO_RETURN`.
+  - A return without `amount` records the remaining fiat amount on its row, so later fiat checks stay exact. Fiat arithmetic is integer, in units of 10⁻⁴.
+  - Two returns of one authorization are serialized by a lock on the authorization row: together they never exceed the debit.
+  - `CONFIRMED` is set when `refundUsed(refundId)` is true at the final block of the finality rule; a reverted `RefundAlreadyUsed` is read the same way and never sent again.
+  - Refunds and debits share one operator nonce sequence. A refund attempt that fails before its send leaves its slot `PLANNED`; the next attempt of the same return uses that slot, so no nonce is left unused. Unlike a debit slot (UC-3 row 9), a refund slot may be sent later: a refund has no deadline and its `refundId` makes it single-use on chain.
+  - `DEBIT_LOST` closes the open returns of the authorization — `ACCEPTED`, `RETRYING`, `SUBMITTED` — as `NOTHING_TO_RETURN` with token amount 0, and lowers `returned_amount` by their amounts (FR-14).
 
 ##### Preconditions
 - The treasury holds enough tokens and its allowance to the contract covers the return.
@@ -558,13 +601,33 @@ N/A — background worker; no interaction between systems beyond RPC reads and t
 |---|---|---|
 | 1 | `APPROVED`, debit block is final | Set `DEBIT_CONFIRMED` |
 | 2 | `APPROVED`, receipt disappeared (dropped preconfirmation or reorg) | Read `authorizations(authId)`. Debited > 0 → keep waiting. Debited = 0 → send a new debit with the same `authId` and a new `validUntil`, in the same nonce slot if it is still free, otherwise with the next nonce. |
-| 3 | Resubmitted debit reverted | Set `DEBIT_LOST`; alert; the amount is reported as issuer exposure; open returns of the authorization become `NOTHING_TO_RETURN` |
+| 3 | Resubmitted debit failed | Not executed only because its `validUntil` passed — released unmined, or reverted in a block whose timestamp is past `validUntil` — and `authorizations(authId)` shows 0: back to row 2, a new resubmission with a new `validUntil`; alert on every attempt (D-23). Reverted by the contract before `validUntil` (allowance, balance, limit, pause): set `DEBIT_LOST`; alert; the amount is reported as issuer exposure; open returns of the authorization become `NOTHING_TO_RETURN` |
 | 4 | `TIMED_OUT`, debit succeeded before `validUntil` | Set `LATE_DEBIT`; create a full return of type `LATE_DEBIT` (UC-2); alert |
 | 5 | `LATE_DEBIT`, return confirmed | Set `LATE_DEBIT_REFUNDED` |
 | 6 | `TIMED_OUT`, debit reverted, or the latest block timestamp is past `validUntil` and `authorizations(authId)` shows 0 | Set `DECLINED / TIMEOUT` |
 | 7 | Transaction not mined, `validUntil` not reached | Replace with the same nonce and a higher fee |
 | 8 | Transaction not mined, `validUntil` passed | Replace with a zero-value self-transfer to release the nonce |
-| 9 | Service start | For every non-final authorization and return: read on-chain state first, then continue from the matching row above |
+| 9 | Service start; a `PLANNED` slot | For every non-final authorization and return: read on-chain state first, then continue from the matching row. A `PLANNED` slot without a hash is never sent as a debit, whatever `validUntil` says: once its authorization is no longer `RECEIVED` or `DEBIT_SUBMITTED` (rules of S2 st6b), the tracker fills its nonce with a zero-value transfer of the operator to itself (purpose `RELEASE`, status `RELEASED` at inclusion) and sets the authorization from `TIMED_OUT` to `DECLINED / TIMEOUT` (D-22). A debit sent after the answer can only become a late debit, and an unfilled nonce blocks every later operator transaction |
+| 10 | Receipt or log with a zero `blockHash` | Preconfirmed: an inclusion signal, but `block_number` and `block_hash` are stored only from a sealed receipt. Finality (row 1) counts from the sealed block |
+| 11 | `DEBIT_SUBMITTED` and `deadline_at` passed: the process stopped, or its write failed, before storing the outcome (D-21) | Set `TIMED_OUT` with `decline_reason` `TIMEOUT` — the processor was told `DECLINED / TIMEOUT` or nothing — then continue as for any `TIMED_OUT`: rows 4–8, and row 9 for a `PLANNED` slot. Applies once `deadline_at` is more than the 2 s of the detached outcome write in the past, so the tracker never races a request still storing its own outcome |
+| 12 | `RECEIVED` and `deadline_at` passed: a decline write of UC-1 steps 5–9a that failed (owner's decision of 2026-10-06) | Set `DECLINED / TIMEOUT`; nothing was reserved or sent. Like row 11, it applies once `deadline_at` is more than the 2 s of the detached outcome write (D-21) in the past, so the tracker never races a request still storing its own outcome |
+
+- **Rules of S2 st6b** (owner's acceptance, 2026-10-06):
+  - a debit or a release counts as stuck (row 7) when unmined longer than `tracker_interval` since its last send; a refund, longer than `tracker_interval` × 3
+  - a replacement pays both fees at least `fee_bump_percent` above the transaction it replaces, or the market fees when higher; the replaced fees are read from the node, or from the last send of this process when the node no longer holds the transaction
+  - a `PLANNED` debit slot is released only when its authorization is no longer `RECEIVED` or `DEBIT_SUBMITTED` within the deadline and the 2 s of the outcome write
+  - the `return_id` of a `LATE_DEBIT` return is `LATE_DEBIT:` followed by the 64 hex characters of `chain_auth_id`: deterministic, so a restart creates no second return, and longer than any processor's `return_id`
+  - a nonce used on chain by a transaction that is none of the row's hashes means the operator key was used outside `card-auth`: an alert, the row is left for manual handling (Deployment Guide)
+  - the tracker handles only the rows of its own chain and operator key: operator transactions of this chain and key; authorizations of this chain, or with no chain yet (`RECEIVED`); returns of this chain. An authorization or return with a slot of another chain or key is never touched. Before the operator key is changed, every authorization and return of the old key must be final (Deployment Guide)
+  - the time of the last send and the fees of the last send live in the memory of the process: after a restart the age of a pending transaction counts from the reservation of its slot, and a return that just failed may be retried at once (backlog)
+
+- **Rules of S2 st9b** (owner's decision, 2026-10-06, after the live run on Base Sepolia: the tracker sent 60–90 calls per cycle and drew HTTP 429). The decision path uses the same endpoint, so the reads of a tracker cycle are bounded:
+  - the final block number is read once per cycle and shared by every row: the block of `finality_tag` in mode `tag`, the latest block − `finality_confirmations` in mode `confirmations`. The latest block is read once per cycle as well
+  - a row whose stored `block_number` is above the final block makes no chain call for finality in that cycle; debits and refunds alike. A row without a block (preconfirmed) has its receipt read only; a sealed receipt stores the block, and finality applies to it in the same cycle
+  - reorg check (ADR-10): at most one read per distinct block number per cycle, only for rows not yet final. The rows go in descending order of their block: when the highest stored block still has its stored hash, the lower stored blocks of the cycle are taken as unchanged, as a block commits to its ancestors. The check right before a row is set final reads its block
+  - a rate-limit answer of the endpoint — HTTP 429, JSON-RPC error `-32005` or `429`, or a message naming a rate limit — ends the cycle at once: no further chain call, one WARN line for the cycle, no row moves on the missing answer. This holds for the fee read of a refund attempt too: the return keeps its status and its `attempts`, its slot stays `PLANNED` without a hash and is used by the next cycle; the status and `attempts` are restored after the reservation, and a stop in between leaves `SUBMITTED` without a hash, which the next cycle sets to `RETRYING`. The one exception to "no row moves" is the write-ahead of a resubmitted debit (row 2): its new `valid_until` is stored before the send, like every hash; a failed send leaves it, and the next cycle sends with it. At the start of `card-auth` a rate limit ends the start: an ERROR line `tracker start failed; the cycles go on` beside the WARN line, then the cycles run on their schedule; the checks of row 9 are made by the cycles. While the treasury address is unset, each metric update reads `treasury()` again, bounded by `rpc_read_timeout` and under these rules; once read, the address is kept, and `treasury_refund_capacity` is reported without a restart (owner's decision of 2026-10-07). Refunds do not need the address. A rate limit is no evidence of a nonce used outside `card-auth`. The next cycle runs on its schedule
+  - failures of the same kind across rows in one cycle are logged once, with the attributes of the first row and the number of rows (`rows`)
+  - the chain reads of the metrics `operator_gas_balance` (`eth_getBalance`) and `treasury_refund_capacity` (two `eth_call`; a third, `treasury()`, while the address is unset) run at most once per 60 s; the first cycle after the start reads them. A constant of the code, as the backoff of the listener; no variable of §3.1 (owner's decision of 2026-10-06: at a cycle every 2 s they alone used 36 CU/s of Alchemy with no open row, about 93M CU a month against the 30M of the free plan). The rest of the cycle is unchanged
 
 ##### Preconditions
 - At least one authorization or return is not in a final state.
@@ -581,8 +644,8 @@ Row 1.
 |---|---|---|
 | EC-6 | Debit lands after the decline | Rows 4–5 |
 | EC-7 | Approved debit dropped | Rows 2–3 |
-| EC-5 | No inclusion signal by the deadline: the transaction is stuck or expires | Rows 6–8 |
-| EC-18 | Restart between send and receipt | Row 9 |
+| EC-5 | Defined in UC-1: after `TIMED_OUT` the transaction is stuck or expires | Rows 6–8 |
+| EC-18 | Restart between send and receipt | Rows 9 and 11 |
 
 ##### Acceptance Criteria
 
@@ -592,7 +655,7 @@ Row 1.
 | FR-17 | A debit that lands after a decline must be returned in full without manual action. | US-4, BR-10 |
 | FR-18 | A dropped approved debit must be resubmitted with the same `authId`; on failure the authorization must become `DEBIT_LOST` and raise an alert. | BR-8 |
 | FR-19 | `DEBIT_CONFIRMED` must be set only by the finality rule of the network. | US-3, BR-6 |
-| FR-20 | A stuck transaction must not block the operator queue longer than `debit_validity`. | BR-7 |
+| FR-20 | A stuck transaction must not block the operator queue longer than `debit_validity`. Exception: a refund is replaced only after `tracker_interval` × 3 (rules of S2 st6b), so a stuck refund can hold the queue up to that time. | BR-7 |
 
 ##### Postconditions
 - Every authorization ends in a final state: `DECLINED`, `DEBIT_CONFIRMED`, `LATE_DEBIT_REFUNDED` or `DEBIT_LOST`.
@@ -679,14 +742,15 @@ One row per `auth_id` of a tenant, including tombstones.
 | id | UUID | Yes | Primary key |
 | tenant_id | UUID | Yes | Tenant |
 | auth_id | TEXT | Yes | Processor's ID. Unique with `tenant_id` |
-| chain_auth_id | BYTEA | Yes | `keccak256(tenant_id, auth_id)`, 32 bytes |
+| chain_auth_id | BYTEA | Yes | `keccak256` of the 16 bytes of the tenant UUID followed by the UTF-8 bytes of `auth_id`, 32 bytes (§2.1.5, D-16). Unique |
 | parent_auth_id | TEXT | No | Design only |
 | card_id | UUID | No | Null for a tombstone and for an unknown `card_ref` |
 | request_hash | BYTEA | No | Hash of the normalized request; detects EC-2. Null for a tombstone |
 | fiat_amount | NUMERIC(18,4) | No | Null for a tombstone |
 | fiat_currency | CHAR(3) | No | ISO 4217 |
-| rate | NUMERIC(18,8) | No | USD per one unit of the fiat currency, as used in the quote. Null for USD |
-| buffer_bps | INTEGER | No | Buffer applied |
+| rate | NUMERIC(20,10) | No | USD per one unit of the fiat currency, as used in the quote; 10 decimal places as CRS stores it. Null for USD |
+| buffer_bps | INTEGER | No | Buffer applied. Null for USD |
+| token | TEXT | No | Symbol of the funding token, read by `card-auth` from the token contract at start. Null for a tombstone |
 | token_amount | NUMERIC(78,0) | No | Quoted base units |
 | debited_amount | NUMERIC(78,0) | Yes | 0 until the debit is included |
 | returned_amount | NUMERIC(78,0) | Yes | Sum of accepted returns |
@@ -728,9 +792,9 @@ One row per reversal, refund or automatic return.
 | tenant_id | UUID | Yes | Tenant |
 | authorization_id | UUID | Yes | Authorization |
 | return_id | TEXT | Yes | Processor's ID, or generated for `LATE_DEBIT`. Unique with `tenant_id` |
-| chain_refund_id | BYTEA | Yes | `keccak256(tenant_id, return_id)`, 32 bytes |
+| chain_refund_id | BYTEA | Yes | `keccak256` of the 16 bytes of the tenant UUID followed by the UTF-8 bytes of `return_id`, 32 bytes (§2.1.5, D-16). Unique |
 | type | TEXT | Yes | `REVERSAL`, `REFUND`, `LATE_DEBIT` |
-| request_hash | BYTEA | Yes | Detects a changed retry |
+| request_hash | BYTEA | No | Hash of the normalized request; detects a changed retry. Null for `LATE_DEBIT` |
 | fiat_amount | NUMERIC(18,4) | No | Null for `LATE_DEBIT` |
 | token_amount | NUMERIC(78,0) | Yes | Base units |
 | status | TEXT | Yes | §2.3.2 |
@@ -755,8 +819,8 @@ One row per operator nonce. A replacement keeps the row: the new hash becomes cu
 | tx_hash | BYTEA | No | Current hash; null while `PLANNED` |
 | replaced_hashes | BYTEA[] | Yes | Earlier hashes of this nonce |
 | status | TEXT | Yes | `PLANNED`, `SENT`, `INCLUDED`, `CONFIRMED`, `REVERTED`, `RELEASED` |
-| block_number | BIGINT | No | Inclusion block |
-| block_hash | BYTEA | No | Detects a reorg |
+| block_number | BIGINT | No | Inclusion block, from a sealed receipt |
+| block_hash | BYTEA | No | Hash of that block, never the zero hash of a preconfirmation. Detects a reorg |
 | created_at | TIMESTAMPTZ | Yes | — |
 
 ##### operator_accounts
@@ -783,12 +847,12 @@ Next nonce per operator and network. Locked while a nonce is reserved.
 | card-auth | `auth_decisions_total{decision,reason}` | — | `TIMEOUT` + `CHAIN_UNAVAILABLE` > 5% for 5 min | Decisions by outcome | BR-7 |
 | card-auth | `late_debits_total` | 0 | Any | Debits that landed after a decline | US-15 |
 | card-auth | `debits_lost_total` | 0 | Any, critical | Approved debits that could not be repeated | US-15 |
-| card-auth | `returns_not_confirmed` | 0 | Any return older than 10 min | Returns in `ACCEPTED`, `SUBMITTED`, `INCLUDED`, `RETRYING` | BR-10 |
+| card-auth | `returns_not_confirmed` | 0 | Above 0 for longer than 10 min: the duration of the alert rule | Gauge: the number of returns not yet `CONFIRMED`, in `ACCEPTED`, `SUBMITTED`, `INCLUDED`, `RETRYING`, of the chain; no age per return | BR-10 |
 | card-auth | `operator_tx_pending_seconds` | < `debit_validity` | Above `debit_validity` | Age of the oldest unmined operator transaction | US-15 |
-| card-auth | `operator_gas_balance` | — | Below threshold | Native token balance of the operator | US-15 |
+| card-auth | `operator_gas_balance` | — | Below threshold | Native token balance of the operator; read from the chain at most once per 60 s (rules of S2 st9b) | US-15 |
 | card-auth | `chain_listener_connected` | 1 | 0 for 1 min | State of the WebSocket subscription | BR-7 |
-| card-auth | `inclusion_signals_total{source}` | — | — | Signals by source: subscription or polling | BR-7 |
-| card-auth | `treasury_refund_capacity` | — | Below threshold | min(treasury balance, treasury allowance) | US-15 |
+| card-auth | `inclusion_signals_total{source}` | — | — | Signals that decided a debit, by source: subscription or polling; a later signal of the same debit is not counted | BR-7 |
+| card-auth | `treasury_refund_capacity` | — | Below threshold | min(treasury balance, treasury allowance); read from the chain at most once per 60 s (rules of S2 st9b) | US-15 |
 | server | `reconciliation_mismatches_total{type}` | 0 | Any | Mismatches of UC-4 | BR-12 |
 
 #### 2.5.2 Alerts
@@ -800,32 +864,51 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 
 ### 3.1 Configuration
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `decision_deadline` | 2.5 s | Maximum time to answer the processor; per processor. The default fits a 3 s processor budget |
-| `debit_validity` | 4 s | `validUntil − received_at`; must exceed `decision_deadline` by at least 1 s, because `validUntil` is rounded down to a whole second |
-| `rpc_read_timeout` | 500 ms | Timeout of the on-chain read in step 9 |
-| `rpc_ws_url` | — | WebSocket endpoint of the RPC provider, for the chain listener |
-| `receipt_poll_interval` | 200 ms | Polling beside the subscription |
-| `quote_buffer_bps` | 100 | Buffer for non-USD currencies, basis points |
-| `finality_mode`, `finality_tag`, `finality_confirmations` | `confirmations`, —, 10 | Finality rule for `DEBIT_CONFIRMED`, per network: a block tag or N blocks after inclusion. Same rule as the indexer (SRS — EVM Connector §2.1.1). The defaults are for the local chain; Base Sepolia uses the tag `finalized` |
-| `tracker_interval` | 2 s | Tracker cycle |
-| `return_retry_interval` | 30 s | Pause between return attempts |
-| `chain_id`, `rpc_url`, `rpc_fallback_url` | — | Network access |
-| `controller_address`, `token_address`, `token_decimals` | — | Contract and funding token |
-| `OPERATOR_PRIVATE_KEY` | — | Environment only |
-| `DATABASE_URL` | — | PostgreSQL, role `cas_card_auth`; environment |
-| `CRS_ADDRESS` | — | gRPC address of CRS; environment |
-| HTTP port | 8092 | Processor API; environment |
-| Health port | 8093 | `/healthz`, `/readyz`; environment |
+All parameters come from the environment of `card-auth`; the variable names are fixed in `.env.example`. Nothing is read from `sources.config` in S2: the EVM connector of S3 decides where it takes the shared values from (SRS — EVM Connector §3.1).
+
+| Parameter | Variable | Default | Meaning |
+|---|---|---|---|
+| `decision_deadline` | `CARD_AUTH_DECISION_DEADLINE` | 2.5 s | Maximum time to answer the processor. One value for the service in S2; per processor later. The default fits a 3 s processor budget |
+| `debit_validity` | `CARD_AUTH_DEBIT_VALIDITY` | 4 s | `validUntil − received_at`; must exceed `decision_deadline` by at least 1 s, because `validUntil` is rounded down to a whole second. The service does not start otherwise |
+| `min_send_window` | `CARD_AUTH_MIN_SEND_WINDOW` | 500 ms | Least time left before `deadline_at` at which step 10 starts (UC-1 step 9a, D-20); must be below `decision_deadline`. The service does not start otherwise |
+| `rpc_read_timeout` | `CARD_AUTH_RPC_READ_TIMEOUT` | 500 ms | Timeout of each chain call: the on-chain read of step 9; the fee read, `eth_sendRawTransaction`, receipt polls, the nonce count, block, head and balance reads of the operator queue; the contract calls of the tracker (`treasury`, `refundUsed`, `authorizations`, `balanceOf`, `allowance`); the probe of the primary. The read of the final block by `finality_tag` is bounded by `tracker_interval` |
+| `rpc_ws_url` | `CARD_AUTH_RPC_WS_URL` | — | WebSocket endpoint of the RPC provider, for the chain listener. Unset: no listener, polling only |
+| `listener_subscription` | `CARD_AUTH_LISTENER_SUBSCRIPTION` | `pendingLogs` | Subscription type of the chain listener: `pendingLogs` on Base Sepolia, `logs` on a chain without Flashblocks such as Anvil |
+| `receipt_poll_interval` | `CARD_AUTH_RECEIPT_POLL_INTERVAL` | 200 ms | Polling beside the subscription |
+| `quote_buffer_bps` | `CARD_AUTH_QUOTE_BUFFER_BPS` | 100 | Buffer for non-USD currencies, basis points |
+| `finality_mode`, `finality_tag`, `finality_confirmations` | `CARD_AUTH_FINALITY_MODE`, `CARD_AUTH_FINALITY_TAG`, `CARD_AUTH_FINALITY_CONFIRMATIONS` | `confirmations`, `finalized`, 10 | Finality rule for `DEBIT_CONFIRMED`, per network: a block tag, `finalized` or `safe`, or N blocks after inclusion. Same rule as the indexer (SRS — EVM Connector §2.1.1). The defaults are for the local chain; Base Sepolia uses the tag `finalized` |
+| `tracker_interval` | `CARD_AUTH_TRACKER_INTERVAL` | 2 s | Tracker cycle |
+| `return_retry_interval` | `CARD_AUTH_RETURN_RETRY_INTERVAL` | 30 s | Pause between return attempts |
+| `chain_id`, `rpc_url`, `rpc_fallback_url` | `CARD_AUTH_CHAIN_ID`, `CARD_AUTH_RPC_URL`, `CARD_AUTH_RPC_FALLBACK_URL` | — | Network access. `chain_id` must be in the allow-list of test networks (SRS — EVM Connector §3.1) |
+| `rpc_fallback_after` | `CARD_AUTH_RPC_FALLBACK_AFTER` | 3 | Consecutive failures of the primary endpoint after which the fallback is used (§3.2) |
+| `debit_gas_limit`, `refund_gas_limit` | `CARD_AUTH_DEBIT_GAS_LIMIT`, `CARD_AUTH_REFUND_GAS_LIMIT` | 176 000, 145 000 | Fixed gas limits of the two operator transactions: no `eth_estimateGas` in the decision path. A release transaction uses 21 000. Defaults: the maximum measured on Anvil + 25 %, rounded up to a thousand (S2 st5b, 2026-10-06, `eth_estimateGas`): `debit` cold — first debit, treasury balance and the wallet's daily spend zero — 140 105 to 140 117 (the zero bytes of the calldata vary), warm — second debit of the wallet in the day — 105 634, first debit of another wallet 122 734, last debit of the balance 105 658; `refund` cold — first refund to a wallet of zero balance — 115 305, warm 80 822, full 97 922. Checked by the gas test of `internal/debit` |
+| `fee_bump_percent` | `CARD_AUTH_FEE_BUMP_PERCENT` | 25 | Raise of `maxFeePerGas` and `maxPriorityFeePerGas` on a replacement |
+| `controller_address`, `token_address`, `token_decimals` | `CARD_AUTH_CONTROLLER_ADDRESS`, `CARD_AUTH_TOKEN_ADDRESS`, `CARD_AUTH_TOKEN_DECIMALS` | — | Contract and funding token; checked at start (§3.2) |
+| `OPERATOR_PRIVATE_KEY` | `OPERATOR_PRIVATE_KEY` | — | Environment only. On Anvil a default Anvil account key may be used, in `.env` only |
+| `DATABASE_URL` | `CARD_AUTH_DATABASE_URL` | — | PostgreSQL, role `cas_card_auth`; environment |
+| `CRS_ADDRESS` | `CRS_ADDRESS` | — | gRPC address of CRS `v0.2.0` or later, plaintext; locally `localhost:50052`. Unset: every non-USD authorization is `RATE_UNAVAILABLE` |
+| HTTP port | `CARD_AUTH_HTTP_PORT` | 8092 | Processor API; environment |
+| Health port | `CARD_AUTH_HEALTH_PORT` | 8093 | `/healthz`, `/readyz`, `/metrics`; environment |
+| Connection pool, shutdown | `CARD_AUTH_DB_POOL_MAX_CONNS`, `CARD_AUTH_DB_POOL_MIN_CONNS`, `CARD_AUTH_SHUTDOWN_TIMEOUT` | 10, 2, 15 s | As `server` (SRS — Core §3.1) |
+| Logging, allow-list | `LOG_LEVEL`, `LOG_FORMAT`, `EVM_ALLOWED_CHAIN_IDS` | `info`, `json`, 31337 and 84532 | Shared with `server`, no prefix |
+
+- Ranges checked at start beyond the rules above: `quote_buffer_bps` 0–10 000; `finality_confirmations` ≥ 1; `rpc_fallback_after` ≥ 1; `fee_bump_percent` ≥ 10; `token_decimals` 0–18; gas limits above 21 000; `finality_mode` `confirmations` or `tag`; durations above 0; ports 1–65 535; pool maximum ≥ 1, minimum ≤ maximum; chain IDs above 0; RPC URLs `http`/`https`, the WebSocket URL `ws`/`wss`, each with a host; addresses well formed and not zero. Any failure stops the start; the message names the variable and prints no value.
 
 ### 3.2 General Non-functional Requirements
 
 - **Parallel work:**
-  - same `auth_id` twice at once: the unique key admits one; the other waits for its decision;
-  - same card: one authorization at a time (FR-10);
-  - nonce reservation locks the `operator_accounts` row, so several `card-auth` instances can share one operator;
+  - S2 runs one `card-auth` instance (§4, issue 6). The locks below live in memory of that instance; the database constraints are the second line;
+  - same `auth_id` twice at once: the unique key `(tenant_id, auth_id)` admits one insert; the other finds the row, registers as a waiter for `(tenant, auth_id)` in memory and returns the decision when it is made, or `DECLINED / TIMEOUT` at its own deadline;
+  - same card: one authorization at a time (FR-10): an in-memory mutex per card, held from step 5 to step 13;
+  - nonce reservation locks the `operator_accounts` row with `SELECT … FOR UPDATE`;
   - more throughput = more operator keys, each with its own nonce sequence — out of MVP.
+- **Chain access:**
+  - every read of the decision path uses the `pending` block tag: on Base it sees the Flashblocks state the debit will see; on Anvil it equals `latest`;
+  - transactions are EIP-1559: `maxPriorityFeePerGas` from `eth_maxPriorityFeePerGas`, `maxFeePerGas` = 2 × base fee of the pending block + the tip; a replacement raises both by `fee_bump_percent` on the same nonce (ADR-10);
+  - fallback endpoint: after `rpc_fallback_after` consecutive failures of the primary, reads and sends go to `rpc_fallback_url`; while reads are on the fallback, a probe calls `eth_chainId` on the primary every `tracker_interval` and switches back when it answers `chain_id`. No retry inside the read budget of step 9: a failed read is `CHAIN_UNAVAILABLE`. The fallback has no WebSocket; the listener stays on the primary;
+  - the fallback counter counts the failures of the step-9 read only, not a read cut short by the deadline of its request; fee reads, sends and receipt polls use the current endpoint and do not count;
+  - the reads of the tracker are bounded per cycle: the final block and the latest block once, at most one block per distinct block number for the reorg check, no finality read for a row above the final block; a rate-limit answer ends the cycle (UC-3, rules of S2 st9b);
+  - start checks, the service does not start otherwise: `eth_chainId` of the primary and of the fallback equals `chain_id` and is in the allow-list; `token()` of the controller equals `token_address`; `decimals()` of the token equals `token_decimals`; `symbol()` of the token is read and kept in memory: it is the `token` stored with every quote and answered with an approval (D-10); `next_nonce` of the operator is compared with its transaction count at the pending block tag: a missing `operator_accounts` row is created with that count; a lower `next_nonce` is raised to it and logged; a higher one is kept.
 - **Audit log:**
   - `authorization_events`: every status change;
   - `operator_txs`: every transaction hash ever sent, including replaced ones;
@@ -835,11 +918,15 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
   - fail-closed (FR-9);
   - restart-safe: intent before send (FR-5), chain before resend (FR-16);
   - the chain listener is optional at run time: without it decisions use receipt polling (FR-23);
+  - the chain listener checks `eth_chainId` of `rpc_ws_url` on every connect: a value other than `chain_id` is an alert, no subscription is made and the listener retries as after a failed connect; the service still starts, as the listener is optional;
+  - the chain listener reconnects with exponential backoff: first delay 1 s, doubled per failed attempt, at most 30 s, up to half of the delay taken off at random; a successful subscription resets it; dial, `eth_chainId` and `eth_subscribe` together time out after 10 s. These are constants of the code, not variables of §3.1, until a network needs other values (owner's decision, 2026-10-06);
+  - the connection is not renewed ahead of time: a connection the provider closes is reconnected by the backoff above, and receipt polling covers the gap. A connection that dies silently is found by the WebSocket ping of the RPC client (every 30 s when idle, 30 s for the answer);
   - a late or lost debit never needs manual action to detect (FR-17, FR-18).
 - **Security:**
   - the operator key is read from the environment, used only for signing, never logged;
-  - the `card-auth` database role cannot read exchange secrets;
+  - the `card-auth` database role cannot read exchange secrets: it has no right on the column `connections.credentials_enc` (SRS — Core §3.2);
   - processor credentials are stored hashed;
+  - admin transactions of the contract — `setDailyLimit`, `pause`, `unpause` — are sent with `cast` and the `ADMIN` key of the keys file outside the repository (`CAS_SEPOLIA_KEYS`), by the Deployment Guide; no service and no CLI of S2 holds that key;
   - the contract bounds a compromised operator: debits go only to the treasury, within allowance and daily limit, and only until `ADMIN` pauses; refunds go only to the wallet that was debited.
 
 ---
@@ -848,8 +935,9 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 
 | # | Issue | Proposal |
 |---|---|---|
-| 1 | RPC access to preconfirmed data on Base Sepolia. Base documentation, checked 2026-10-03: the public endpoints serve preconfirmed state to reads with the `pending` block tag, but are HTTP only and rate-limited; a subscription to preconfirmed logs needs an RPC provider with WebSocket or an own node | Choose the provider at S2 (ADR-13) and verify there that polling returns preconfirmed receipts. Fallback without preconfirmed data: sealed blocks, `decision_deadline` 3 s |
+| 1 | RPC access to preconfirmed data on Base Sepolia. Base documentation, checked 2026-10-03: the public endpoints serve preconfirmed state to reads with the `pending` block tag, but are HTTP only and rate-limited; a subscription to preconfirmed logs needs an RPC provider with WebSocket or an own node | **Closed 2026-10-05.** Provider: Alchemy, app with Base Sepolia only, free plan; fallback `https://sepolia.base.org`, HTTP only. Checked by the owner on the free plan: `eth_chainId` 84532; the `pending` block is `latest + 1`; `eth_subscribe ["pendingLogs", {address, topics}]` delivers preconfirmed logs about every 200 ms, the filter works; `eth_getTransactionReceipt` returns a preconfirmed receipt in 6 of 10 tries, 206–247 ms after the hash appeared, with `blockNumber = latest + 1` and a zero `blockHash`; after sealing the same receipt carries the real hash. The fallback of sealed blocks and a 3 s deadline is not needed. Unfiltered `pendingLogs` is about 140 logs per second: the listener subscribes with the controller address and the `Debited` topic only, and never to new blocks (budget: 30M CU per month on the free plan) |
 | 2 | Finality rule: N confirmations or a block tag. Ten L2 blocks are not finality on Base | Decided: tag `finalized` on Base Sepolia (L1 batch final, about 20 minutes), N confirmations on the local chain. `card-auth` and the indexer use the same rule (SRS — EVM Connector §2.1.1) |
 | 3 | Should a same-day return restore the card daily limit | No, same as the contract |
 | 4 | A contract event that matches no authorization of any tenant: where it is reported | In the reconciliation run of the platform tenant, as `UNKNOWN_DEBIT` or `UNKNOWN_REFUND` |
-| 5 | Rates to USD in CRS: which pairs it serves and in which direction. A lesson from ET: its rate is the inverse of the CRS rate | Check against the CRS contract before S2 and extend CRS in parallel if a pair is missing. Until then a currency without a pair is declined as `CURRENCY_NOT_SUPPORTED` |
+| 5 | Rates to USD in CRS: which pairs it serves and in which direction. A lesson from ET: its rate is the inverse of the CRS rate | **Closed 2026-10-05.** CRS `v0.2.0`: `rate_decimal` with 10 fractional digits, pairs `EUR`, `RSD`, `GBP`, `CHF` to USD, no inversion, daily rates (§2.1.2). A currency without a pair is declined as `CURRENCY_NOT_SUPPORTED` |
+| 6 | Several `card-auth` instances: the per-card lock and the waiter of a repeated `auth_id` live in memory of one instance (§3.2) | S2 runs one instance. Later: a session advisory lock per card and a waiter that polls the row; `docs/backlog.md` |

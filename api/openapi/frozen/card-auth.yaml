@@ -1,0 +1,575 @@
+openapi: 3.0.3
+info:
+  title: card-auth processor API
+  version: 1.0.0
+  description: |
+    Processor API of card-auth: authorizations, returns and the status query.
+    Specification: docs/srs/card-spend.md §2.1.1 – §2.1.4. The SRS is the source; this file follows it.
+    Frozen copy: api/openapi/frozen/card-auth.yaml. A change needs the owner's decision and an SRS update first.
+
+    Rules that OpenAPI 3.0.3 cannot express:
+    - A request body above 16 KiB is `422 INVALID_REQUEST`.
+    - `amount` must be greater than 0; the pattern also admits zero.
+    - Unknown fields of a request are ignored.
+    - Fields marked "if approved" or "if declined" depend on `decision`; they are not required by the schema.
+    - An internal error during an authorization answers `200` with `DECLINED / INTERNAL_ERROR`.
+security:
+  - basicAuth: []
+tags:
+  - name: authorizations
+paths:
+  /v1/authorizations:
+    post:
+      operationId: authorize
+      summary: Authorize a payment
+      description: |
+        Decides one card authorization. On approval the token amount is already debited from the cardholder's
+        wallet (SRS — Card Spend §2.1.2, UC-1). A repeated `auth_id` with the same normalized body returns the
+        stored decision; with a different body it is `409 AUTH_ID_CONFLICT`.
+      tags: [authorizations]
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthorizeRequest'
+            example:
+              auth_id: 9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11
+              card_ref: card_7Q2M
+              amount: '25.40'
+              currency: EUR
+              merchant:
+                name: Maxi 042
+                mcc: '5411'
+                country: RS
+      responses:
+        '200':
+          description: A decision was made, approve or decline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthorizeResponse'
+              examples:
+                approved:
+                  summary: Approved
+                  value:
+                    auth_id: 9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11
+                    decision: APPROVED
+                    status: APPROVED
+                    token: USDC
+                    token_amount: '29866387'
+                    quote:
+                      rate: '1.1642'
+                      buffer_bps: 100
+                    tx_hash: 0x4be1…c7a2
+                declined:
+                  summary: Declined
+                  value:
+                    auth_id: 9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11
+                    decision: DECLINED
+                    status: DECLINED
+                    decline_reason: INSUFFICIENT_ALLOWANCE
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          description: '`AUTH_ID_CONFLICT`: known `auth_id` with a different normalized body.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: AUTH_ID_CONFLICT
+                  message: auth_id is known with a different request
+        '422':
+          $ref: '#/components/responses/InvalidRequest'
+  /v1/authorizations/{auth_id}/returns:
+    post:
+      operationId: createReturn
+      summary: Return tokens
+      description: |
+        Returns tokens for a reversal or a refund, fully or partially. Accepted synchronously, executed on-chain
+        asynchronously (SRS — Card Spend §2.1.3, UC-2). A repeated `return_id` with the same normalized body returns
+        the stored answer; with a different body it is `409 RETURN_ID_CONFLICT`. A `NOTHING_TO_RETURN` answer is
+        stored too, so a repeated `return_id` gets the same answer.
+      tags: [authorizations]
+      security:
+        - basicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AuthId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnRequest'
+            example:
+              return_id: rv-20261002-0001
+              type: REVERSAL
+              amount: '10.00'
+      responses:
+        '200':
+          description: The return was accepted, or there is nothing to return.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReturnResponse'
+              example:
+                return_id: rv-20261002-0001
+                auth_id: 9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11
+                status: ACCEPTED
+                token_amount: '11758420'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          description: |
+            `RETURN_ID_CONFLICT`: known `return_id` with a different normalized body.
+            `AUTHORIZATION_IN_PROGRESS`: the authorization is `RECEIVED` or `DEBIT_SUBMITTED`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                returnIdConflict:
+                  value:
+                    error:
+                      code: RETURN_ID_CONFLICT
+                      message: return_id is known with a different request
+                authorizationInProgress:
+                  value:
+                    error:
+                      code: AUTHORIZATION_IN_PROGRESS
+                      message: the authorization is still being decided
+        '422':
+          description: |
+            `INVALID_REQUEST`: a validation rule fails, or the body is not JSON.
+            `RETURN_EXCEEDS_DEBIT`: the amount is above the part not yet returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                invalidRequest:
+                  value:
+                    error:
+                      code: INVALID_REQUEST
+                      message: amount must be a decimal greater than 0 with at most 4 decimal places
+                returnExceedsDebit:
+                  value:
+                    error:
+                      code: RETURN_EXCEEDS_DEBIT
+                      message: amount is above the part not yet returned
+        '500':
+          $ref: '#/components/responses/Internal'
+  /v1/authorizations/{auth_id}:
+    get:
+      operationId: getAuthorization
+      summary: Get an authorization
+      description: |
+        Returns the current state of one authorization with its returns and status history
+        (SRS — Card Spend §2.1.4). Another tenant's `auth_id` is `404`. A tombstone (UC-2, step 3) answers `200`
+        with `status: DECLINED`, `decline_reason: REVERSED_BEFORE_AUTH`, `debited_amount: "0"`, the return that
+        created it with status `NOTHING_TO_RETURN`, and a history of one record.
+      tags: [authorizations]
+      security:
+        - basicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AuthId'
+      responses:
+        '200':
+          description: The authorization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Authorization'
+              examples:
+                confirmed:
+                  summary: Debit confirmed, partly returned
+                  value:
+                    auth_id: 9f1c2a7e-5b1d-4c58-9a57-0d2f6f1e8a11
+                    status: DEBIT_CONFIRMED
+                    amount: '25.4'
+                    currency: EUR
+                    token_amount: '29866387'
+                    debited_amount: '29866387'
+                    returned_amount: '11758420'
+                    tx_hash: 0x4be1…c7a2
+                    returns:
+                      - return_id: rv-20261002-0001
+                        type: REVERSAL
+                        status: CONFIRMED
+                        token_amount: '11758420'
+                        tx_hash: 0x91d0…3e4f
+                    history:
+                      - status: RECEIVED
+                        at: '2026-10-02T12:00:00.120Z'
+                      - status: DEBIT_SUBMITTED
+                        at: '2026-10-02T12:00:00.480Z'
+                      - status: APPROVED
+                        at: '2026-10-02T12:00:00.910Z'
+                      - status: DEBIT_CONFIRMED
+                        at: '2026-10-02T12:19:48.300Z'
+                tombstone:
+                  summary: Tombstone of a reversal that arrived first
+                  value:
+                    auth_id: auth-20261002-0002
+                    status: DECLINED
+                    decline_reason: REVERSED_BEFORE_AUTH
+                    debited_amount: '0'
+                    returned_amount: '0'
+                    returns:
+                      - return_id: rv-20261002-0002
+                        type: REVERSAL
+                        status: NOTHING_TO_RETURN
+                        token_amount: '0'
+                    history:
+                      - status: DECLINED
+                        at: '2026-10-02T12:05:00.000Z'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: '`NOT_FOUND`: unknown `auth_id` in the tenant of the caller.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: NOT_FOUND
+                  message: authorization not found
+        '500':
+          $ref: '#/components/responses/Internal'
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: |
+        One credential pair per tenant, issued by `casctl processor issue <tenant>`: username = `key_id`,
+        12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters.
+  parameters:
+    AuthId:
+      name: auth_id
+      in: path
+      required: true
+      description: Processor's authorization ID.
+      schema:
+        $ref: '#/components/schemas/ProcessorId'
+  responses:
+    Unauthenticated:
+      description: |
+        `UNAUTHENTICATED`: missing or malformed header, unknown username, wrong password, revoked pair, disabled
+        tenant. One body for all.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: UNAUTHENTICATED
+              message: unauthenticated
+    Internal:
+      description: |
+        `INTERNAL`: an internal failure of a status query or a return. Never for an authorization: it answers `200`
+        with `DECLINED / INTERNAL_ERROR`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INTERNAL
+              message: internal error
+    InvalidRequest:
+      description: '`INVALID_REQUEST`: a validation rule fails, or the body is not JSON, or the body is above 16 KiB.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INVALID_REQUEST
+              message: currency must be three upper-case letters
+  schemas:
+    ProcessorId:
+      type: string
+      description: 1 to 64 printable characters.
+      minLength: 1
+      maxLength: 64
+      pattern: '^[\x20-\x7E]+$'
+    FiatAmount:
+      type: string
+      description: |
+        Decimal string greater than 0, at most 14 digits before the point and 4 after it (NUMERIC(18,4)), no
+        exponent. Zero is refused by the service.
+      pattern: '^(0|[1-9][0-9]{0,13})(\.[0-9]{1,4})?$'
+      example: '25.40'
+    TokenAmount:
+      type: string
+      description: Token amount in base units of the funding token, an integer string.
+      maxLength: 78
+      pattern: '^(0|[1-9][0-9]*)$'
+      example: '29866387'
+    Currency:
+      type: string
+      description: ISO 4217 code, three upper-case letters.
+      pattern: '^[A-Z]{3}$'
+      example: EUR
+    Merchant:
+      type: object
+      description: Stored for audit. Not used in the decision in MVP. Further properties are allowed.
+      properties:
+        name:
+          type: string
+        mcc:
+          type: string
+        country:
+          type: string
+      additionalProperties: true
+    Quote:
+      type: object
+      description: Rate and buffer used.
+      required: [buffer_bps]
+      properties:
+        rate:
+          type: string
+          description: USD per one unit of `currency`, a decimal string. Absent for USD.
+          pattern: '^(0|[1-9][0-9]*)(\.[0-9]+)?$'
+          example: '1.1642'
+        buffer_bps:
+          type: integer
+          description: Buffer for non-USD currencies, basis points.
+          minimum: 0
+          example: 100
+    Decision:
+      type: string
+      enum: [APPROVED, DECLINED]
+    AuthorizationStatus:
+      type: string
+      description: Authorization state, SRS — Card Spend §2.3.1.
+      enum:
+        - RECEIVED
+        - DEBIT_SUBMITTED
+        - APPROVED
+        - DEBIT_CONFIRMED
+        - DECLINED
+        - TIMED_OUT
+        - LATE_DEBIT
+        - LATE_DEBIT_REFUNDED
+        - DEBIT_LOST
+    DeclineReason:
+      type: string
+      description: Decline reason, SRS — Card Spend §2.1.2.
+      enum:
+        - CARD_NOT_FOUND
+        - CARD_FROZEN
+        - PROGRAM_PAUSED
+        - CURRENCY_NOT_SUPPORTED
+        - RATE_UNAVAILABLE
+        - LIMIT_EXCEEDED
+        - INSUFFICIENT_FUNDS
+        - INSUFFICIENT_ALLOWANCE
+        - CHAIN_UNAVAILABLE
+        - DEBIT_REVERTED
+        - TIMEOUT
+        - REVERSED_BEFORE_AUTH
+        - INTERNAL_ERROR
+    ReturnRequestType:
+      type: string
+      description: Same on-chain effect; kept for reporting.
+      enum: [REVERSAL, REFUND]
+    ReturnType:
+      type: string
+      description: Type of a return record. `LATE_DEBIT` is the automatic return of a late debit (SRS — Card Spend §2.4).
+      enum: [REVERSAL, REFUND, LATE_DEBIT]
+    ReturnStatus:
+      type: string
+      description: Return state, SRS — Card Spend §2.3.2.
+      enum:
+        - ACCEPTED
+        - SUBMITTED
+        - INCLUDED
+        - CONFIRMED
+        - RETRYING
+        - NOTHING_TO_RETURN
+    AuthorizeRequest:
+      type: object
+      required: [auth_id, card_ref, amount, currency]
+      properties:
+        auth_id:
+          allOf:
+            - $ref: '#/components/schemas/ProcessorId'
+          description: Processor's authorization ID. Unique per tenant. Reused on retries.
+        card_ref:
+          type: string
+          description: Opaque card reference registered by the partner, 1 to 64 characters.
+          minLength: 1
+          maxLength: 64
+        amount:
+          allOf:
+            - $ref: '#/components/schemas/FiatAmount'
+          description: Amount in `currency`, greater than 0.
+        currency:
+          $ref: '#/components/schemas/Currency'
+        merchant:
+          $ref: '#/components/schemas/Merchant'
+    AuthorizeResponse:
+      type: object
+      required: [auth_id, decision, status]
+      properties:
+        auth_id:
+          type: string
+          description: Echo of the request.
+        decision:
+          $ref: '#/components/schemas/Decision'
+        status:
+          $ref: '#/components/schemas/AuthorizationStatus'
+        decline_reason:
+          allOf:
+            - $ref: '#/components/schemas/DeclineReason'
+          description: If declined.
+        token:
+          type: string
+          description: If approved. Funding token symbol.
+          example: USDC
+        token_amount:
+          allOf:
+            - $ref: '#/components/schemas/TokenAmount'
+          description: If approved. Debited amount in base units.
+        quote:
+          allOf:
+            - $ref: '#/components/schemas/Quote'
+          description: If approved.
+        tx_hash:
+          type: string
+          description: If approved. Debit transaction hash.
+    ReturnRequest:
+      type: object
+      required: [return_id, type]
+      properties:
+        return_id:
+          allOf:
+            - $ref: '#/components/schemas/ProcessorId'
+          description: Processor's ID of this reversal or refund. Unique per tenant. Reused on retries.
+        type:
+          $ref: '#/components/schemas/ReturnRequestType'
+        amount:
+          allOf:
+            - $ref: '#/components/schemas/FiatAmount'
+          description: Amount in the authorization currency, greater than 0. Omitted = everything not yet returned.
+    ReturnResponse:
+      type: object
+      required: [return_id, auth_id, status, token_amount]
+      properties:
+        return_id:
+          type: string
+          description: Echo of the request.
+        auth_id:
+          type: string
+          description: Echo of the request.
+        status:
+          allOf:
+            - $ref: '#/components/schemas/ReturnStatus'
+          description: '`NOTHING_TO_RETURN` when there is nothing to return.'
+        token_amount:
+          allOf:
+            - $ref: '#/components/schemas/TokenAmount'
+          description: Tokens to return, base units. `0` for `NOTHING_TO_RETURN`.
+    Return:
+      type: object
+      required: [return_id, type, status, token_amount]
+      properties:
+        return_id:
+          type: string
+        type:
+          $ref: '#/components/schemas/ReturnType'
+        status:
+          $ref: '#/components/schemas/ReturnStatus'
+        token_amount:
+          $ref: '#/components/schemas/TokenAmount'
+        tx_hash:
+          type: string
+          description: Refund transaction hash. Absent before the first send and for `NOTHING_TO_RETURN`.
+    StatusChange:
+      type: object
+      required: [status, at]
+      properties:
+        status:
+          $ref: '#/components/schemas/AuthorizationStatus'
+        at:
+          type: string
+          format: date-time
+    Authorization:
+      type: object
+      description: |
+        `amount`, `currency`, `token`, `token_amount`, `tx_hash` and `quote` are absent when the authorization has
+        none, as in a tombstone. `decline_reason` is returned for `DECLINED` and `TIMED_OUT`.
+      required: [auth_id, status, debited_amount, returned_amount, returns, history]
+      properties:
+        auth_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/AuthorizationStatus'
+        decline_reason:
+          $ref: '#/components/schemas/DeclineReason'
+        amount:
+          $ref: '#/components/schemas/FiatAmount'
+        currency:
+          $ref: '#/components/schemas/Currency'
+        token:
+          type: string
+          description: Funding token symbol.
+        token_amount:
+          allOf:
+            - $ref: '#/components/schemas/TokenAmount'
+          description: Quoted amount, base units.
+        quote:
+          $ref: '#/components/schemas/Quote'
+        debited_amount:
+          allOf:
+            - $ref: '#/components/schemas/TokenAmount'
+          description: Tokens debited, base units. `0` if none.
+        returned_amount:
+          allOf:
+            - $ref: '#/components/schemas/TokenAmount'
+          description: Sum of accepted returns, base units.
+        tx_hash:
+          type: string
+          description: Debit transaction hash.
+        returns:
+          type: array
+          description: Returns of this authorization.
+          items:
+            $ref: '#/components/schemas/Return'
+        history:
+          type: array
+          description: Status changes in order.
+          items:
+            $ref: '#/components/schemas/StatusChange'
+    ErrorCode:
+      type: string
+      description: Error code, SRS — Card Spend §2.1.1.
+      enum:
+        - UNAUTHENTICATED
+        - INVALID_REQUEST
+        - AUTH_ID_CONFLICT
+        - RETURN_ID_CONFLICT
+        - AUTHORIZATION_IN_PROGRESS
+        - RETURN_EXCEEDS_DEBIT
+        - NOT_FOUND
+        - INTERNAL
+    Error:
+      type: object
+      description: Body of `401`, `404`, `409`, `422` and `500`. The message carries no secret and no internal detail.
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string

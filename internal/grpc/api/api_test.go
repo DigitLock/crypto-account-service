@@ -206,6 +206,7 @@ func (e *env) deps(db registry.DB) api.Deps {
 	return api.Deps{
 		Credentials: repository.New(e.server),
 		Connections: registry.NewConnections(db, e.vault, e.connectors(), e.limiters, func() time.Time { return e.now }, keyCheckWait, time.Minute),
+		Cards:       registry.NewCards(db, func() time.Time { return e.now }),
 		Logger:      e.logger,
 	}
 }
@@ -395,6 +396,7 @@ func tenantRows(t *testing.T, pool *pgxpool.Pool) string {
 
 // C1-T407 — Req: FR-105. Every method of every service of cas.v1, read from the descriptors, so that a
 // method added later is covered. With a valid token a method must not answer UNAUTHENTICATED.
+// Since S2 st4 this covers CardService too: the 8 methods of C1 and the 6 of CardService.
 func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 	e := setup(t)
 	e.tenant(t, "tenant-a")
@@ -402,6 +404,7 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 	conn := e.realServer(t)
 
 	_ = casv1.File_cas_v1_connection_service_proto
+	_ = casv1.File_cas_v1_card_service_proto
 	var methods []protoreflect.MethodDescriptor
 	protoregistry.GlobalFiles.RangeFilesByPackage("cas.v1", func(fd protoreflect.FileDescriptor) bool {
 		for i := range fd.Services().Len() {
@@ -412,8 +415,8 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 		}
 		return true
 	})
-	if len(methods) != 8 {
-		t.Errorf("cas.v1 has %d methods, want 8", len(methods))
+	if len(methods) != 14 {
+		t.Errorf("cas.v1 has %d methods, want 14", len(methods))
 	}
 
 	for _, md := range methods {

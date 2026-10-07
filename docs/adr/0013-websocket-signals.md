@@ -1,7 +1,7 @@
 # ADR-13 — WebSocket for real-time signals, polling as the source of record
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-03. Updated 2026-10-05: the `card-auth` subscription named after the provider test of S2
 - **Related:** BR-3, BR-7, ADR-6, ADR-12, milestones S2 and W1, SRS — Binance UC-205, SRS — Card Spend UC-1
 
 ## Context
@@ -40,16 +40,18 @@ Option 3.
 
 **`card-auth` (milestone S2)**
 
-- Source: a subscription to preconfirmed logs and new blocks through an RPC provider that offers WebSocket.
-- A `Debited` log with the awaited `authId` is the inclusion signal for the decision (ADR-12).
-- Receipt polling runs beside it: it is the fallback and the only way to see a reverted debit.
+- Source: Base Flashblocks through Alchemy, the primary RPC provider of Base Sepolia (SRS — Card Spend §4, issue 1). One subscription `eth_subscribe ["pendingLogs", {address, topics}]`, filtered by the controller address and the `Debited` topic; on a chain without Flashblocks, such as Anvil, the standard `logs` subscription with the same filter.
+- No subscription to new blocks or to unfiltered Flashblocks: the unfiltered stream is about 140 logs per second, and a block subscription would cost an estimated 1–1.7M compute units per day on the free plan of the provider.
+- A `Debited` log with the awaited `authId` is the inclusion signal for the decision (ADR-12). A preconfirmed log carries a zero `blockHash`; nothing of it is stored, the receipt read fills the row.
+- Receipt polling runs beside it: it is the fallback and the only way to see a reverted debit. On Flashblocks the receipt itself is preconfirmed: both paths see the debit before the block is sealed.
 - Final statuses still come from the tracker's reads.
+- No renewal ahead of a lifetime limit, unlike Binance: a connection the provider closes is reconnected at once with backoff, and receipt polling covers the gap. The `chainId` of the WebSocket endpoint is checked on every connect (SRS — Card Spend §3.2). Updated 2026-10-06, S2 st7.
 
 ## Trade-offs
 
 - One long-lived connection per exchange connection: memory, connection limits of the source, staggered reconnects after an outage.
 - Triggered runs spend rate budget. Merging and the limiter bound it.
 - The Binance stream covers the spot wallet only: funding and Earn stay on the schedule.
-- `card-auth` depends on a third-party RPC provider for WebSocket access.
+- `card-auth` depends on a third-party RPC provider for WebSocket access; the fallback endpoint is HTTP only, so the listener is down while the primary is.
 - More to test: a fake WebSocket server and disconnect scenarios.
 - The Binance subscription may require an Ed25519 key instead of HMAC: to be verified before W1.

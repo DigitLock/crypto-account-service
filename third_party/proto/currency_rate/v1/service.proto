@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package currency_rate.v1;
+
+option go_package = "github.com/DigitLock/currency-rate-service/internal/grpc/pb";
+
+import "google/protobuf/timestamp.proto";
+
+service CurrencyRateService {
+  rpc GetRate(GetRateRequest) returns (GetRateResponse);
+  rpc GetRates(GetRatesRequest) returns (GetRatesResponse);
+  rpc ListSupportedPairs(ListSupportedPairsRequest) returns (ListSupportedPairsResponse);
+}
+
+message Rate {
+  string from_currency = 1;
+  string to_currency = 2;
+  double rate = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  bool is_outdated = 5;
+  string source_provider = 6;
+  string rate_decimal = 7; // Exact stored rate as a plain decimal string with 10 fractional digits (NUMERIC(20,10) text form)
+}
+
+message CurrencyPair {
+  string from_currency = 1;
+  string to_currency = 2;
+  int32 polling_interval_seconds = 3;
+  bool is_active = 4;
+}
+
+message GetRateRequest {
+  string from_currency = 1;
+  string to_currency = 2;
+}
+
+message GetRateResponse {
+  Rate rate = 1;
+}
+
+message GetRatesRequest {
+  string base_currency = 1;
+  repeated string target_currencies = 2;
+}
+
+message GetRatesResponse {
+  repeated Rate rates = 1;
+}
+
+message ListSupportedPairsRequest {}
+
+message ListSupportedPairsResponse {
+  repeated CurrencyPair pairs = 1;
+}

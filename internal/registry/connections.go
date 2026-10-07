@@ -22,6 +22,7 @@ import (
 // Status and permission values of a connection (SRS — Core §2.3.1, EC-103).
 const (
 	ConnectionActive        = "ACTIVE"
+	ConnectionDegraded      = "DEGRADED"
 	PermissionUnverified    = "UNVERIFIED"
 	ActionConnectionCreated = "CONNECTION_CREATED"
 	ActionConnectionDeleted = "CONNECTION_DELETED"
@@ -387,7 +388,9 @@ func (c *Connections) List(ctx context.Context, tenantID uuid.UUID, ownerRef str
 }
 
 // Delete deletes a connection of the tenant with its secret, cursors, snapshots and ledger entries, and
-// writes the audit row, in one transaction (UC-104 step 2). The card check of step 1 comes with S2.
+// writes the audit row, in one transaction (UC-104 steps 1 and 2). A connection with cards is not deleted:
+// ErrConnectionHasCards (EC-114). The check runs in the delete transaction; a card registered concurrently
+// after it makes the delete fail on the foreign key of cards, with the same error.
 func (c *Connections) Delete(ctx context.Context, tenantID, credentialID, id uuid.UUID) error {
 	return pgx.BeginFunc(ctx, c.db, func(tx pgx.Tx) error {
 		q := repository.New(tx)
@@ -398,7 +401,17 @@ func (c *Connections) Delete(ctx context.Context, tenantID, credentialID, id uui
 		if err != nil {
 			return fmt.Errorf("read the connection: %w", err)
 		}
+		hasCards, err := q.ConnectionHasCards(ctx, id)
+		if err != nil {
+			return fmt.Errorf("read the cards of the connection: %w", err)
+		}
+		if hasCards {
+			return ErrConnectionHasCards
+		}
 		n, err := q.DeleteConnection(ctx, repository.DeleteConnectionParams{ID: id, TenantID: tenantID})
+		if isForeignKeyViolation(err) {
+			return ErrConnectionHasCards
+		}
 		if err != nil {
 			return fmt.Errorf("delete the connection: %w", err)
 		}

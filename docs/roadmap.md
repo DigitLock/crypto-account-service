@@ -1,6 +1,6 @@
 # Roadmap — Crypto Account Service (CAS)
 
-- **Updated:** 2026-10-05
+- **Updated:** 2026-10-07
 - **Kind:** living document. No version and no approval status.
 - **Holds:** order of the milestones, versions, status, log.
 - **Does not hold:** content and dependencies of the milestones. Their source is [BRD §7.3](brd.md#73-milestones).
@@ -15,7 +15,7 @@
 | 0 | — | Documentation baseline | `docs-v1.0` | `docs/v1.0` | Done | 2026-10-04 |
 | 1 | S1 | Contracts | `v0.1.0` | `feature/v0.1.0` | Done | 2026-10-04 |
 | 2 | C1 | Core | `v0.2.0` | `feature/v0.2.0` | Done | 2026-10-05 |
-| 3 | S2 | card-auth | `v0.3.0` | `feature/v0.3.0` | Planned | — |
+| 3 | S2 | card-auth | `v0.3.0` | `feature/v0.3.0` | Done | 2026-10-07 |
 | 4 | S3 | EVM connector, reconciliation | `v0.4.0` | `feature/v0.4.0` | Planned | — |
 | 5 | X1 | Binance balances | `v0.5.0` | `feature/v0.5.0` | Planned | — |
 | 6 | X2 | Binance history | `v0.6.0` | `feature/v0.6.0` | Planned | — |
@@ -78,9 +78,9 @@ Work in other systems that a milestone needs. It runs outside the milestone bran
 | Task | System | Needed for | Status |
 |---|---|---|---|
 | Check which pairs to USD are served, and in which direction | CRS | S2 | Done 2026-10-04: `EUR→USD` and `RSD→USD`; the rate is USD per one unit, no inversion |
-| Add fiat pairs to USD so that card quotes work for more authorization currencies | CRS | S2 | Open. Configuration only. Not blocking: other currencies are declined |
-| Serve the rate as a decimal string beside the `double` | CRS | S2 | Open. Not blocking: the stored value has 10 decimal places and is recovered exactly |
-| Shorter polling interval for `EUR→USD` | CRS | S2 | Open. Not blocking |
+| Add fiat pairs to USD so that card quotes work for more authorization currencies | CRS | S2 | Done 2026-10-05, CRS `v0.2.0`: `GBP→USD`, `CHF→USD`; pairs reload without a restart |
+| Serve the rate as a decimal string beside the `double` | CRS | S2 | Done 2026-10-05, CRS `v0.2.0`: `rate_decimal`, field 7; no float between the provider and the database |
+| Shorter polling interval for `EUR→USD` | CRS | S2 | Dropped 2026-10-05: every provider publishes one rate per day. Replaced by an intraday rate source in [backlog](backlog.md), item 5 |
 | Add crypto pairs for the valuation of balances | CRS | E1 | Open |
 | Extend the gRPC contract, frozen at v0.4.0, if E1 needs it | ET | E1 | Open |
 
@@ -96,6 +96,7 @@ One line per closed milestone or significant state. Newest last.
 | 2026-10-04 | Documentation | Document set approved, version 1.0. Tag docs-v1.0 |
 | 2026-10-04 | S1 | `CardSpendController` and `MockUSDC` with 63 test-plan rows passing on Anvil; ABI frozen; contracts CI. Tag v0.1.0 |
 | 2026-10-05 | C1 | `server` with the gRPC API `cas.v1`, tenants and `casctl`, encrypted secrets, sync engine, rate limiter and ledger on PostgreSQL; 133 test-plan rows passing; contract frozen; Go, proto and secret-scan CI. Tag v0.2.0 |
+| 2026-10-07 | S2 | `card-auth` with the processor API (OpenAPI frozen) and `CardService` added to `cas.v1`; decision with a per-card lock, quote, on-chain checks and a stored-nonce operator queue; tracker to finality, returns and automatic refund of late debits; chain listener beside polling; processor simulator `casctl sim`. Contracts deployed on Base Sepolia, decision p95 0.696 s. 123 test-plan rows passing; Go CI in three parallel jobs. Tag v0.3.0 |
 
 ---
 

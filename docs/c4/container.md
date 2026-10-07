@@ -42,7 +42,7 @@ C4Container
 
 - Notation: C4 model, Mermaid `C4Container`. Blue: CAS containers and systems of the same owner. Grey: external systems.
 - Consumer systems: partner backends and Expense Tracker, same gRPC API.
-- Not drawn: `MockUSDC` (the contract moves it with `transferFrom`) and the CLI (plays the issuer processor, runs admin operations).
+- Not drawn: `MockUSDC` (the contract moves it with `transferFrom`) and the CLI `casctl` (plays the issuer processor, runs the registry admin of tenants, tokens and processor credentials).
 
 ## Containers
 
@@ -53,11 +53,11 @@ C4Container
 | Database | PostgreSQL | One database, one migration set, one role per binary | Encrypted exchange secrets |
 | `CardSpendController` | Solidity, deployed on the EVM network: Anvil, Base Sepolia | Pull debit to the treasury, refund, daily limit, roles, pause. Holds no tokens. | None |
 | `MockUSDC` | Solidity, ERC-20, 6 decimals | Test funding token | None |
-| CLI | Go | Simulates the processor; admin operations | Admin key, test networks only |
+| CLI `casctl` | Go | `casctl sim authorize\|return\|get`: simulates the processor over the processor API. `casctl processor issue\|list\|revoke`, `tenant`, `token`, `source add-fake`: registry admin on the database. Signs no transaction | Owner-role connection string (env); processor password of `sim` (env) |
 
 ## Rules
 
-- `card-auth` is the only service that writes to the chain (ADR-3). Admin transactions (limits, pause) are signed by the CLI with the separate `ADMIN` key.
+- `card-auth` is the only service that writes to the chain (ADR-3). Admin transactions (limits, pause) are sent with `cast` and the separate `ADMIN` key ([Deployment Guide](../deployment-guide.md) §6); no service and no CLI of S2 holds that key.
 - The processor-facing API of `card-auth` is HTTP/JSON: the processor defines the contract. Consumer APIs on `server` are gRPC (ADR-7).
 - Real-time signals arrive over WebSocket: account events from Binance to `server`, preconfirmed logs from the RPC provider to `card-auth`. Stored data still comes from polling (ADR-13).
 - `card-auth` and `server` use separate database roles. The `card-auth` role cannot read exchange secrets; the `server` process never sees the operator key.

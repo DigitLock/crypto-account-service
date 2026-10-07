@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.37;
 
-// Full cycle of docs/test-plan-s1.md row S1-T702 on a deployed pair, on a local Anvil (chain ID 31337) only:
+// Full cycle of docs/test-plan-s1.md row S1-T702 on a deployed pair, on a test network only: local Anvil
+// (chain ID 31337) or Base Sepolia (chain ID 84532); any other chain ID reverts.
 // mint → approve → setDailyLimit → debit → partial refund, then checks every balance and view.
 // Env: TOKEN, CONTROLLER, ADMIN, OPERATOR, TREASURY, USER. Expects a fresh pair: USER and TREASURY start with 0 USDC.
-// No private key: run with `forge script --unlocked --sender $USER`; each step broadcasts as its actor.
+// On Anvil no private key: run with `forge script --unlocked --sender $USER`; each step broadcasts as its actor.
 
 import {CardSpendController} from "../src/CardSpendController.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
@@ -12,6 +13,7 @@ import {Script, console} from "forge-std/Script.sol";
 
 contract Scenario is Script {
     uint256 internal constant ANVIL_CHAIN_ID = 31_337;
+    uint256 internal constant BASE_SEPOLIA_CHAIN_ID = 84_532;
 
     uint256 internal constant MINT = 100_000_000; // 100.00 USDC
     uint256 internal constant DAILY_LIMIT = 50_000_000; // 50.00 USDC
@@ -22,7 +24,10 @@ contract Scenario is Script {
 
     /// @notice Runs the cycle and reverts if any expected value does not hold.
     function run() external {
-        require(block.chainid == ANVIL_CHAIN_ID, "Scenario: chain ID is not 31337 (local Anvil only)");
+        require(
+            block.chainid == ANVIL_CHAIN_ID || block.chainid == BASE_SEPOLIA_CHAIN_ID,
+            "Scenario: chain ID is not 31337 (Anvil) or 84532 (Base Sepolia)"
+        );
 
         MockUSDC token = MockUSDC(vm.envAddress("TOKEN"));
         CardSpendController controller = CardSpendController(vm.envAddress("CONTROLLER"));
