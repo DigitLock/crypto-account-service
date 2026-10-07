@@ -13,7 +13,7 @@
   - the EVM connector (event indexer) — [SRS — EVM Connector](evm-connector.md);
   - tenant self-onboarding, credential rotation through the API, data retention jobs — §4.
 - **Parents:** [BRD](../brd.md) BR-1 … BR-5, BR-13; [PRD — Card Spend](../prd/card-spend.md) US-6, US-7, US-8, US-13; [PRD — Exchange Accounts](../prd/exchange-accounts.md) US-204, US-205, US-208 … US-210, US-213; [ADR](../adr/README.md) 1–7, 11, 13.
-- **Version:** 1.3, 2026-10-05. Completed by the discovery of S2: the methods of `CardService`, processor credentials in `casctl`, rights of the role `cas_card_auth`, EC-114 without card removal. Version 1.2, 2026-10-05. Completed while C1 was built: tenant name and key length rules, `wallet_address`, ID and page token rules, connector contract as built, rate limiter on every account check, source availability in the engine, page limit per run, invalid balances, key check cases, format of `sources.config`, metric labels. Version 1.1, 2026-10-04: completed by the discovery of C1. Version 1.0 approved 2026-10-04.
+- **Version:** 1.3, 2026-10-05. Completed by the discovery of S2: the methods of `CardService`, processor credentials in `casctl`, rights of the role `cas_card_auth`, EC-114 without card removal. Completed in S2 st10a, 2026-10-06, to match the code: `owner_ref` length of `RegisterCard`, pagination of `ListCards` and `ListAuthorizations`, rights of `cas_server` on the card-auth tables, `ON DELETE RESTRICT` of `cards.connection_id`. Owner's answers of 2026-10-06: leading zeros of `daily_limit`, the validation of `GetCard`, `GetAuthorization` and the filters of `ListAuthorizations`, tombstones under a card filter, `casctl processor list [<tenant>]`, a repeated revoke. Version 1.2, 2026-10-05. Completed while C1 was built: tenant name and key length rules, `wallet_address`, ID and page token rules, connector contract as built, rate limiter on every account check, source availability in the engine, page limit per run, invalid balances, key check cases, format of `sources.config`, metric labels. Version 1.1, 2026-10-04: completed by the discovery of C1. Version 1.0 approved 2026-10-04.
 
 | Term | Meaning |
 |---|---|
@@ -111,7 +111,7 @@ sequenceDiagram
 - **Tenant scope:** every request reads and writes only the caller's tenant. A resource of another tenant is reported as `NOT_FOUND`.
 - **Reads never call a source.** Balances and ledger come from the database; freshness is reported, not forced.
 - **Amounts:** decimal strings in asset units, without exponent and without trailing zeros: `0.0125`, `0`. Token base units where stated.
-- **Pagination:** `page_size`: 100 when absent or 0, maximum 500; a larger value is cut to 500; a negative one is `INVALID_ARGUMENT`. `ListConnections` continues with `page_token` → `next_page_token`; the token is opaque, and a malformed one is `INVALID_ARGUMENT`. `ListLedgerEntries` continues with `after_seq` (§2.1.4).
+- **Pagination:** `page_size`: 100 when absent or 0, maximum 500; a larger value is cut to 500; a negative one is `INVALID_ARGUMENT`. `ListConnections`, `ListCards` and `ListAuthorizations` continue with `page_token` → `next_page_token`; the token is opaque and belongs to its list, and a malformed one, or one of another list, is `INVALID_ARGUMENT`. `ListLedgerEntries` continues with `after_seq` (§2.1.4).
 - **Lengths** of strings count characters, not bytes.
 - **IDs:** `connection_id` is a UUID in its 36-character form. Any other value is `INVALID_ARGUMENT`; a well-formed ID that matches nothing in the tenant is `NOT_FOUND`.
 - **Enum values** carry the name of their enum as a prefix on the wire: `CONNECTION_STATUS_ACTIVE`. The examples of this document show the short form.
@@ -168,10 +168,10 @@ Methods with non-obvious rules are specified below. The others follow the common
 | `DeleteConnection` | `connection_id` | Empty | UC-104. A second call: `NOT_FOUND`. Audit `CONNECTION_DELETED` with the acting credential |
 | `TriggerSync` | `connection_id` | Empty | Every stream of the connection becomes due now; the engine runs them on its next tick. Inside `trigger_sync_cooldown` after the last accepted call: `RESOURCE_EXHAUSTED`; the time of that call is `connections.last_manual_sync_at`. Connection in `CREDENTIALS_INVALID`: `FAILED_PRECONDITION / CREDENTIALS_INVALID`; this is checked before the cooldown. Connection without streams: accepted, nothing runs. A stream that is running when the call arrives is not run again. No audit record |
 | `UpdateCard` | `card_ref`; optional `daily_limit`; optional `status` | The card of §2.1.5 | S2. At least one of the two optional fields; otherwise `INVALID_ARGUMENT`. `daily_limit`: a base-unit integer string ≥ 0. `status`: `ACTIVE` or `FROZEN`. A value equal to the stored one changes nothing and writes no audit row; a change sets `updated_at` and writes `CARD_UPDATED` with the changed fields. The change applies to the next authorization (EC-115) |
-| `GetCard` | `card_ref` | The card of §2.1.5 | S2. Unknown in the tenant: `NOT_FOUND` |
+| `GetCard` | `card_ref`, 1 to 64 characters | The card of §2.1.5 | S2. `card_ref` empty or longer: `INVALID_ARGUMENT`. Unknown in the tenant: `NOT_FOUND` |
 | `ListCards` | `owner_ref`, optional, ≤ 128; `page_size`, `page_token` | `cards[]`: the card of §2.1.5; `next_page_token` | S2. Order: `created_at`, `card_ref`. Pagination as `ListConnections` |
-| `GetAuthorization` | `auth_id` | The authorization of SRS — Card Spend §2.1.4: the same fields, `returns` and `history` included, plus `card_ref`, `received_at`, `decided_at`; timestamps as `Timestamp`; `tx_hash` as SRS — Card Spend §2.1.4 | S2. Unknown in the tenant: `NOT_FOUND`. A tombstone is returned as in SRS — Card Spend §2.1.4 |
-| `ListAuthorizations` | optional `card_ref`, `owner_ref`, `status`, `received_from`, `received_to`; `page_size`, `page_token` | `authorizations[]`: the authorization without `returns` and `history`; `next_page_token` | S2. Filters combine with AND; `received_from` inclusive, `received_to` exclusive; an unknown `status` is `INVALID_ARGUMENT`. Order: `received_at` descending, `auth_id`. Tombstones are included |
+| `GetAuthorization` | `auth_id`, 1 to 64 characters | The authorization of SRS — Card Spend §2.1.4: the same fields, `returns` and `history` included, plus `card_ref`, `received_at`, `decided_at`; timestamps as `Timestamp`; `tx_hash` as SRS — Card Spend §2.1.4 | S2. `auth_id` empty or longer: `INVALID_ARGUMENT`; the length is counted in characters, the character rule of the processor API is not applied. Unknown in the tenant: `NOT_FOUND`. A tombstone is returned as in SRS — Card Spend §2.1.4 |
+| `ListAuthorizations` | optional `card_ref` ≤ 64, `owner_ref` ≤ 128, `status`, `received_from`, `received_to`; `page_size`, `page_token` | `authorizations[]`: the authorization without `returns` and `history`; `next_page_token` | S2. Filters combine with AND; `received_from` inclusive, `received_to` exclusive; an unknown `status`, a longer `card_ref` or `owner_ref`, and an invalid `received_from` or `received_to` are `INVALID_ARGUMENT`. Order: `received_at` descending, `auth_id`. Tombstones are included without these two filters: a tombstone has no card, so a `card_ref` or `owner_ref` filter, which is the owner of the card, does not return it |
 
 ##### Connector contract
 
@@ -446,7 +446,7 @@ See Common rules.
 | Parameter | Type | Required | Description | Example |
 |---|---|---|---|---|
 | card_ref | String, ≤ 64 | Yes | Opaque card reference from the processor. Unique per tenant. No card number. | `card_7Q2M` |
-| owner_ref | String | Yes | Must equal the owner of the connection | `user-4821` |
+| owner_ref | String | Yes | 1 to 128 characters; must equal the owner of the connection | `user-4821` |
 | connection_id | String, UUID | Yes | An `ACTIVE` or `DEGRADED` connection of kind `EVM_WALLET` | — |
 | daily_limit | String, integer | Yes | Card daily limit in base units of the funding token | `200000000` |
 
@@ -469,7 +469,7 @@ See Common rules.
 | wallet_address | String | Yes | Address of the bound wallet | — |
 
 - The same request repeated returns the existing card. A different body for a known `card_ref` → `ALREADY_EXISTS`.
-- `card_ref`: 1 to 64 characters. `daily_limit`: a base-unit integer string ≥ 0, at most 78 digits; no sign, no decimal point, no exponent. Otherwise `INVALID_ARGUMENT`.
+- `card_ref`: 1 to 64 characters. `daily_limit`: a base-unit integer string ≥ 0, at most 78 digits; no sign, no decimal point, no exponent. Otherwise `INVALID_ARGUMENT`. Leading zeros are accepted and removed: `"0200"` is stored and returned as `"200"`, and a repeated `RegisterCard` compares the stored value.
 - The response also carries `created_at` and `updated_at`.
 - `FAILED_PRECONDITION / CONNECTION_NOT_USABLE`: the connection is not a wallet, is not `ACTIVE` or `DEGRADED`, or its owner is not `owner_ref` (EC-113).
 - Several cards may share one wallet. The wallet daily limit in the contract caps them together (SRS — Card Spend §2.1.5).
@@ -718,9 +718,9 @@ N/A — database operations only.
 | 2 | Disable, enable a tenant | `casctl tenant disable`, `enable`: `ACTIVE` ↔ `DISABLED`. While disabled: every request is `UNAUTHENTICATED`, the sync of its connections stops, its data stays |
 | 3 | Issue a service token | `casctl token issue`. Format `cas_<key_id>_<secret>`: `key_id` is 12 hexadecimal characters, `secret` is 32 random bytes as 64 hexadecimal characters. The token is printed once; `api_credentials` keeps `key_id` and the SHA-256 hash of the 32 secret bytes |
 | 4 | Revoke a token | `casctl token revoke`: sets `revoked_at`. The next request with the token is `UNAUTHENTICATED` |
-| 5 | List | `casctl tenant list`, `casctl token list`, `casctl processor list`. No secret and no hash is shown |
+| 5 | List | `casctl tenant list`, `casctl token list`, `casctl processor list [<tenant>]`: the processor credentials of every tenant or of one, with username, tenant, created and revoked times. No secret and no hash is shown |
 | 6 | Issue a processor credential, from S2 | `casctl processor issue <tenant>`: a Basic pair for the processor API of `card-auth` (SRS — Card Spend §2.1.1). Username = `key_id`, 12 hexadecimal characters; password = 32 random bytes as 64 hexadecimal characters. Printed once as `username:password`; `api_credentials` keeps `kind = PROCESSOR_BASIC`, `key_id` and the SHA-256 hash of the 32 password bytes. Audit `CREDENTIAL_ISSUED` |
-| 7 | Revoke a processor credential, from S2 | `casctl processor revoke <username>`: sets `revoked_at`; the next request with the pair is `401`. Audit `CREDENTIAL_REVOKED` |
+| 7 | Revoke a processor credential, from S2 | `casctl processor revoke <username>`: sets `revoked_at`; the next request with the pair is `401`. Audit `CREDENTIAL_REVOKED`. A revoked pair again: `nothing changed`, no audit row. An unknown username: an error |
 
 - Authentication of a request: the credential is found by `key_id`; the SHA-256 hash of the presented secret is compared in constant time.
 - A tenant may hold several valid tokens at a time: a new one is issued, the consumer switches, the old one is revoked. A token is never shared between tenants or services (ADR-7).
@@ -936,7 +936,7 @@ Card registry read by `card-auth`.
 | tenant_id | UUID | Yes | Tenant |
 | card_ref | TEXT | Yes | Unique with `tenant_id` |
 | owner_ref | TEXT | Yes | Equals the owner of the connection |
-| connection_id | UUID | Yes | Wallet connection |
+| connection_id | UUID | Yes | Wallet connection. `ON DELETE RESTRICT`: the second line of EC-114; a card registered while its connection is deleted fails the delete with `CONNECTION_HAS_CARDS` |
 | status | TEXT | Yes | `ACTIVE`, `FROZEN` |
 | daily_limit | NUMERIC(78,0) | Yes | Base units of the funding token |
 | created_at | TIMESTAMPTZ | Yes | — |
@@ -1051,7 +1051,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
   - service tokens and processor passwords stored as hashes;
   - tenant filter on every query (FR-105), covered by an automated test with two tenants;
   - database roles: `cas_server` for `server`, `cas_card_auth` for `card-auth` (S2). The operator creates a role once per environment; the migrations run under the owner role and grant the rights below;
-  - `cas_server` reads card-auth tables but cannot write them; `cas_card_auth` reads `cards` but cannot write them; the operator key is not in the database;
+  - `cas_server` reads `authorizations`, `authorization_events`, `returns` and the columns of `operator_txs` of the table below, and writes none of them; it has no right on `operator_accounts`; `cas_card_auth` reads `cards` but cannot write them; the operator key is not in the database;
   - `cas_card_auth` has no right on the column `connections.credentials_enc`: its `SELECT` on `connections` is granted per column, every column but that one;
   - `casctl` connects with the owner role: neither runtime role can create a tenant or a credential.
 

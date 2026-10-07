@@ -1,6 +1,6 @@
 # Deployment Guide — Base Sepolia
 
-- **Version:** 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
+- **Version:** 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Completed in S2 st10a, 2026-10-06: the idle RPC load after the fix of st9b (S2-T808); the port defaults of `measure.sh`, the fallback check of `run-card-auth.sh` and the probe of the primary, to match the scripts and the code; the mode of `cas-sepolia-deployment.env` as the script creates it. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
 - **Status:** Pre-approved: used by the owner for S2 st9b on 2026-10-06.
 - **Parents:** [SRS — Card Spend](srs/card-spend.md) §3.1, §3.2; [SRS — Core](srs/core.md) UC-105, `CreateConnection`, `RegisterCard`, §3.2; [test plan S2](test-plan-s2.md) phase 8.
 
@@ -87,7 +87,7 @@ CREATE ROLE cas_card_auth LOGIN PASSWORD '…';
 ### 5.2 Rules of every script
 
 - `set -euo pipefail`, never `set -x`.
-- Order of the checks: the chain ID of its RPC first — only 84532 is accepted — then the keys file.
+- Order of the checks: the chain ID of its RPC first — only 84532 is accepted — then the keys file; `run-card-auth.sh` then checks the chain ID of the fallback.
 - RPC of `deploy.sh`, `setup.sh` and `register.sh`: `CAS_SEPOLIA_RPC_URL` when set; else `CARD_AUTH_RPC_URL` of the environment file when it is set (Alchemy); else the public `https://sepolia.base.org`. Messages name the variable the URL came from; the URL itself is never printed. `run-card-auth.sh` and `measure.sh` use `CARD_AUTH_RPC_URL`.
 - The keys file is refused when `CAS_SEPOLIA_KEYS` is unset, when the file is missing, when it lies inside the repository working tree, and when group or others have any permission on it.
 - A local RPC URL (`localhost`, `127.*`, `[::1]`) is refused; only the rehearsal switch `CAS_SEPOLIA_REHEARSAL=1` allows it, and then only local URLs are accepted (§11).
@@ -97,7 +97,7 @@ CREATE ROLE cas_card_auth LOGIN PASSWORD '…';
 
 | File | Content | Mode |
 |---|---|---|
-| `cas-sepolia-deployment.env` | Addresses of the five roles and of the pair, deployment hashes and blocks. No secret | 644 |
+| `cas-sepolia-deployment.env` | Addresses of the five roles and of the pair, deployment hashes and blocks. No secret | Created with the umask of the shell; holds no key |
 | `cas-sepolia-credentials.env` | Tenant, processor username and password, service token | 600 |
 | `cas-sepolia-forge/` | Broadcast record, cache with the RPC URL, log of `forge script` without secrets | 700 |
 
@@ -112,7 +112,7 @@ CREATE ROLE cas_card_auth LOGIN PASSWORD '…';
 | `CAS_TENANT`, `CAS_OWNER_REF`, `CAS_CARD_REF`, `CAS_CARD_DAILY_LIMIT` | `sepolia-demo`, `owner-a`, `card_A`, 200 USDC | `register.sh`; `CAS_CARD_REF` also `measure.sh` |
 | `CAS_SETUP_MINT`, `CAS_SETUP_ALLOWANCE`, `CAS_SETUP_DAILY_LIMIT`, `CAS_SETUP_REFUND_ALLOWANCE` | 100, 100, 50, 100 USDC | `setup.sh` |
 | `CAS_MEASURE_N`, `CAS_MEASURE_AMOUNT` | 30, 1.00 USD | `measure.sh` |
-| `CAS_CARD_AUTH_URL`, `CAS_CARD_AUTH_HEALTH_URL` | `http://127.0.0.1:8092`, `http://127.0.0.1:8093` | `measure.sh` |
+| `CAS_CARD_AUTH_URL`, `CAS_CARD_AUTH_HEALTH_URL` | `http://127.0.0.1:` with `CARD_AUTH_HTTP_PORT`, `CARD_AUTH_HEALTH_PORT` of the environment file; 8092, 8093 when they are unset | `measure.sh` |
 
 ### 5.3 Order
 
@@ -207,7 +207,7 @@ go run ./cmd/casctl sim get --auth-id t805-1
 | `card-auth` log: `tracker: the endpoint answered with a rate limit; the cycle ended`, error `HTTP 429` | The rate limit of the provider | One line per cycle; the next cycle runs on its schedule (SRS — Card Spend UC-3, rules of S2 st9b); decisions on the same endpoint may answer `CHAIN_UNAVAILABLE` while the limit lasts. Check the Alchemy dashboard; a longer `CARD_AUTH_TRACKER_INTERVAL` lowers the load |
 | Declines `INSUFFICIENT_FUNDS`, `INSUFFICIENT_ALLOWANCE` or `LIMIT_EXCEEDED` | Wallet state, or the daily limit of the wallet or the card | `setup.sh` with higher amounts; the card limit with `UpdateCard` |
 | `chain_listener_connected` 0, signals only from `polling` | Listener down: WebSocket closed, chain ID of `CARD_AUTH_RPC_WS_URL` wrong (`ALERT:` line) | Polling continues, decisions go on (FR-23); the listener reconnects with backoff up to 30 s |
-| Log: `chain reads moved to the fallback endpoint` | `CARD_AUTH_RPC_FALLBACK_AFTER` consecutive failures of the primary read | Reads and sends use `https://sepolia.base.org`; every tracker cycle probes the primary; `chain reads back on the primary endpoint` when it answers. The listener stays on the primary |
+| Log: `chain reads moved to the fallback endpoint` | `CARD_AUTH_RPC_FALLBACK_AFTER` consecutive failures of the primary read | Reads and sends use `https://sepolia.base.org`; while reads are on the fallback, `card-auth` probes the primary with `eth_chainId` every `CARD_AUTH_TRACKER_INTERVAL`; `chain reads back on the primary endpoint` when it answers. The listener stays on the primary |
 | p95 above 2 s in `measure.sh` | Provider latency, listener off, network of the machine | Record the run anyway (S2-T806); repeat at another time of day |
 
 ## 11. Rehearsal
@@ -261,5 +261,5 @@ Funded from the CDP faucet, about 0.0017 ETH in total.
 | S2-T805 | Authorize 5 USD: `APPROVED` at 17:16:28Z, decision 0.52 s, debit [`0x0a279604…543d`](https://sepolia.basescan.org/tx/0x0a279604d811c9ef8ece825169a6dcb9465a006fc83075696a94d9c3f3d4543d). Return 2 USD (`REFUND`): `CONFIRMED`, refund [`0xbec7dd27…f45c`](https://sepolia.basescan.org/tx/0xbec7dd2757787ef0aa28187a0e3e0b5e43187aed34dd42774e4b46c80b4cf45c). `DEBIT_CONFIRMED` by the tag `finalized` at 17:58:03Z, right after a restart of `card-auth`: the new process moved all 31 open authorizations to `DEBIT_CONFIRMED` in its first cycle (FR-16 on the public chain) |
 | S2-T806 | 2026-10-06T17:20:58Z; Alchemy free plan; listener on (`pendingLogs`); 30 × 1.00 USD in sequence, one card, from the owner's development machine (Serbia). 30 approved. p95 of `auth_decision_seconds` (histogram) 0.696 s; client-side p50 510 ms, p95 597 ms, max 729 ms. `PASS`: done-when 4 of the milestone |
 | S2-T807 | Inclusion signals: subscription 11, polling 19. Receipt polling every 200 ms often sees the preconfirmed receipt first |
-| S2-T808 | Alchemy dashboard, 2026-10-06: about 11K requests in 24 h, success 99.7 %; a rate-limited peak of about 1 % at 17:22Z, from the tracker before the fix of st9b (63 calls per cycle, HTTP 429). Idle use 36 CU/s before the metrics were bounded to one chain read per 60 s. CU per authorization could not be separated from the dashboard |
+| S2-T808 | Alchemy dashboard, 2026-10-06: about 11K requests in 24 h, success 99.7 %; a rate-limited peak of about 1 % at 17:22Z, from the tracker before the fix of st9b (63 calls per cycle, HTTP 429). Idle use 36 CU/s before the metrics were bounded to one chain read per 60 s. After `6ec1495`: 1.2 CU/s idle, 5-minute average, 10 minutes after the restart, 2026-10-06 19:05Z; throughput-limited 0 %; about 3M CU per month, about 10 % of the free plan of 30M CU. CU per authorization could not be separated from the dashboard: about 400 CU stays an estimate of the package |
 | S2-T809 | The guide was followed step by step. Deviations found and fixed here: the RPC default of the scripts (§5.2), the 429 row (§10), the order of the terminals: server, then `card-auth` (§5.3) |

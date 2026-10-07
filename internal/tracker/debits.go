@@ -417,7 +417,9 @@ func (t *Tracker) debited(ctx context.Context, chainAuthID []byte) (*big.Int, er
 	if t.limited() {
 		return nil, errRateLimited
 	}
-	a, err := t.controller().Authorizations(t.opts(ctx, nil), [32]byte(chainAuthID))
+	opts, cancel := t.opts(ctx, nil)
+	a, err := t.controller().Authorizations(opts, [32]byte(chainAuthID))
+	cancel()
 	if err != nil {
 		return nil, t.rpcErr("authorizations(authId)", err)
 	}

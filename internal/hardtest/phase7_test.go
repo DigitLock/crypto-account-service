@@ -151,7 +151,8 @@ func TestT703_ReplayAcrossRestart(t *testing.T) {
 		switch {
 		case final == "LATE_DEBIT_REFUNDED" && n == 1:
 			if c := w.count(t, `SELECT count(*) FROM returns r JOIN authorizations a ON a.id = r.authorization_id
-				WHERE a.auth_id = 'auth-703a' AND r.type = 'LATE_DEBIT' AND r.status = 'CONFIRMED'`); c != 1 {
+				WHERE a.tenant_id = $1 AND a.auth_id = 'auth-703a' AND r.type = 'LATE_DEBIT' AND r.status = 'CONFIRMED'`,
+				w.tenantID); c != 1 {
 				t.Errorf("%d confirmed LATE_DEBIT returns, want 1", c)
 			}
 		case final == "DECLINED" && n == 0:

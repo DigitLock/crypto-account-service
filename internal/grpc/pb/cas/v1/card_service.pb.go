@@ -884,7 +884,7 @@ type RegisterCardRequest struct {
 	CardRef string `protobuf:"bytes,1,opt,name=card_ref,json=cardRef,proto3" json:"card_ref,omitempty"`
 	// Required. Must equal the owner of the connection.
 	OwnerRef string `protobuf:"bytes,2,opt,name=owner_ref,json=ownerRef,proto3" json:"owner_ref,omitempty"`
-	// Required. UUID of an ACTIVE connection of kind EVM_WALLET.
+	// Required. UUID of an ACTIVE or DEGRADED connection (D-12) of kind EVM_WALLET.
 	ConnectionId string `protobuf:"bytes,3,opt,name=connection_id,json=connectionId,proto3" json:"connection_id,omitempty"`
 	// Required. Base-unit integer string ≥ 0, at most 78 digits.
 	DailyLimit    string `protobuf:"bytes,4,opt,name=daily_limit,json=dailyLimit,proto3" json:"daily_limit,omitempty"`

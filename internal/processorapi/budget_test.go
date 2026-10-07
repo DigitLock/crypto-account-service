@@ -11,9 +11,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/DigitLock/crypto-account-service/internal/config"
 	"github.com/DigitLock/crypto-account-service/internal/decision"
 	"github.com/DigitLock/crypto-account-service/internal/testchain"
+	"github.com/DigitLock/crypto-account-service/internal/tracker"
 )
 
 // The RPC budget of a tracker cycle (SRS — Card Spend UC-3, rules of S2 st9b), counted by the proxy between card-auth
@@ -296,4 +299,137 @@ func TestTrackerBudget_IdleMetrics(t *testing.T) {
 		t.Errorf("operator_gas_balance %v after the reads", got)
 	}
 	e.noNonceGap(t)
+}
+
+// limiting makes the proxy answer every request that carries method with HTTP 429; "" ends it.
+func (p *rpcProxy) limiting(method string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.limitMethod = method
+}
+
+// S2-T526 — Req: UC-2 step 7, UC-3 rules of S2 st9b, FR-14. A rate limit at the fee read of a refund attempt is a rate
+// limit of the cycle: one WARN line, the return keeps its status and its attempts, the slot stays PLANNED without a
+// hash, and the next cycle sends the refund in that slot.
+func TestT526_RateLimitedRefundAttempt(t *testing.T) {
+	e, p := budgetEnv(t)
+	approvedWith(t, e.authorize(t, authReq("t526", "card_A", "1", "USD")), "1000000")
+	acceptedWith(t, e.ret(t, "t526", returnReq("rv-t526", "1")), "1000000")
+	before := e.returnRow(t, "rv-t526")
+	slots := func() (planned, hashes int) {
+		const q = `SELECT count(*) FILTER (WHERE o.status = 'PLANNED'), count(o.tx_hash)
+			FROM operator_txs o JOIN returns r ON r.id = o.return_row_id WHERE r.return_id = 'rv-t526'`
+		if err := e.owner.QueryRow(ctx, q).Scan(&planned, &hashes); err != nil {
+			t.Fatal(err)
+		}
+		return planned, hashes
+	}
+
+	p.limiting("eth_maxPriorityFeePerGas")
+	mark := len(e.logs.String())
+	e.tracker.Cycle(ctx)
+	logs := e.logsSince(mark)
+	p.limiting("")
+	if n := strings.Count(logs, `"level":"WARN"`) + strings.Count(logs, `"level":"ERROR"`); n != 1 ||
+		!strings.Contains(logs, "tracker: the endpoint answered with a rate limit; the cycle ended") {
+		t.Errorf("want one WARN line of the rate limit, got %d WARN or ERROR lines:\n%s", n, logs)
+	}
+	if strings.Contains(logs, "refund not sent") {
+		t.Errorf("a second line for the rate limit of the refund:\n%s", logs)
+	}
+	if got := e.returnRow(t, "rv-t526"); got.Status != before.Status || got.Attempts != before.Attempts {
+		t.Errorf("return %s with %d attempts after the limited cycle, want %s with %d: the row does not move",
+			got.Status, got.Attempts, before.Status, before.Attempts)
+	}
+	if planned, hashes := slots(); planned != 1 || hashes != 0 {
+		t.Errorf("%d PLANNED slots and %d hashes of the return, want 1 and 0: nothing was sent", planned, hashes)
+	}
+
+	e.cycleUntil(t, "rv-t526", "INCLUDED")
+	if got := e.returnRow(t, "rv-t526"); got.Attempts != before.Attempts+1 {
+		t.Errorf("%d attempts after the send, want %d", got.Attempts, before.Attempts+1)
+	}
+	if n := e.count(t, `SELECT count(*) FROM operator_txs o JOIN returns r ON r.id = o.return_row_id
+		WHERE r.return_id = 'rv-t526'`); n != 1 {
+		t.Errorf("%d slots of the return, want 1: the PLANNED slot is used by the send", n)
+	}
+	e.noNonceGap(t)
+}
+
+// S2-T527 — Req: §3.1 rpc_read_timeout, UC-3. Every contract call of the tracker is bounded by rpc_read_timeout, as
+// every other read: an endpoint that does not answer an eth_call holds the call 500 ms, not the cycle.
+func TestT527_TrackerCallsBoundedByReadTimeout(t *testing.T) {
+	e, p := budgetEnv(t)
+	p.mu.Lock()
+	p.hangMethod, p.hangFor = "eth_call", 3*time.Second
+	p.mu.Unlock()
+	start := time.Now()
+	err := e.tracker.Start(ctx)
+	took := time.Since(start)
+	p.mu.Lock()
+	p.hangMethod = ""
+	p.mu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "treasury(): no answer within 500ms") {
+		t.Fatalf("start with an eth_call that does not answer: %v, want treasury(): no answer within 500ms", err)
+	}
+	if took > 1500*time.Millisecond {
+		t.Errorf("start took %s with an eth_call that does not answer: the call is not bounded by rpc_read_timeout", took)
+	}
+	if err := e.tracker.Start(ctx); err != nil {
+		t.Errorf("start once the endpoint answers: %v", err)
+	}
+}
+
+// S2-T528 — Req: §2.5.1 treasury_refund_capacity, UC-3 rules of S2 st9b, owner's decision of 2026-10-07. A start
+// whose treasury() read is rate-limited leaves the address unset; each metric update reads it again, under the rules
+// of the cycle, and reports the capacity once the endpoint answers, without a restart.
+func TestT528_TreasuryReadAfterLimitedStart(t *testing.T) {
+	e, p := budgetEnv(t)
+	approvedWith(t, e.authorize(t, authReq("t528", "card_A", "1", "USD")), "1000000")
+	want := e.balance(t, e.chain.Treasury)
+	if want.Sign() == 0 {
+		t.Fatal("the treasury holds nothing: the capacity would not show the read")
+	}
+	reg := prometheus.NewRegistry()
+	tr, err := tracker.New(e.cardAuth, e.queue, tracker.Config{
+		Controller: e.chain.Controller, Token: e.chain.Token, RefundGasLimit: config.DefaultRefundGasLimit,
+		DebitGasLimit: config.DefaultDebitGasLimit, DebitValidity: 4 * time.Second, FeeBumpPercent: 25,
+		Interval: time.Second, RetryInterval: 30 * time.Second, FinalityMode: config.FinalityModeTag,
+		FinalityTag: config.FinalityTagFinalized,
+	}, tracker.NewMetrics(reg), e.log, e.clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capacity := func() float64 {
+		t.Helper()
+		families, err := reg.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range families {
+			if f.GetName() == "treasury_refund_capacity" {
+				return f.GetMetric()[0].GetGauge().GetValue()
+			}
+		}
+		t.Fatal("no metric treasury_refund_capacity")
+		return 0
+	}
+
+	start := time.Now()
+	e.clock.Set(start)
+	p.limiting("eth_call")
+	if err := tr.Start(ctx); err == nil || !strings.Contains(err.Error(), "rate limit") {
+		t.Fatalf("start with eth_call rate-limited: %v, want the rate limit of treasury()", err)
+	}
+	tr.Cycle(ctx)
+	if got := capacity(); got != 0 {
+		t.Errorf("treasury_refund_capacity = %v while treasury() is rate-limited, want not reported (0)", got)
+	}
+
+	p.limiting("")
+	e.clock.Set(start.Add(61 * time.Second)) // the next metric update (metricsChainInterval)
+	tr.Cycle(ctx)
+	if got := capacity(); got != float64(want.Int64()) {
+		t.Errorf("treasury_refund_capacity = %v after the endpoint answers, want %s: read without a restart", got, want)
+	}
 }

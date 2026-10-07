@@ -77,6 +77,9 @@ func (qu *Queue) Address() common.Address { return qu.signer.Address() }
 // Reader is the chain reader of the queue, for receipts and calls on the current endpoint.
 func (qu *Queue) Reader() *chain.Reader { return qu.reader }
 
+// CallTimeout bounds one chain call of the queue and of its users: rpc_read_timeout.
+func (qu *Queue) CallTimeout() time.Duration { return qu.callTimeout }
+
 // Reserve takes the next nonce of the operator inside the caller's transaction q: the operator_accounts row is
 // locked with SELECT … FOR UPDATE until the caller commits; the slot is written PLANNED. Exactly one of
 // authorizationID (DEBIT) and returnRowID (REFUND) is set. No chain call.

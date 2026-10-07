@@ -214,7 +214,7 @@ message RegisterCardRequest {
   string card_ref = 1;
   // Required. Must equal the owner of the connection.
   string owner_ref = 2;
-  // Required. UUID of an ACTIVE connection of kind EVM_WALLET.
+  // Required. UUID of an ACTIVE or DEGRADED connection (D-12) of kind EVM_WALLET.
   string connection_id = 3;
   // Required. Base-unit integer string ≥ 0, at most 78 digits.
   string daily_limit = 4;

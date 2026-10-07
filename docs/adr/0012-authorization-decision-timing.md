@@ -1,7 +1,7 @@
 # ADR-12 — Authorization decision timing
 
 - **Status:** Accepted
-- **Date:** 2026-10-03. Updated 2026-10-05: drop rate of preconfirmations re-checked; open point closed
+- **Date:** 2026-10-03. Updated 2026-10-05: drop rate of preconfirmations re-checked; open point closed. Updated 2026-10-06, S2 st10a: `validUntil` rounded down, as the code does
 - **Related:** BR-7, BR-8, G-1, G-2, ADR-8, ADR-9, SRS — Card Spend UC-1, UC-3
 
 ## Context
@@ -25,7 +25,7 @@
 Option 2, with four rules:
 
 1. **Deadline:** no inclusion signal within `decision_deadline` (2.5 s) → decline.
-2. **Expiry:** every debit carries `validUntil` = received time + `debit_validity` (4 s), in whole seconds. After it the contract rejects the debit. A declined authorization can therefore be debited only inside a short window after the deadline: about 1.5 s, up to one block longer, because the contract compares `validUntil` with the block timestamp.
+2. **Expiry:** every debit carries `validUntil` = received time + `debit_validity` (4 s), rounded down to a whole second. After it the contract rejects the debit. A declined authorization can therefore be debited only inside a short window after the deadline: at most about 1.5 s, shorter by the rounding, up to one block longer, because the contract compares `validUntil` with the block timestamp.
 3. **Late debit:** a debit that lands inside that window is returned in full automatically.
 4. **Lost debit:** an approved debit that is dropped is resubmitted with the same `authId`. If that fails, the authorization becomes `DEBIT_LOST`: issuer exposure and an alert.
 

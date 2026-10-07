@@ -1,7 +1,7 @@
 # ADR-3 — Read-only exchange connections, isolated write path
 
 - **Status:** Accepted
-- **Date:** 2026-10-03
+- **Date:** 2026-10-03. Updated 2026-10-06, S2 st10a: who sends the admin transactions, as built; the decision is unchanged
 - **Related:** BR-2, BR-6, G-3, ADR-4, ADR-9, [C4 containers](../c4/container.md)
 
 ## Context
@@ -24,7 +24,7 @@ Option 3.
 
 - `server`: exchange adapters contain no trade, withdrawal or transfer calls. A key with trade, withdrawal or transfer permission is rejected when the connection is created.
 - `card-auth`: the only service that signs transactions. The operator key exists only in its environment.
-- Admin transactions (limits, pause) are signed outside the services: by the CLI with the separate `ADMIN` key (ADR-9).
+- Admin transactions (limits, pause) are sent outside the services with `cast` and the separate `ADMIN` key ([Deployment Guide](../deployment-guide.md) §6, ADR-9); no service and no CLI of S2 holds that key.
 - Database roles: `cas_card_auth` of `card-auth` cannot read exchange secrets; `server`, with its role `cas_server`, has no signing key.
 - CI rule: packages of `server` must not import the signer package.
 

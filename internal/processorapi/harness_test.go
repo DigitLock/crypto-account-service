@@ -737,9 +737,10 @@ type rpcProxy struct {
 	mode     string // "", "error", "delay", "429": every request answered with HTTP 429
 	delay    time.Duration
 	requests []proxied
-	// Faults of one method: answered with a JSON-RPC error; relayed, then answered after a delay; receipts with
-	// a zero block hash, as a preconfirmed receipt.
+	// Faults of one method: answered with a JSON-RPC error; answered with HTTP 429; relayed, then answered after a
+	// delay; receipts with a zero block hash, as a preconfirmed receipt.
 	failMethod    string
+	limitMethod   string
 	hangMethod    string
 	hangFor       time.Duration
 	zeroBlockHash bool
@@ -785,10 +786,13 @@ func (p *rpcProxy) serve(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	p.mu.Lock()
-	failMethod, hangMethod, hangFor, zeroBlockHash := p.failMethod, p.hangMethod, p.hangFor, p.zeroBlockHash
+	failMethod, limitMethod, hangMethod, hangFor, zeroBlockHash := p.failMethod, p.limitMethod, p.hangMethod, p.hangFor, p.zeroBlockHash
 	p.mu.Unlock()
 	if failMethod != "" && strings.Contains(string(body), `"method":"`+failMethod+`"`) {
 		mode = "error"
+	}
+	if limitMethod != "" && strings.Contains(string(body), `"method":"`+limitMethod+`"`) {
+		mode = "429"
 	}
 	switch mode {
 	case "429":

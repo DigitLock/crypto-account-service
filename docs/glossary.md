@@ -97,6 +97,6 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Lost debit | Approved debit that was dropped by the network and could not be repeated. Issuer exposure. |
 | Tombstone | Record of a reversal that arrived before its authorization. Makes the late authorization decline. |
 | Event listener | Component of `server` that holds a WebSocket connection to an exchange and turns account events into sync triggers. |
-| Chain listener | Component of `card-auth` that subscribes to preconfirmed logs and new blocks and reports inclusion signals. |
+| Chain listener | Component of `card-auth` that subscribes to the `Debited` logs of the controller (`pendingLogs` or `logs`), never to new blocks, and reports inclusion signals. |
 | Tracker | Background worker of `card-auth`: follows debits and returns to their final status. |
 | Event indexer | The EVM connector of `server`: reads contract and token event logs from final blocks into the ledger. |

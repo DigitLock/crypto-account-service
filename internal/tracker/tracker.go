@@ -126,11 +126,9 @@ func (t *Tracker) Run(ctx context.Context) {
 func (t *Tracker) Start(ctx context.Context) error {
 	t.begin()
 	defer t.end(ctx)
-	treasury, err := t.controller().Treasury(t.opts(ctx, nil))
-	if err != nil {
-		return t.rpcErr("treasury()", err)
+	if err := t.readTreasury(ctx); err != nil {
+		return err
 	}
-	t.treasury = treasury
 
 	rows, err := repository.New(t.db).ListReturnsInFlight(ctx, repository.ListReturnsInFlightParams{ChainID: t.chainID(), OperatorAddress: t.operator()})
 	if err != nil {
@@ -237,7 +235,9 @@ func (t *Tracker) Cycle(ctx context.Context) {
 
 // attempt sends one refund (UC-2 step 7): the slot is reserved through the operator queue — or the PLANNED slot of an
 // earlier attempt that was never sent is used again, so no nonce is left unused — the return SUBMITTED with
-// attempts + 1, then the hash stored and the transaction sent. A failure before the send makes it RETRYING.
+// attempts + 1, then the hash stored and the transaction sent. A failure before the send makes it RETRYING. A rate
+// limit before the send is a rate limit of the cycle (rules of S2 st9b): the return goes back to its status with
+// its attempts, the slot stays PLANNED, the next cycle tries again, and the one WARN line of the cycle is the log.
 func (t *Tracker) attempt(ctx context.Context, id uuid.UUID, chainAuthID, chainRefundID []byte, tokenAmount string) error {
 	if t.limited() {
 		return errRateLimited
@@ -247,6 +247,7 @@ func (t *Tracker) attempt(ctx context.Context, id uuid.UUID, chainAuthID, chainR
 	t.mu.Unlock()
 	var slot operator.Slot
 	var skip bool
+	var from string
 	err := pgx.BeginFunc(ctx, t.db, func(tx pgx.Tx) error {
 		q := repository.New(tx)
 		r, err := q.LockReturnToSend(ctx, id)
@@ -257,6 +258,7 @@ func (t *Tracker) attempt(ctx context.Context, id uuid.UUID, chainAuthID, chainR
 			skip = true
 			return nil
 		}
+		from = r.Status
 		if r.PlannedNonce >= 0 {
 			slot = operator.Slot{ID: r.PlannedID, Nonce: uint64(r.PlannedNonce)}
 		} else if slot, err = t.queue.Reserve(ctx, q, operator.PurposeRefund, nil, &id); err != nil {
@@ -278,7 +280,17 @@ func (t *Tracker) attempt(ctx context.Context, id uuid.UUID, chainAuthID, chainR
 	}
 	_, err = t.queue.Send(ctx, slot, t.refundCall(chainAuthID, chainRefundID, tokenAmount), nil)
 	t.sent(slot.ID)
-	if err = t.check(err); err != nil {
+	if err = t.check(err); errors.Is(err, errRateLimited) {
+		// Nothing was sent and the row does not move: the status and the attempts of before, no delay of the retry.
+		t.mu.Lock()
+		delete(t.lastAttempt, id)
+		t.mu.Unlock()
+		if err := t.setStatus(ctx, id, from, -1, returns.StatusSubmitted); err != nil {
+			return err
+		}
+		return errRateLimited
+	}
+	if err != nil {
 		// Nothing was sent: the slot stays PLANNED and is used by the next attempt (step 8, EC-12).
 		t.failed(ctx, slog.LevelWarn, "refund not sent; retrying", "return_row_id", id.String(), "nonce", slot.Nonce, "error", err.Error())
 		return t.setStatus(ctx, id, returns.StatusRetrying, 0, returns.StatusSubmitted)
@@ -466,11 +478,29 @@ func (t *Tracker) refundUsed(ctx context.Context, refundID []byte, block *big.In
 	if t.limited() {
 		return false, errRateLimited
 	}
-	used, err := t.controller().RefundUsed(t.opts(ctx, block), [32]byte(refundID))
+	opts, cancel := t.opts(ctx, block)
+	used, err := t.controller().RefundUsed(opts, [32]byte(refundID))
+	cancel()
 	if err != nil {
 		return false, t.rpcErr("refundUsed", err)
 	}
 	return used, nil
+}
+
+// readTreasury reads treasury() of the controller and keeps the address. Start reads it; while it is unset — the read
+// of the start failed, by a rate limit among others — each metric update reads it again. Refunds do not need it.
+func (t *Tracker) readTreasury(ctx context.Context) error {
+	if t.limited() {
+		return errRateLimited
+	}
+	opts, cancel := t.opts(ctx, nil)
+	treasury, err := t.controller().Treasury(opts)
+	cancel()
+	if err != nil {
+		return t.rpcErr("treasury()", err)
+	}
+	t.treasury = treasury
+	return nil
 }
 
 func (t *Tracker) controller() *bindings.CardSpendControllerCaller {
@@ -478,8 +508,11 @@ func (t *Tracker) controller() *bindings.CardSpendControllerCaller {
 	return c
 }
 
-func (t *Tracker) opts(ctx context.Context, block *big.Int) *bind.CallOpts {
-	return &bind.CallOpts{Context: ctx, BlockNumber: block}
+// opts are the options of one contract call at block: the call is bounded by rpc_read_timeout, as every other read
+// (SRS — Card Spend §3.1). The caller calls cancel when the call has returned.
+func (t *Tracker) opts(ctx context.Context, block *big.Int) (*bind.CallOpts, context.CancelFunc) {
+	cctx, cancel := context.WithTimeout(ctx, t.queue.CallTimeout())
+	return &bind.CallOpts{Context: cctx, BlockNumber: block}, cancel
 }
 
 // chainID and operator scope every query of the tracker: rows of another chain or another operator key are never

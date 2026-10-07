@@ -53,9 +53,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 }
 
 // metricsChainInterval bounds the chain reads of the metrics — operator_gas_balance (eth_getBalance) and
-// treasury_refund_capacity (two eth_call) — to one per 60 s (owner's decision of 2026-10-06, rules of S2 st9b: at a
-// cycle every 2 s they alone used 36 CU/s of the provider with no open row). A constant of the code, as the backoff of
-// the listener, not a variable of SRS — Card Spend §3.1. The first cycle after the start reads them.
+// treasury_refund_capacity (two eth_call; a third, treasury(), while the address is unset) — to one per 60 s (owner's
+// decision of 2026-10-06, rules of S2 st9b: at a cycle every 2 s they alone used 36 CU/s of the provider with no open
+// row). A constant of the code, as the backoff of the listener, not a variable of SRS — Card Spend §3.1. The first
+// cycle after the start reads them.
 const metricsChainInterval = 60 * time.Second
 
 // updateMetrics sets the gauges; a failed read keeps the last value and is logged. The chain reads run at most once
@@ -92,21 +93,34 @@ func (t *Tracker) updateMetrics(ctx context.Context) {
 		f, _ := new(big.Float).SetInt(wei).Float64()
 		t.metrics.gasBalance.Set(f)
 	}
-	if t.limited() || t.treasury == ([20]byte{}) {
+	if t.limited() {
 		return
+	}
+	if t.treasury == ([20]byte{}) {
+		// The start did not read the address: read it now, under the rules of the cycle (budget.go).
+		if err := t.readTreasury(ctx); err != nil {
+			if !t.limited() {
+				t.failed(ctx, slog.LevelWarn, "tracker: the treasury address not read", "error", err.Error())
+			}
+			return
+		}
 	}
 	token, err := bindings.NewMockUSDCCaller(t.cfg.Token, t.queue.Reader().Endpoint().Client)
 	if err != nil {
 		return
 	}
-	balance, err := token.BalanceOf(t.opts(ctx, nil), t.treasury)
+	opts, cancel := t.opts(ctx, nil)
+	balance, err := token.BalanceOf(opts, t.treasury)
+	cancel()
 	if err != nil {
 		if err := t.rpcErr("treasury balance", err); !t.limited() {
 			t.failed(ctx, slog.LevelWarn, "tracker: treasury balance read failed", "error", err.Error())
 		}
 		return
 	}
-	allowance, err := token.Allowance(t.opts(ctx, nil), t.treasury, t.cfg.Controller)
+	opts, cancel = t.opts(ctx, nil)
+	allowance, err := token.Allowance(opts, t.treasury, t.cfg.Controller)
+	cancel()
 	if err != nil {
 		if err := t.rpcErr("treasury allowance", err); !t.limited() {
 			t.failed(ctx, slog.LevelWarn, "tracker: treasury allowance read failed", "error", err.Error())

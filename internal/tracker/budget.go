@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -98,9 +99,15 @@ func (t *Tracker) check(err error) error {
 	return err
 }
 
-// rpcErr turns an error of a contract call into an error without a URL that keeps its cause, checked for a rate limit.
+// rpcErr turns an error of a contract call, bounded by rpc_read_timeout, into an error without a URL that keeps its
+// cause, checked for a rate limit.
 func (t *Tracker) rpcErr(what string, err error) error {
-	return t.check(fmt.Errorf("%s: %w", what, t.queue.Reader().DescribeErr(err, t.cfg.Interval)))
+	return t.rpcErrWithin(what, err, t.queue.CallTimeout())
+}
+
+// rpcErrWithin is rpcErr for a call bounded by timeout.
+func (t *Tracker) rpcErrWithin(what string, err error, timeout time.Duration) error {
+	return t.check(fmt.Errorf("%s: %w", what, t.queue.Reader().DescribeErr(err, timeout)))
 }
 
 // rowFailed records a failure of a row; end logs each kind once. A rate limit is logged once by end.
@@ -168,7 +175,7 @@ func (t *Tracker) readFinal(ctx context.Context) (uint64, bool, error) {
 		defer cancel()
 		h, err := t.queue.Reader().Endpoint().Client.HeaderByNumber(cctx, big.NewInt(int64(tag)))
 		if err != nil {
-			return 0, false, t.rpcErr("final block", err)
+			return 0, false, t.rpcErrWithin("final block", err, t.cfg.Interval)
 		}
 		return h.Number.Uint64(), true, nil
 	}
