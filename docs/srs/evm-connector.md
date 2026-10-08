@@ -12,8 +12,22 @@
   - the authorization flow, the contract and the reconciliation rules: [SRS — Card Spend](card-spend.md);
   - real-time signals: `card-auth` tracks its own transactions (ADR-13). This connector reads logs from final blocks only.
 - **Parents:** [BRD](../brd.md) BR-1, BR-3, BR-4, BR-5, BR-12; [PRD — Card Spend](../prd/card-spend.md) US-13; [ADR](../adr/README.md) 2, 3, 5, 6, 8, 11, 13.
-- **Version:** 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); endpoint variables and network errors of `sources.config` (S3 D-29, S3 D-30); tracked tokens with the source, `treasury_address`, endpoint choice per source, call timeout and rate-limit pause, required `controller_address` and `backfill_floor` (S3 D-31 … S3 D-34, S3 D-36); an oversized balance refuses the snapshot and gives no balance checkpoint, EC-319 (S3 D-37, S3 D-39); completeness check as built in st6: when a checkpoint is due, which read failures skip it (EC-317); the log line of a reorg guard hit as built in st8a (EC-308); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
-- **Network facts:** finality stages and their timing are taken from the Base documentation for Base mainnet, checked on 2026-10-03. Base Sepolia may differ; the values are measured at S3.
+- **Version:** 1.4, 2026-10-08. Measurements of Base Sepolia by the owner (S3 st8b, S3-T801 … S3-T806): network facts, finality distance (§2.1.1), values of `base-sepolia` confirmed (§3.1), the public endpoint's range limit (EC-306), cost (§3.2); §4 issues 1, 2, 6 closed. Version 1.3, 2026-10-07. Completed by the discovery of S3 (decisions S3 D-n): platform tenant and treasury connection (S3 D-1, S3 D-2, S3 D-22); balance checkpoint and its storage (S3 D-3, S3 D-5); one read of the final block for `card-auth` and the connector (S3 D-4); finality configured twice (S3 D-18); `last_time` in the cursor (S3 D-7); values of `sources.config` per network and the alias of the tracked token (S3 D-12, S3 D-17, S3 D-27); source without an RPC URL (S3 D-16); start checks (S3 D-23); endpoint variables and network errors of `sources.config` (S3 D-29, S3 D-30); tracked tokens with the source, `treasury_address`, endpoint choice per source, call timeout and rate-limit pause, required `controller_address` and `backfill_floor` (S3 D-31 … S3 D-34, S3 D-36); an oversized balance refuses the snapshot and gives no balance checkpoint, EC-319 (S3 D-37, S3 D-39); completeness check as built in st6: when a checkpoint is due, which read failures skip it (EC-317); the log line of a reorg guard hit as built in st8a (EC-308); alerts as metrics (S3 D-11); fixtures and the shared connector test suite (S3 D-13, S3 D-14); EC-316 out of S3 (S3 D-15); the gap metric in SRS — Core (S3 D-19). Version 1.2, 2026-10-05. One clarification by the discovery of S2: which milestone fills `sources.config` (§2.4). Version 1.1, 2026-10-04. Completed by the discovery of C1: allow-list check from C1 (FR-318), source rows of C1, address input rules. Version 1.0 approved 2026-10-04.
+- **Network facts:**
+  - Base mainnet: finality stages and their timing from the Base documentation, checked on 2026-10-03.
+  - Base Sepolia, measured by the owner on 2026-10-08 with `server` of S3 (S3-T801 … S3-T806):
+
+| Fact | Base Sepolia, 2026-10-08 | Row |
+|---|---|---|
+| Distance head − `finalized` | 608–763 blocks, 20–25 min; 13 samples every 5 min, 09:46–10:46 UTC | S3-T803 |
+| Steps of `finalized` | About 150–260 blocks at a time | S3-T803 |
+| State at the final block | `balanceOf` pinned by the hash of the final block: served by Alchemy | S3-T802 |
+| `eth_getLogs` range, Alchemy Pay As You Go | 2,000, 10,000 and 50,000 blocks accepted | S3-T804 |
+| `eth_getLogs` range, Alchemy free plan | 10 blocks (plan of the provider) | — |
+| `eth_getLogs` range, `https://sepolia.base.org` | 500 blocks accepted; 1,000 and more rejected: HTTP 413, JSON-RPC `-32614` "eth_getLogs is limited to a 500 range" | S3-T804 |
+| Alchemy plan | Pay As You Go since 2026-10-08: $0.525 per 1M CU (dashboard), 10,000 CU/s (free plan: 300 CU/s); usage limit $5 = 9,523,810 CU, alert $3 | S3-T806 |
+
+- **Terms:**
 
 | Term | Meaning |
 |---|---|
@@ -124,14 +138,15 @@ Set per network in `sources.config`. `card-auth` uses the same rule for its fina
 
 | Mode | Final block | Distance from the head | Use |
 |---|---|---|---|
-| `tag`, `finalized` | Newest block whose batch on L1 is final | Base: about 20 minutes | Base Sepolia |
+| `tag`, `finalized` | Newest block whose batch on L1 is final | Base Sepolia: 608–763 blocks, 20–25 minutes, measured 2026-10-08. Base mainnet: about 20 minutes | Base Sepolia |
 | `tag`, `safe` | Newest block whose batch is posted to L1 | Base: about 2 minutes | Not used. Such a block can still change if L1 reorganizes |
 | `confirmations` | Head minus `finality_confirmations` | N blocks | Local chain |
 
 - Why `finalized`: ledger entries are never changed (ADR-5) and consumers have already pulled them. A rule that can be reverted would need rewrites.
-- Cost: ledger entries, `DEBIT_CONFIRMED` and reconciliation follow the chain about 20 minutes later. Nothing in the payment path waits for them: the card decision, balances and returns do not depend on finality.
+- Cost: ledger entries, `DEBIT_CONFIRMED` and reconciliation follow the chain 20–25 minutes later on Base Sepolia (measured 2026-10-08). Nothing in the payment path waits for them: the card decision, balances and returns do not depend on finality.
 - `safe` would save about 18 minutes but needs two mechanisms that are not built: a repair of the ledger with a notice to consumers, and a watch on confirmed debits until L1 finality.
 - While L1 finality is stalled the final block does not move: the ledger and reconciliation pause and continue afterwards.
+- `finalized` moves in steps of about 150–260 blocks on Base Sepolia (measured 2026-10-08): a `logs` run may find F unchanged, read nothing, and give the reconciliation worker no new run (observed: no run at 10:06 and 10:27 UTC).
 - The reorg guard (UC-303) is the second line of defence. With `finalized` it is expected never to fire.
 - Reading well behind the head also protects against an RPC node that lags: such a node may answer a log query for blocks it has not seen with an empty list instead of an error.
 
@@ -308,7 +323,7 @@ Stream `logs`, every 5 minutes; `TriggerSync`; connection created.
 
 | EC | Case | Handling |
 |---|---|---|
-| EC-306 | The provider rejects the block range or the size of the answer: HTTP 413, or a message of `eth_getLogs` that names a block range, a result count or a response size, recognised before a rate limit | Step 6: the range is halved, down to one block. The smaller size is kept in memory per network until a restart and starts the next run; it grows back only at a restart. One block still rejected: the run fails with an RPC error, so the next run uses the fallback (S3 D-33) |
+| EC-306 | The provider rejects the block range or the size of the answer: HTTP 413, or a message of `eth_getLogs` that names a block range, a result count or a response size, recognised before a rate limit | Step 6: the range is halved, down to one block. The smaller size is kept in memory per network until a restart and starts the next run; it grows back only at a restart. One block still rejected: the run fails with an RPC error, so the next run uses the fallback (S3 D-33). Base Sepolia, measured 2026-10-08: the public fallback accepts 500 blocks, so a run on it halves 2,000 to 500; the size is kept per network, not per endpoint, so the primary is also queried with 500 blocks until the restart (§4 issue 6) |
 | EC-307 | The RPC node lags: it does not have the end of the range yet | Step 7: failure, not "no logs". An empty answer taken as final would skip blocks for good |
 | EC-308 | The last processed block is missing or its hash changed | Steps 3 and 10: critical alert; nothing is rewritten automatically. Every failed run of the stream writes one critical log line with the stored and the found hash (found empty for a missing block) and adds 1 to `evm_reorg_below_final_total`; the stream retries with the backoff of SRS — Core (up to `SYNC_BACKOFF_MAX`) and turns `DEGRADED` after `failure_threshold` failures. It stays failed until an operator acts (§4 issue 3; `docs/backlog.md`) |
 | EC-309 | The same log is read twice: retry, restart, overlapping range | Skipped by the idempotency key (SRS — Core EC-105) |
@@ -518,7 +533,7 @@ FR-316 and FR-317 apply from S3.
 | `treasury_address` | `sources.config` | — | Wallet address of the treasury connection, EIP-55; written with `treasury_connection`; compared with `treasury()` by the start checks (S3 D-32) |
 | `backfill_floor` | `sources.config` | — | First block of the backfill: the deployment block of the oldest tracked contract. Unset or malformed: an error of the network, as `chain_id` (S3 D-36) |
 | `log_range_max` | `sources.config` | 2000 | Blocks per log query before splitting |
-| `rpc_rate_limit` | `sources.config` | 5 per second | Requests the connector may send to one endpoint; set below the provider's plan. Both networks in S3; revised with the measurements of S3 (S3 D-12) |
+| `rpc_rate_limit` | `sources.config` | 5 per second | Requests the connector may send to one endpoint; set below the provider's plan. Both networks in S3; kept after the measurements of 2026-10-08: no rate limit answer in the backfill of Base Sepolia (S3 D-12, §4 issue 6) |
 | `completeness_interval` | `sources.config` | 1 h | Minimum time between completeness checks of a connection |
 | `sync_interval.balances` | `sources.config` | 15 min | Balance stream |
 | `sync_interval.logs` | `sources.config` | 5 min | Log stream |
@@ -534,7 +549,7 @@ Values per network (S3 D-17). A dash: the default applies.
 | `controller_address` | `casctl source set`, from the deployment | `0xF75D58dc6E33487dB994D81D0d870D61Eac45F37` |
 | `backfill_floor` | `casctl source set`, from the deployment | 47768907: deployment block of `MockUSDC` |
 | `treasury_connection`, `treasury_address` | `casctl source set-treasury` | `casctl source set-treasury` |
-| `log_range_max`, `rpc_rate_limit`, `completeness_interval`, `sync_interval` | — | — until the measurements of S3 (§4, issue 6) |
+| `log_range_max`, `rpc_rate_limit`, `completeness_interval`, `sync_interval` | — | — confirmed by the measurements of 2026-10-08: no split and no rate limit answer in the backfill (§4 issue 6, S3 D-12) |
 
 - `casctl source set <source> <key>=<value>` accepts `controller_address`, `backfill_floor` and `token_address` only; `token_address` writes the alias row of the tracked token (§2.4, S3 D-27); tests write their own values.
 
@@ -546,7 +561,18 @@ Values per network (S3 D-17). A dash: the default applies.
   - one `logs` run of a wallet costs one final-block read, two header reads, four log queries per range and one header read per block with logs;
   - one snapshot costs one block read and one `eth_call` per tracked token;
   - one balance checkpoint costs one `eth_call` per tracked token, at most once per `completeness_interval`;
+  - one `logs` run of the treasury connection costs three log queries per range: transfers out, transfers in, and every controller event (§2.1.2);
   - on-chain operations appear in the ledger after the finality distance plus one sync interval. The card decision does not wait for them (ADR-11).
+- **Cost on Base Sepolia,** Alchemy Pay As You Go, measured by the owner on 2026-10-08 (S3-T801, S3-T806):
+
+| Item | Value |
+|---|---|
+| Backfill of the S2 history | Blocks 47768907 … 47841393 (72,486) for the wallet of `USER` and the treasury, in about 1 min 40 s; range 2,000 never split; all on the primary |
+| Requests of the backfill | 548 up to 09:44 UTC, the first idle runs included (10 `logs` runs): `eth_getLogs` 273, `eth_getBlockByNumber` 240, `eth_getBlockByHash` 23, `eth_call` 10, `eth_chainId` 2. At `rpc_rate_limit` 5 per second the backfill is paced by the limiter, not by the provider (calculation) |
+| Idle load | About 120 requests per hour for two connections: `logs` every 5 min, `balances` every 15 min |
+| Usage | 29,640 CU = $0.02: the backfill, about 1.5 h of idle sync and the owner's probes |
+| Month, estimate | Not a measurement. `server` with two connections all month: about 3.5M CU, about $1.8. With the idle load of `card-auth` (about 3M CU a month, S2-T808): about $3.4, above the $3 alert, within the $5 limit. The demo runs neither service all month ([Deployment Guide](../deployment-guide.md) §13) |
+
 - **Reliability:**
   - final blocks only, cursor and entries in one transaction: a restart or a retry changes nothing that is stored;
   - a failed endpoint never fails a read of the API: last data plus the stale flag (SRS — Core);
@@ -564,9 +590,9 @@ Values per network (S3 D-17). A dash: the default applies.
 
 | # | Issue | Proposal |
 |---|---|---|
-| 1 | Finality rule for Base Sepolia | Decided: `finalized` (§2.1.1). The real distance from the head on Base Sepolia is measured at S3 |
-| 2 | The completeness check reads `balanceOf` at the final block. With `finalized` that block is about 600 blocks old; a node may not keep its state | Verify with the provider at S3. If the state is not served: an archive endpoint, or the check runs on the local chain only |
+| 1 | Finality rule for Base Sepolia | Decided: `finalized` (§2.1.1). Closed 2026-10-08 (S3-T803): distance from the head 608–763 blocks, 20–25 min, over one hour; `finalized` moves in steps of about 150–260 blocks |
+| 2 | The completeness check reads `balanceOf` at the final block. With `finalized` that block is 608–763 blocks old (measured 2026-10-08); a node may not keep its state | Closed 2026-10-08 (S3-T802): Alchemy serves `balanceOf` at the final block pinned by its hash; checkpoints of the wallet of `USER` (66 USDC) and of the treasury (34 USDC) with gap 0; `evm_completeness_skipped_total` 0. No archive endpoint needed. The state of the public fallback was not measured: the fallback was never active |
 | 3 | Recovery after a reorg guard hit is not automated. With `finalized` it needs a failure of L1 finality | Not specified in v1. Later: a CLI command that removes the entries of the connection from the changed block on and resets the cursor; consumers pull the connection again. The same command covers a local chain restarted under a long-lived database (S3 D-17). `docs/backlog.md` |
 | 4 | Log queries are made per connection: the request count grows with the number of wallets | Enough for the reference scope. Next step: one query per network with a list of addresses in the topic filter |
 | 5 | Native coin: balance and gas spending are not covered, because native transfers emit no logs (ADR-11) | Later: native balance in the snapshot through `eth_getBalance`; no history |
-| 6 | Block range and answer size limits of the chosen provider | Measure at S3 and set `log_range_max`; the splitting of EC-306 covers the rest |
+| 6 | Block range and answer size limits of the chosen provider | Closed 2026-10-08 (S3-T804): Alchemy Pay As You Go accepts 2,000, 10,000 and 50,000 blocks; `https://sepolia.base.org` accepts 500 and rejects 1,000 and more (HTTP 413, `-32614`). `log_range_max` 2000 and `rpc_rate_limit` 5 per second kept (S3 D-12): no split and no rate limit answer in the backfill. A run on the fallback halves the range to 500 (EC-306); the size is kept per network, so the primary also reads 500 blocks until `server` restarts |

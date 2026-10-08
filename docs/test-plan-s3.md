@@ -166,9 +166,9 @@
 | S3-T801 | Backfill of the S2 history | Alchemy on pay as you go, limit $5, alert $3; `server` of S3 against `cas_dev`; T of `cas-platform` on `base-sepolia`; the wallet connection of `USER` (tenant `sepolia-demo`) | Run until both reach F | Entries of `USER` and the treasury from block 47768907: setup transfers, every debit and the refund of S2; the count of debits equals the count on the explorer (discovery I-10: 32 expected) | FR-307, FR-308 | — |
 | S3-T802 | Gap on the public chain | T801 | Wait for a checkpoint | Gap 0 for both; or EC-317 counted and the state limit recorded | FR-315; §4 issue 2 | — |
 | S3-T803 | Finality distance | T801 running | Read head and `finalized` at intervals over at least one hour | Distance in blocks and minutes, dated, recorded in §4 issue 1 and the Deployment Guide | §4 issue 1 | — |
-| S3-T804 | Provider limits | T801 | Read `evm_log_range_blocks` and the errors of the backfill; fallback range | Range and answer limits of Alchemy and of the fallback recorded; `log_range_max` and `rpc_rate_limit` of `base-sepolia` set | §4 issue 6, EC-306; S3 D-12 | — |
+| S3-T804 | Provider limits | T801 | Read `evm_log_range_blocks` and the errors of the backfill; fallback range | Range and answer limits of Alchemy and of the fallback recorded; `log_range_max` and `rpc_rate_limit` of `base-sepolia` set, or the defaults kept (S3 D-12) | §4 issue 6, EC-306; S3 D-12 | — |
 | S3-T805 | Reconciliation of the S2 history | T801 | Run reconciliation of `base-sepolia` | Runs of `sepolia-demo` and `cas-platform` without mismatch, or every mismatch explained in §7 | Card Spend UC-4 | — |
-| S3-T806 | Cost | After T801 – T805 | Read the Alchemy dashboard | CU of the backfill and of one hour of idle sync recorded with the price shown in the dashboard; within the $5 limit | Package decision 1 | — |
+| S3-T806 | Cost | After T801 – T805 | Read the Alchemy dashboard | CU of the backfill with the idle sync after it recorded with the price shown in the dashboard; the idle request rate from `evm_rpc_requests_total`; within the $5 limit | Package decision 1 | — |
 
 ### Phase 9 — CI and repository (st2, st9)
 
