@@ -8,7 +8,7 @@
 - **Link to architecture documentation:** [C4](../c4/), [ADR](../adr/README.md) 3, 7–13
 - **Link to Rollout plan:** §4
 - **Other related documents:** SRS — Card Spend (`../srs/card-spend.md`)
-- **Document Version:** 1.0, 2026-10-04, approved. §5 issue 3 updated on 2026-10-05 with the provider decision of S2
+- **Document Version:** 1.0, 2026-10-04, approved. §5 issue 3 updated on 2026-10-05 with the provider decision of S2; §5 issue 4 on 2026-10-08 with the finality distance measured in S3
 
 ---
 
@@ -273,7 +273,7 @@ Platform-wide risks are in BRD §10. Card-specific additions:
 | 1 | Processor-facing API: gRPC like the rest of CAS, or HTTP/JSON as real processors call it | Igor | Decided: HTTP/JSON for `card-auth` only, modelled on JIT Funding. gRPC stays for partners and ET |
 | 2 | Decision deadline and target budget | Igor | Decided: p95 ≤ 2 s, deadline 2.5 s, configurable per processor |
 | 3 | Access to preconfirmed data on Base Sepolia | Igor | Decided (ADR-13): WebSocket subscription through an RPC provider, with polling beside it. The public endpoints are HTTP only and rate-limited. Provider decided in S2 on 2026-10-05: Alchemy with Flashblocks, checked on the free plan (SRS §4, issue 1) |
-| 4 | Finality rule for the final status | Igor | Decided: block tag `finalized` on Base Sepolia, about 20 minutes after the debit; N confirmations on the local chain (SRS — EVM Connector §2.1.1) |
+| 4 | Finality rule for the final status | Igor | Decided: block tag `finalized` on Base Sepolia, 20–25 minutes after the debit (measured 2026-10-08); N confirmations on the local chain (SRS — EVM Connector §2.1.1) |
 | 5 | Who pays gas | Igor | Decided: the operator, v1 |
 | 6 | Clearing above the debited amount | Igor | Open; out of MVP |
 | 7 | Authorization expiry before automatic refund | Igor | Open; out of MVP |

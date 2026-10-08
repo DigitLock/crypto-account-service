@@ -4,7 +4,7 @@
 - **Objects under test:** the EVM connector of `server` (streams `balances` and `logs`, finality, reorg guard, start checks, balance checkpoint), the shared connector test suite, the treasury connection, the reconciliation worker and `GetReconciliationReport`, the `casctl` commands `source set`, `source set-treasury` and `reconcile`, the migrations of S3, the CI of S3.
 - **Parents:** [SRS — EVM Connector](srs/evm-connector.md) UC-302, UC-303, UC-304, §2.1.1, §2.6, §3; [SRS — Card Spend](srs/card-spend.md) UC-4, §4 issue 4; [SRS — Core](srs/core.md) §2.1.1 (`GetReconciliationReport`, Connector contract), UC-102, UC-105 rows 8–10, §2.4, §3.2; [BRD](brd.md) BR-4, BR-12, G-4; ADR 2, 3, 5, 6, 11.
 - **Decisions:** `S3 D-n`, register of the S3 discovery (2026-10-07). The bare `D-n` of SRS — Card Spend are decisions of S2.
-- **Status:** Draft. Created in the discovery stage of S3 on 2026-10-07; completed stage by stage; run in st9a on 2026-10-08: 89 of 91 rows `Pass`; S3-T904 open for the owner's document stage, S3-T905 at the close.
+- **Status:** Approved. Created in the discovery stage of S3 on 2026-10-07; completed stage by stage; run in st9a on 2026-10-08; signed off on 2026-10-08 (§6): 90 of 91 rows `Pass`, S3-T905 at the close.
 
 ## 1. Environment
 
@@ -178,7 +178,7 @@
 | S3-T901 | Secret scan of fixtures | Branch | Push; `make secrets` | Green; `testdata/` holds no key, no provider URL, no real account; `.env.example` holds the names of §3.1 without values | Handoff §4 | Pass |
 | S3-T902 | `go` workflow | Branch | Push | The new packages run in exactly one job; Anvil available in the jobs that need it; every job within 12 min | Handoff §3.4 | Pass |
 | S3-T903 | `proto` workflow with the new image | st2 commit | Push | Green against the new image | QA gate st2 | Pass |
-| S3-T904 | Documents match the code | st9 | Compare SRS — EVM Connector, SRS — Card Spend UC-4, SRS — Core, glossary, `docs/README.md` with the code | No mismatch | Package 9.2 | — |
+| S3-T904 | Documents match the code | st9 | Compare SRS — EVM Connector, SRS — Card Spend UC-4, SRS — Core, glossary, `docs/README.md` with the code | No mismatch | Package 9.2 | Pass |
 | S3-T905 | Tag guard by hand | Pull request merged | `git fetch`; HEAD = `origin/main`; `git merge-base --is-ancestor <last commit of the branch> HEAD`; `gh run watch --exit-status` for each run of the merge commit; then `git tag -a v0.4.0` | Every step passes before the tag; the tag is on the merge commit | Handoff §3.4; package decision 4 | — |
 
 ### Coverage of the requirements
@@ -231,6 +231,7 @@ Batches run in the QA stage st9 in phase order; one line per batch and attempt. 
 | 2026-10-08 | Phase 7 | 1 | 3 | 0 | — | Full run, `internal/donewhen` |
 | 2026-10-08 | Phase 8 | 1 | 6 | 0 | — | Owner, 2026-10-08: evidence of [Deployment Guide](deployment-guide.md) §13.6, not rerun |
 | 2026-10-08 | Phase 9 | 1 | 3 | 0 | — | T901 – T903: runs of the workflows on the pushes of the branch (`go` and `secrets` on `9db6c7f`, `proto` on `7fb2516`) and local checks. T904 and T905 not run: the owner's document stage, the close |
+| 2026-10-08 | Phase 9 | 2 | 1 | 0 | — | T904: the 14 mismatches found in st9a fixed in the documents in st9b (§7); T905 at the close |
 
 ## 6. Success criteria and sign-off
 
@@ -242,8 +243,12 @@ Batches run in the QA stage st9 in phase order; one line per batch and attempt. 
 
 | Role | Name | Date | Result |
 |---|---|---|---|
-| Owner, QA | Igor Kudinov | — | — |
+| Owner, QA | Igor Kudinov | 2026-10-08 | Pass: 90 of 91 rows, 0 open P0–P3. S3-T905, the tag guard, is done at the close after the merge and before the tag; the runs on the pull request and on `main` are read then (handoff §3.4) |
 
 ## 7. Notes of the QA stage
 
-Filled in st9.
+- **Rows and tests:** 78 rows are covered by 103 Go tests, mapped by the tag `// S3-Tnnn` of each test, not by its number: numbers repeat across the plans (`internal/hardtest` `TestT701_SimCommands` is S2-T701, `internal/engine` `TestT613_BackfilledOperation` is C1-T613).
+- **Rows without a Go test:** T102 by `make proto-check`; T419 by the note of EC-316 and backlog item 15; T801 – T806 by the owner's evidence of 2026-10-08 ([Deployment Guide](deployment-guide.md) §13.6), not rerun; T901 – T903 by the runs of the workflows of the branch.
+- **Full run:** 382 tests of C1, S2 and S3 in one run, so the earlier milestones are the regression.
+- **T904:** 14 mismatches found in st9a and fixed in st9b: SRS — EVM Connector (when the chain ID is checked, who reads `treasury()`, the empty page of an unmoved F, no default of `finality_mode`); the measured finality distance in SRS — Card Spend §4 issue 2 and PRD — Card Spend §5 issue 4; the sign of the completeness gap and the key of a checkpoint in the glossary; the map of `docs/README.md`; the job `hardtest` in test plan S2 §1. ADR-11 kept as written by the owner's decision: an ADR records the decision; the cursor and the finality distance of Base Sepolia live in SRS — EVM Connector.
+- **Defects found during S3 and fixed in their stage:** an oversized checkpoint balance refused the whole page (S3 D-39, st6); totals of a partner run against the proto comment (S3 D-40, st7a); a stale gauge on a former lock holder and one ERROR line per tick (st7b); the treasury connection read as a plain wallet before it is named (S3 D-42, st8c).
