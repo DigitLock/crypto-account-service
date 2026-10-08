@@ -4,6 +4,8 @@
 
 # Local rules for AI coding sessions
 CLAUDE.md
+# Stage reports of Claude Code sessions, read by the review chat
+/cc_reports/
 
 # Environment files
 .env

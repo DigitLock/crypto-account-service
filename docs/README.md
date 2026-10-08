@@ -20,7 +20,8 @@ Source of truth for CAS requirements and design. Markdown in the repository.
 | Test Plan — S1 | `test-plan-s1.md` | Test matrix of the contracts, run log, sign-off of S1 | Signed off 2026-10-04 |
 | Test Plan — C1 | `test-plan-c1.md` | Test matrix of Core, run log, sign-off of C1 | Approved |
 | Test Plan — S2 | `test-plan-s2.md` | Test matrix of `card-auth` and the card registry, run log, sign-off of S2 | Approved |
-| Deployment Guide | `deployment-guide.md` | How to deploy the contracts and run `card-auth` on Base Sepolia; test accounts, admin operations with `cast` | Pre-approved, used in S2 st9b |
+| Test Plan — S3 | `test-plan-s3.md` | Test matrix of the EVM connector, the treasury connection and reconciliation, run log, sign-off of S3 | Approved |
+| Deployment Guide | `deployment-guide.md` | How to deploy the contracts and run `card-auth` on Base Sepolia; test accounts, admin operations with `cast`; from S3, `server` with the EVM connector and reconciliation (§13) | Pre-approved, used in S2 st9b and S3 st8b |
 | Backlog | `backlog.md` | Postponed items | Living |
 
 Status: `Draft` → `Pre-approved` (reviewed by the owner) → `Approved` (merged to `main`). `Living`: updated after each milestone, no approval status.

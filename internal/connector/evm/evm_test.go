@@ -2,11 +2,16 @@ package evm
 
 import (
 	"context"
-	"os/exec"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/DigitLock/crypto-account-service/internal/connector"
+	"github.com/DigitLock/crypto-account-service/internal/vault"
 )
 
 // The test vectors of the EIP-55 text: all caps, all lower, mixed. The only real addresses of the repository.
@@ -24,7 +29,7 @@ var eip55Vectors = []string{
 // C1-T529 — Req: FR-301. The unit part: the checksum algorithm against the vectors; internal/grpc/api
 // sends them through CreateConnection.
 func TestT529_ValidChecksum(t *testing.T) {
-	c := New([]uint64{31337})
+	c := New([]uint64{31337}, nil, nil, nil)
 	for _, v := range eip55Vectors {
 		info, err := c.CheckAccount(context.Background(), connector.Source{}, connector.Credentials{WalletAddress: v}, nil)
 		if err != nil {
@@ -41,23 +46,43 @@ func TestT529_ValidChecksum(t *testing.T) {
 	}
 }
 
-// C1-T534 — Req: UC-301. The check runs without a network, and the package does not import one,
-// directly or through its dependencies.
+// C1-T534 — Req: UC-301; S3 D-35. From S3 the connector holds an RPC client: the address check of UC-301, and the
+// declaration of the streams, send no request. The endpoint of the source fails the test on any request, and the
+// limiter on any reservation.
 func TestT534_NoNetworkCall(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", ".").Output()
-	if err != nil {
-		t.Fatalf("go list: %v", err)
-	}
-	for dep := range strings.Lines(string(out)) {
-		dep = strings.TrimSpace(dep)
-		if dep == "net" || strings.HasPrefix(dep, "net/") || dep == "crypto/tls" ||
-			strings.HasPrefix(dep, "github.com/ethereum/") || strings.HasPrefix(dep, "google.golang.org/grpc") {
-			t.Errorf("internal/connector/evm depends on %s", dep)
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(w, "no request expected", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	c := New([]uint64{31337}, map[string]Endpoints{"anvil": {Primary: vault.NewSecret(srv.URL)}}, nil, nil)
+	src := source(`{` + required + `}`)
+
+	for _, v := range eip55Vectors {
+		if _, err := c.CheckAccount(context.Background(), src, connector.Credentials{WalletAddress: v}, failingLimiter{t}); err != nil {
+			t.Errorf("address check of %s: %v", v, err)
 		}
 	}
-
-	if _, err := New(nil).CheckAccount(context.Background(), connector.Source{},
-		connector.Credentials{WalletAddress: eip55Vectors[4]}, nil); err != nil {
-		t.Errorf("address check: %v", err)
+	for _, bad := range []string{"0x0000000000000000000000000000000000000000", "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD", " 0x12"} {
+		if _, err := c.CheckAccount(context.Background(), src, connector.Credentials{WalletAddress: bad}, failingLimiter{t}); err == nil {
+			t.Errorf("address check accepted %q", bad)
+		}
+	}
+	if streams, err := c.Streams(context.Background(), src, connector.AccountInfo{Identity: eip55Vectors[4]}); err != nil || len(streams) != 2 {
+		t.Errorf("streams: %v, %v", streams, err)
+	}
+	if n := requests.Load(); n != 0 {
+		t.Errorf("%d requests sent", n)
 	}
 }
+
+// failingLimiter fails the test on any use: a request would reserve its cost first.
+type failingLimiter struct{ t *testing.T }
+
+func (l failingLimiter) Reserve(context.Context, string, int) error {
+	l.t.Error("a reservation in the limiter")
+	return errors.New("no reservation expected")
+}
+
+func (l failingLimiter) Pause(string, time.Duration) { l.t.Error("a pause of the limiter") }

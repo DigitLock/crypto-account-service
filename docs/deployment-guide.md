@@ -1,8 +1,8 @@
 # Deployment Guide — Base Sepolia
 
-- **Version:** 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Completed in S2 st10a, 2026-10-06: the idle RPC load after the fix of st9b (S2-T808); the port defaults of `measure.sh`, the fallback check of `run-card-auth.sh` and the probe of the primary, to match the scripts and the code; the mode of `cas-sepolia-deployment.env` as the script creates it. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
+- **Version:** 1.1, 2026-10-08, S3 st8b and st8c: §13, the EVM connector and reconciliation of `server` on Base Sepolia, with the evidence of 2026-10-08; the measured finality distance in §5.3 and §7; the treasury guard of `server` (S3 D-42) in §13.2 and §13.3. Version 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Completed in S2 st10a, 2026-10-06: the idle RPC load after the fix of st9b (S2-T808); the port defaults of `measure.sh`, the fallback check of `run-card-auth.sh` and the probe of the primary, to match the scripts and the code; the mode of `cas-sepolia-deployment.env` as the script creates it. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
 - **Status:** Pre-approved: used by the owner for S2 st9b on 2026-10-06.
-- **Parents:** [SRS — Card Spend](srs/card-spend.md) §3.1, §3.2; [SRS — Core](srs/core.md) UC-105, `CreateConnection`, `RegisterCard`, §3.2; [test plan S2](test-plan-s2.md) phase 8.
+- **Parents:** [SRS — Card Spend](srs/card-spend.md) §3.1, §3.2, UC-4; [SRS — Core](srs/core.md) UC-105, `CreateConnection`, `RegisterCard`, `GetReconciliationReport`, §3.2; [SRS — EVM Connector](srs/evm-connector.md) §2.4, §3.1; [test plan S2](test-plan-s2.md) phase 8; [test plan S3](test-plan-s3.md) phase 8.
 
 ---
 
@@ -13,8 +13,8 @@
 | Network | Base Sepolia only, chain ID 84532. No mainnet: the scripts refuse any other chain ID, and the deployment script reverts on it (S2-T801) |
 | Machine | The development machine of the owner. No VPS (package decision 1) |
 | Contracts | `MockUSDC` and `CardSpendController`, deployed by `contracts/script/Deploy.s.sol` |
-| Services | `server` (card registry, gRPC 50053) and `card-auth` (processor API 8092, health 8093), run locally |
-| Rows | S2-T802 … S2-T809, run by the owner in st9b |
+| Services | `server` (card registry, gRPC 50053, health 8091; from S3 the EVM connector and the reconciliation worker) and `card-auth` (processor API 8092, health 8093), run locally |
+| Rows | S2-T802 … S2-T809, run by the owner in S2 st9b; S3-T801 … S3-T806, run by the owner on 2026-10-08 (§13) |
 
 ## 2. Accounts
 
@@ -122,7 +122,7 @@ CREATE ROLE cas_card_auth LOGIN PASSWORD '…';
 | 2 | `scripts/sepolia/setup.sh` | `USER` mints up to 100 USDC and approves 100 USDC; `ADMIN` sets the daily limit of `USER` to 50 USDC; `TREASURY` approves 100 USDC for refunds. A rerun sends only what differs; the limit is sent on every run, the contract has no view of it | `Result:` balance 100, allowance 100, remaining daily limit 50, refund allowance 100 |
 | 3 | `make run` in a second terminal, then `scripts/sepolia/register.sh` | `casctl tenant create`, `processor issue`, `token issue`; `CreateConnection` (`base-sepolia`, wallet `USER`) and `RegisterCard` (`card_A`, 200 USDC) over gRPC with `buf curl` and the frozen image `proto/frozen/cas_v1.json`. A rerun continues from the credentials file | Card `card_A` `CARD_STATUS_ACTIVE` on the wallet of `USER`; `cas-sepolia-credentials.env` has mode 600 |
 | 4 | `scripts/sepolia/run-card-auth.sh` in a third terminal | `card-auth` with the `.env` values of `card-auth`, then: `OPERATOR_PRIVATE_KEY` from the keys file (process environment only), chain ID 84532, controller and token of the deployment, decimals 6, finality `tag` / `finalized`, listener `pendingLogs`, fallback `CAS_SEPOLIA_FALLBACK_URL` | Start checks pass (S2-T803): `/readyz` 200 on 8093; `chain_listener_connected` 1 in `/metrics` |
-| 5 | `casctl sim`, S2-T805, commands below | Authorize 5 USD; return 2 USD; wait for `finalized`, about 20 minutes | `APPROVED` with a `tx_hash` on the explorer; return `CONFIRMED`; `DEBIT_CONFIRMED` |
+| 5 | `casctl sim`, S2-T805, commands below | Authorize 5 USD; return 2 USD; wait for `finalized`, 20–25 minutes (measured 2026-10-08, §13.6) | `APPROVED` with a `tx_hash` on the explorer; return `CONFIRMED`; `DEBIT_CONFIRMED` |
 | 6 | `scripts/sepolia/measure.sh` | 30 USD authorizations of 1.00 in sequence, card `card_A` (S2-T806, S2-T807) | `PASS`: p95 of `auth_decision_seconds` ≤ 2 s; signals by source both counted; record the summary in the test plan |
 | 7 | Alchemy dashboard | CU of the run (S2-T808) | About 400 CU per authorization |
 
@@ -165,7 +165,7 @@ go run ./cmd/casctl sim get --auth-id t805-1
 | # | Step | Check |
 |---|---|---|
 | 1 | Stop new traffic: no more `casctl sim` or processor calls | — |
-| 2 | Wait until every authorization of the old key is final: `DECLINED`, `DEBIT_CONFIRMED`, `LATE_DEBIT_REFUNDED`, `DEBIT_LOST`; and every return is `CONFIRMED` or `NOTHING_TO_RETURN`. On Base Sepolia the tag `finalized` takes about 20 minutes | `ListAuthorizations` by status; `/metrics`: `returns_not_confirmed` 0, `operator_tx_pending_seconds` 0 |
+| 2 | Wait until every authorization of the old key is final: `DECLINED`, `DEBIT_CONFIRMED`, `LATE_DEBIT_REFUNDED`, `DEBIT_LOST`; and every return is `CONFIRMED` or `NOTHING_TO_RETURN`. On Base Sepolia the tag `finalized` takes 20–25 minutes (measured 2026-10-08) | `ListAuthorizations` by status; `/metrics`: `returns_not_confirmed` 0, `operator_tx_pending_seconds` 0 |
 | 3 | Stop `card-auth` | — |
 | 4 | Generate the new key as in §2; fund it (§3) | `cast wallet address` |
 | 5 | `ADMIN`: `'grantRole(bytes32,address)' $(cast keccak OPERATOR_ROLE) <new operator>`, then `'revokeRole(bytes32,address)' $(cast keccak OPERATOR_ROLE) <old operator>`, as in §6 | `hasRole` true for the new, false for the old |
@@ -263,3 +263,127 @@ Funded from the CDP faucet, about 0.0017 ETH in total.
 | S2-T807 | Inclusion signals: subscription 11, polling 19. Receipt polling every 200 ms often sees the preconfirmed receipt first |
 | S2-T808 | Alchemy dashboard, 2026-10-06: about 11K requests in 24 h, success 99.7 %; a rate-limited peak of about 1 % at 17:22Z, from the tracker before the fix of st9b (63 calls per cycle, HTTP 429). Idle use 36 CU/s before the metrics were bounded to one chain read per 60 s. After `6ec1495`: 1.2 CU/s idle, 5-minute average, 10 minutes after the restart, 2026-10-06 19:05Z; throughput-limited 0 %; about 3M CU per month, about 10 % of the free plan of 30M CU. CU per authorization could not be separated from the dashboard: about 400 CU stays an estimate of the package |
 | S2-T809 | The guide was followed step by step. Deviations found and fixed here: the RPC default of the scripts (§5.2), the 429 row (§10), the order of the terminals: server, then `card-auth` (§5.3) |
+
+## 13. S3: EVM connector and reconciliation on Base Sepolia
+
+- `server` of S3 indexes the wallet of `USER` and the treasury from block 47768907, checks their balances against the ledger and reconciles the authorizations of `card-auth` with the events of the treasury (SRS — EVM Connector, SRS — Card Spend UC-4).
+- Read-only: `server` holds no key and sends no transaction. No step of this section needs the keys file except its directory, where the credentials file lies.
+
+### 13.1 Prerequisites
+
+| Item | Check |
+|---|---|
+| §5 done: the deployment of §12, tenant `sepolia-demo` with the wallet connection of `USER` and card `card_A`, `cas-sepolia-credentials.env` | `make casctl ARGS="tenant list"` shows `sepolia-demo` |
+| Alchemy app of the project on Pay As You Go, Base Sepolia only; usage limit $5 (9,523,810 CU at $0.525 per 1M CU), alert at $3. The free plan answers `eth_getLogs` with 10 blocks at most: the backfill of 2,000-block ranges needs Pay As You Go | Alchemy dashboard: plan, limit, alert |
+| Schema at version 9 | `make migrate-up`; `make migrate-version` answers 9 |
+| `sources.config` of `base-sepolia` from the migration: `controller_address` `0xF75D58dc6E33487dB994D81D0d870D61Eac45F37`, `backfill_floor` 47768907, `finality_mode` `tag`, `finality_tag` `finalized`, the alias of `MockUSDC`; nothing to set with `casctl source set` | Written by migration 000007 (S3-T103) |
+| `buf` 1.73.0 and the frozen image `proto/frozen/cas_v1.json` | `buf --version` |
+
+### 13.2 Variables
+
+| Variable | Value | Where |
+|---|---|---|
+| `EVM_RPC_URL_BASE_SEPOLIA` | The Alchemy URL of `CARD_AUTH_RPC_URL` | `.env` |
+| `EVM_RPC_FALLBACK_URL_BASE_SEPOLIA` | `https://sepolia.base.org` | `.env` |
+| `CAS_PLATFORM_TOKEN` | Service token of `cas-platform` | `cas-sepolia-credentials.env`, mode 600 |
+
+- The endpoint variables are added at step 5 of §13.3, after `set-treasury`. If they are already set, the order still holds: until step 4 the `logs` runs of the treasury connection are refused (S3 D-42): one WARN line with the hint, `evm_start_check_failed{check="treasury"}` 1; its next run after step 4 reads it as the treasury.
+
+### 13.3 Steps
+
+| # | Command | Does | Check after |
+|---|---|---|---|
+| 1 | `make run` in the second terminal, without the two endpoint variables | `server` serves the API; no stream of `base-sepolia` is declared: one WARN line names `EVM_RPC_URL_BASE_SEPOLIA` | `/readyz` 200 on 8091 |
+| 2 | Tenant and token, commands below | `casctl tenant create cas-platform`; `casctl token issue cas-platform`: the token goes to the credentials file, not to the terminal | `make casctl ARGS="token list cas-platform"` shows one key ID |
+| 3 | `CreateConnection` with `buf curl`, commands below | Treasury connection of `cas-platform`: wallet `TREASURY`, `owner_ref` `treasury`, label `Treasury` | Answer with `connectionId`, `CONNECTION_STATUS_ACTIVE`, the address in EIP-55 form |
+| 4 | `make casctl ARGS="source set-treasury base-sepolia <connection_id>"` | `treasury_connection` and `treasury_address` of `base-sepolia` | Two lines: previous `unset`, the new connection ID and `0x130D1155E06C6Cd4b3ceE9128cf1356903aBbC7b` |
+| 5 | Stop `server` (Ctrl-C); add the two variables of §13.2 to `.env`; `make run` | At start the engine creates the `balances` and `logs` cursors of both connections (SRS — Core FR-122); both backfill from block 47768907 | No WARN line about the endpoint of `base-sepolia`; the line "reconciliation waits" only until the treasury has stored logs; no `evm_start_check_failed` 1 in `/metrics` |
+| 6 | `card-auth` (§5.3 step 4), only when authorizations are sent | Not needed for the index and reconciliation | — |
+| 7 | Checks, commands below | `/metrics`, `ListLedgerEntries`, `GetReconciliationReport` | Values of §13.6 |
+
+- Note on the order: before `set-treasury` the `logs` stream of the treasury connection is refused, not read as a plain wallet (S3 D-42). The first `logs` run after step 4 can wait for the backoff of the refused runs, up to `SYNC_BACKOFF_MAX`; `TriggerSync` of the connection makes it due. The order above declares no stream until both are set, so nothing is refused.
+- Step 2: the token is printed once; it goes straight into the credentials file:
+
+```sh
+creds="$(dirname "$CAS_SEPOLIA_KEYS")/cas-sepolia-credentials.env"
+make -s casctl ARGS="tenant create cas-platform"
+token=$(make -s casctl ARGS="token issue cas-platform" 2>/dev/null)
+printf 'CAS_PLATFORM_TOKEN=%s\n' "$token" >> "$creds"; unset token
+```
+
+- Steps 3 and 7: `buf curl` takes the token on its standard input, as `register.sh` does, so it is not in the process list:
+
+```sh
+set -a; . "$creds"; set +a
+grpc() {
+  printf 'Authorization: Bearer %s\n\n%s\n' "$1" "$3" |
+    buf curl --protocol grpc --http2-prior-knowledge --schema proto/frozen/cas_v1.json -H @- -d @- \
+      "http://127.0.0.1:50053/cas.v1.$2"
+}
+grpc "$CAS_PLATFORM_TOKEN" ConnectionService/CreateConnection \
+  '{"owner_ref":"treasury","source":"base-sepolia","label":"Treasury","wallet":{"address":"0x130D1155E06C6Cd4b3ceE9128cf1356903aBbC7b"}}'
+```
+
+- Step 7:
+
+```sh
+curl -s http://127.0.0.1:8091/metrics | grep -E '^(evm_|ledger_gap|reconciliation_mismatches)'
+grpc "$CAS_SERVICE_TOKEN" AccountDataService/ListLedgerEntries '{"connection_id":"<USER connection>","page_size":100}'
+grpc "$CAS_PLATFORM_TOKEN" AccountDataService/ListLedgerEntries '{"connection_id":"<treasury connection>","page_size":100}'
+grpc "$CAS_SERVICE_TOKEN" CardService/GetReconciliationReport '{"source":"base-sepolia"}'
+grpc "$CAS_PLATFORM_TOKEN" CardService/GetReconciliationReport '{"source":"base-sepolia"}'
+```
+
+| Metric | Expected |
+|---|---|
+| `evm_final_block{source="base-sepolia"}` | Grows in steps of about 150–260 blocks |
+| `evm_indexer_lag_blocks` | Within one `sync_interval.logs` after the backfill |
+| `evm_rpc_requests_total{endpoint="primary"}` | Grows; `endpoint="fallback"` absent or 0 |
+| `evm_rpc_fallback_active` | 0 |
+| `evm_log_range_blocks` | 2000; 500 after a run on the fallback, until a restart (SRS — EVM Connector EC-306) |
+| `evm_reorg_below_final_total`, `evm_completeness_skipped_total`, `evm_skipped_logs_total`, `evm_unmatched_controller_events_total` | 0 |
+| `evm_start_check_failed` | 0; 1 for the check `treasury` while a connection of the treasury address is not named (S3 D-42) |
+| `ledger_gap{source="base-sepolia"}` | 0 for both connections, once a checkpoint is taken |
+| `reconciliation_mismatches{source="base-sepolia"}` | 0 for every type |
+
+### 13.4 Never printed
+
+- `EVM_RPC_URL_BASE_SEPOLIA`: it holds the API key of Alchemy. `server` logs only `set` or `unset` and names the variable in an error.
+- `CAS_PLATFORM_TOKEN`, `CAS_SERVICE_TOKEN`, the processor password: only in the credentials file, mode 600. `make casctl ARGS="token list"` shows key IDs only.
+- `DATABASE_URL` and `CASCTL_DATABASE_URL`: `.env` only.
+- Safe to paste: addresses, connection IDs, block numbers, transaction hashes, metric lines, the answers of `ListLedgerEntries` and `GetReconciliationReport`.
+
+### 13.5 Stop and cost
+
+- Stop: Ctrl-C in the terminal of `server`: the streams and the reconciliation worker end, then the process (`SHUTDOWN_TIMEOUT`). `card-auth` the same way in its terminal.
+- Restart: the cursors are kept; the next start continues from them, without a new backfill.
+- Cost, Alchemy Pay As You Go at $0.525 per 1M CU:
+
+| Item | CU | USD |
+|---|---|---|
+| Backfill, about 1.5 h of idle sync and the owner's probes, 2026-10-08 | 29,640 | 0.02 |
+| `server` with two connections all month, estimate | About 3.5M | About 1.8 |
+| `server` and the idle `card-auth` all month, estimate | About 6.5M | About 3.4: above the $3 alert, within the $5 limit |
+
+- Advice: do not run `server` and `card-auth` all month for the demo. Start them for a session and stop them after it; the cursors keep the place.
+
+### 13.6 Evidence of 2026-10-08
+
+Run by the owner with `server` of branch `feature/v0.4.0` against `cas_dev` (times UTC).
+
+| Item | Value |
+|---|---|
+| Alchemy | App "Crypto Account Service", Base Sepolia only; Pay As You Go since 2026-10-08, $0.525 per 1M CU, 10,000 CU/s; usage limit $5, alert $3. Use on the free plan in October before the switch: 431,812 CU |
+| Schema | `cas_dev` migrated from version 6 to 9 |
+| Treasury connection | `82f1f30c-879d-4ba7-b624-d525be6207c5`, tenant `cas-platform`, wallet `TREASURY` `0x130D1155E06C6Cd4b3ceE9128cf1356903aBbC7b`; `set-treasury`: both values previously unset |
+| Order | The connection was created while `server` ran without `EVM_RPC_URL_BASE_SEPOLIA`: no stream declared. The next start with the URL created the cursors of both connections, which backfilled together |
+
+| Row | Result |
+|---|---|
+| S3-T801 | Backfill from `backfill_floor` 47768907 to the final block 47841393, 72,486 blocks, in about 1 min 40 s; range 2000 never split; 548 requests up to 09:44 UTC, the first idle runs included (10 `logs` runs): `eth_getLogs` 273, `eth_getBlockByNumber` 240, `eth_getBlockByHash` 23, `eth_call` 10, `eth_chainId` 2; all on the primary, fallback never active. Wallet `USER` (tenant `sepolia-demo`, connection `7a60dfce-383e-42aa-b404-76f9637317d4`): 32 `CARD_DEBIT OUT` 36 USDC, 1 `CARD_REFUND IN` 2 USDC, 1 `DEPOSIT IN` 100 USDC (the mint of `setup.sh`). Treasury: 32 `CARD_DEBIT IN` 36 USDC, 1 `CARD_REFUND OUT` 2 USDC. 32 debits on chain: closes discovery I-10 |
+| S3-T802 | Balance checkpoints with gap 0: `USER` 66 USDC, treasury 34 USDC. `balanceOf` at the final block pinned by its hash, served by Alchemy; `evm_completeness_skipped_total` 0 |
+| S3-T803 | Head and `finalized` read every 5 min, 13 samples, 09:46–10:46: distance 608–763 blocks, 20–25 min; `finalized` advances in steps of about 150–260 blocks |
+| S3-T804 | `eth_getLogs` over the controller from 47768907: Alchemy Pay As You Go accepts 2,000, 10,000 and 50,000 blocks; `https://sepolia.base.org` accepts 500 and rejects 1,000 and more with HTTP 413, JSON-RPC `-32614` "eth_getLogs is limited to a 500 range". `log_range_max` 2000 and `rpc_rate_limit` 5 per second kept: no HTTP 429, no split in the backfill |
+| S3-T805 | Runs without mismatch. `sepolia-demo`: authorizations checked 32, debits 32 / 36,000,000, returns checked 1, refunds 1 / 2,000,000 base units. `cas-platform`: debits 32 / 36,000,000, refunds 1 / 2,000,000. `reconciliation_mismatches` 0 for every type |
+| S3-T806 | 29,640 CU = $0.02 after the backfill and about 1.5 h of idle sync, the owner's probes included. Idle: about 120 requests per hour for two connections. Month estimates in §13.5 |
+| Worker | While the treasury backfilled, the worker stored a run after every committed page: 74 runs in 1.5 min, no false mismatch ([backlog](backlog.md) item 13). In idle, no run while `finalized` does not move: none at 10:06 and 10:27 |

@@ -1,5 +1,6 @@
-// Package chain gives card-auth access to the network: an RPC client of the primary endpoint and, when set,
-// of the fallback endpoint, and the start checks of SRS — Card Spend §3.2 "Chain access".
+// Package chain gives access to the network: an RPC client of the primary endpoint and, when set, of the fallback
+// endpoint; the start checks of card-auth (SRS — Card Spend §3.2 "Chain access"); and the read of the final block
+// shared by card-auth and the EVM connector of server (S3 D-4). It holds no key and signs nothing.
 // No error of this package contains an RPC URL: the URLs may carry an API key.
 package chain
 
@@ -38,17 +39,19 @@ type Client struct {
 }
 
 // Dial creates the clients without sending a request. An empty fallback URL means no fallback.
-// primaryName and fallbackName are the names of the variables, used in errors.
-func Dial(ctx context.Context, primaryName string, primary vault.Secret[string], fallbackName string, fallback vault.Secret[string]) (*Client, error) {
+// primaryName and fallbackName are the names of the variables, used in errors. opts apply to both clients, such
+// as the HTTP client of the EVM connector of server.
+func Dial(ctx context.Context, primaryName string, primary vault.Secret[string], fallbackName string, fallback vault.Secret[string],
+	opts ...rpc.ClientOption) (*Client, error) {
 	c := &Client{urls: []string{primary.Value(), fallback.Value()}}
-	p, err := ethclient.DialContext(ctx, primary.Value())
+	p, err := dial(ctx, primary.Value(), opts)
 	if err != nil {
 		// The error of the RPC package is not wrapped: it may quote the URL.
 		return nil, fmt.Errorf("chain: %s: cannot create the RPC client", primaryName)
 	}
 	c.Primary = Endpoint{Name: primaryName, Client: p}
 	if fallback.Value() != "" {
-		f, err := ethclient.DialContext(ctx, fallback.Value())
+		f, err := dial(ctx, fallback.Value(), opts)
 		if err != nil {
 			p.Close()
 			return nil, fmt.Errorf("chain: %s: cannot create the RPC client", fallbackName)
@@ -56,6 +59,14 @@ func Dial(ctx context.Context, primaryName string, primary vault.Secret[string],
 		c.Fallback = &Endpoint{Name: fallbackName, Client: f}
 	}
 	return c, nil
+}
+
+func dial(ctx context.Context, url string, opts []rpc.ClientOption) (*ethclient.Client, error) {
+	c, err := rpc.DialOptions(ctx, url, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return ethclient.NewClient(c), nil
 }
 
 // Close closes every client.
@@ -152,6 +163,12 @@ func (c *Client) StartChecks(ctx context.Context, want Expected) (string, error)
 		return "", &StartCheckError{Check: "symbol() of the token", Detail: c.describe(err)}
 	}
 	return symbol, nil
+}
+
+// DescribeErr turns an error of a call bounded by timeout into an error without a URL that keeps its cause for
+// errors.Is and errors.As (DescribedError).
+func (c *Client) DescribeErr(err error, timeout time.Duration) error {
+	return &DescribedError{text: c.describeWithin(err, timeout), cause: err}
 }
 
 // describe turns an error of an RPC call into text without a URL. Only the JSON-RPC error of the node and the

@@ -15,7 +15,7 @@ FROZEN_OPENAPI := api/openapi/frozen/card-auth.yaml
 
 .PHONY: build run casctl fmt vet test check secrets tools proto proto-check proto-freeze crs-proto crs-proto-check buf-version plugins \
 	migrate-tool migrate-url migrate-up migrate-down migrate-version sqlc-tool sqlc-generate sqlc-check \
-	bindings bindings-check openapi-check openapi-freeze
+	bindings bindings-check openapi-check openapi-freeze fixtures-record
 
 build:
 	go build -o bin/ ./cmd/...
@@ -37,6 +37,14 @@ test:
 	go test -race -count=1 -p 1 ./...
 
 check: fmt vet build test
+
+# Records the committed RPC fixtures of testdata/fixtures/evm/ from a local Anvil: the head (internal/rpcfixture)
+# and the scenarios of the shared connector suite (internal/connector/evm). Only this target writes them; a normal
+# test run records into a temporary directory. The error_*.json files are written by hand. Anvil and forge must
+# be on PATH.
+fixtures-record:
+	go test -count=1 -run '^TestT107_RecordFromAnvil$$' ./internal/rpcfixture -record
+	go test -count=1 -run '^TestT420_RecordScenarios$$' ./internal/connector/evm -record
 
 secrets:
 	gitleaks git --redact --no-banner .

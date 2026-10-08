@@ -400,8 +400,9 @@ func TestT307_Seed(t *testing.T) {
 		if err := json.Unmarshal(s.Config, &config); err != nil {
 			t.Fatalf("%s config: %v", s.Code, err)
 		}
-		if s.Kind != "EVM" || !s.Enabled || len(config) != 1 {
-			t.Errorf("%s: kind %s, enabled %v, config %v; want EVM, enabled, chain_id only", s.Code, s.Kind, s.Enabled, config)
+		// The other values of config come with S3: S3-T103.
+		if s.Kind != "EVM" || !s.Enabled {
+			t.Errorf("%s: kind %s, enabled %v; want EVM, enabled", s.Code, s.Kind, s.Enabled)
 		}
 		chainID, _ := config["chain_id"].(float64)
 		got[s.Code] = chainID

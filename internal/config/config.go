@@ -9,10 +9,12 @@ import (
 	"log/slog"
 	"math"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/DigitLock/crypto-account-service/internal/connector/evm"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
 )
 
@@ -20,7 +22,7 @@ import (
 const MasterKeySize = 32
 
 // Config is the parsed environment of server.
-// CAS_MASTER_KEY and DATABASE_URL are held as vault.Secret values: no method prints them,
+// CAS_MASTER_KEY, DATABASE_URL and the RPC URLs are held as vault.Secret values: no method prints them,
 // and LogValue omits them.
 type Config struct {
 	MasterKey        vault.Secret[[]byte]
@@ -51,7 +53,20 @@ type Config struct {
 	EnableFakeSource bool
 
 	EVMAllowedChainIDs []uint64
+
+	// EVMRPC holds the endpoints of EVM_RPC_URL_<SOURCE> and EVM_RPC_FALLBACK_URL_<SOURCE> by source code
+	// (SRS — EVM Connector §3.1). A source without a variable has no entry.
+	EVMRPC map[string]EVMEndpoints
 }
+
+// EVMEndpoints are the RPC endpoints of one EVM source, as the EVM connector takes them.
+type EVMEndpoints = evm.Endpoints
+
+// Prefixes of the endpoint variables of an EVM source; the suffix is the source code in upper case with _ for -.
+const (
+	EVMRPCURLPrefix         = evm.RPCURLPrefix
+	EVMRPCFallbackURLPrefix = evm.RPCFallbackURLPrefix
+)
 
 // Log formats of LOG_FORMAT.
 const (
@@ -59,9 +74,10 @@ const (
 	LogFormatText = "text"
 )
 
-// Load reads and validates the environment through getenv. An empty value counts as unset.
+// Load reads and validates the environment through getenv. An empty value counts as unset. names are the
+// names of the variables of the environment: the endpoint variables of the EVM sources are found among them.
 // The returned error names every invalid variable and never contains a value.
-func Load(getenv func(string) string) (Config, error) {
+func Load(getenv func(string) string, names ...string) (Config, error) {
 	p := parser{getenv: getenv}
 	cfg := Config{
 		MasterKey:        p.masterKey("CAS_MASTER_KEY"),
@@ -92,6 +108,8 @@ func Load(getenv func(string) string) (Config, error) {
 		EnableFakeSource: p.boolean("ENABLE_FAKE_SOURCE", false),
 
 		EVMAllowedChainIDs: p.chainIDs("EVM_ALLOWED_CHAIN_IDS", []uint64{31337, 84532}),
+
+		EVMRPC: p.evmEndpoints(names),
 	}
 
 	if cfg.DBPoolMinConns > cfg.DBPoolMaxConns {
@@ -107,9 +125,10 @@ func Load(getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
-// LogValue implements slog.LogValuer. CAS_MASTER_KEY and DATABASE_URL are omitted.
+// LogValue implements slog.LogValuer. CAS_MASTER_KEY and DATABASE_URL are omitted; an RPC URL is shown as set
+// or unset only.
 func (c Config) LogValue() slog.Value {
-	return slog.GroupValue(
+	attrs := []slog.Attr{
 		slog.Int("CAS_MASTER_KEY_VERSION", c.MasterKeyVersion),
 		slog.Int("DB_POOL_MAX_CONNS", int(c.DBPoolMaxConns)),
 		slog.Int("DB_POOL_MIN_CONNS", int(c.DBPoolMinConns)),
@@ -129,7 +148,83 @@ func (c Config) LogValue() slog.Value {
 		duration("KEY_CHECK_INTERVAL", c.KeyCheckInterval),
 		slog.Bool("ENABLE_FAKE_SOURCE", c.EnableFakeSource),
 		slog.String("EVM_ALLOWED_CHAIN_IDS", joinUint(c.EVMAllowedChainIDs)),
-	)
+	}
+	for _, code := range sortedKeys(c.EVMRPC) {
+		e := c.EVMRPC[code]
+		attrs = append(attrs,
+			setOrUnset(EVMRPCURLPrefix+EVMSourceSuffix(code), e.Primary),
+			setOrUnset(EVMRPCFallbackURLPrefix+EVMSourceSuffix(code), e.Fallback))
+	}
+	return slog.GroupValue(attrs...)
+}
+
+func setOrUnset(key string, v vault.Secret[string]) slog.Attr {
+	if v.Value() == "" {
+		return slog.String(key, "unset")
+	}
+	return slog.String(key, "set")
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// EVMSourceSuffix returns the suffix of the endpoint variables of a source: base-sepolia → BASE_SEPOLIA.
+func EVMSourceSuffix(code string) string { return evm.SourceSuffix(code) }
+
+// evmSourceCode returns the source code of a suffix, BASE_SEPOLIA → base-sepolia, or false when the suffix is
+// not upper-case letters, digits and _.
+func evmSourceCode(suffix string) (string, bool) {
+	if suffix == "" {
+		return "", false
+	}
+	for _, r := range suffix {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' {
+			return "", false
+		}
+	}
+	return strings.ReplaceAll(strings.ToLower(suffix), "_", "-"), true
+}
+
+// evmEndpoints reads every EVM_RPC_URL_<SOURCE> and EVM_RPC_FALLBACK_URL_<SOURCE> among names: an http or https
+// URL with a host. A name with another suffix fails, so a misspelt variable does not leave a source without its
+// endpoint unnoticed. An empty value counts as unset.
+func (p *parser) evmEndpoints(names []string) map[string]EVMEndpoints {
+	out := map[string]EVMEndpoints{}
+	for _, name := range slices.Sorted(slices.Values(names)) {
+		var suffix string
+		var fallback bool
+		switch {
+		case strings.HasPrefix(name, EVMRPCFallbackURLPrefix):
+			suffix, fallback = strings.TrimPrefix(name, EVMRPCFallbackURLPrefix), true
+		case strings.HasPrefix(name, EVMRPCURLPrefix):
+			suffix = strings.TrimPrefix(name, EVMRPCURLPrefix)
+		default:
+			continue
+		}
+		code, ok := evmSourceCode(suffix)
+		if !ok {
+			p.fail(name, "must end with a source code in upper case with _ for -, such as BASE_SEPOLIA")
+			continue
+		}
+		u := p.url(name, false, "http", "https")
+		if u.Value() == "" {
+			continue
+		}
+		e := out[code]
+		if fallback {
+			e.Fallback = u
+		} else {
+			e.Primary = u
+		}
+		out[code] = e
+	}
+	return out
 }
 
 // duration logs d in Go syntax, such as 15s or 24h0m0s, not in nanoseconds.

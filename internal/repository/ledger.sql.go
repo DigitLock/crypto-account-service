@@ -202,3 +202,62 @@ func (q *Queries) UpdateStreamCursor(ctx context.Context, arg UpdateStreamCursor
 	}
 	return result.RowsAffected(), nil
 }
+
+const upsertBalanceCheckpoint = `-- name: UpsertBalanceCheckpoint :one
+WITH total AS (
+    SELECT COALESCE(SUM(CASE WHEN direction = 'IN' THEN amount ELSE -amount END), 0) AS ledger_total
+    FROM ledger_entries
+    WHERE connection_id = $1 AND native_asset = $2::text
+), balance AS (
+    SELECT ($8::text)::numeric + ($9::text)::numeric AS balance
+)
+INSERT INTO balance_checkpoints (
+    connection_id, native_asset, asset, block_number, block_hash, taken_at, balance, ledger_total, gap, checked_at
+)
+SELECT $1, $2::text, $3, $4::bigint,
+       $5::text, $6, balance.balance, total.ledger_total,
+       balance.balance - total.ledger_total, $7
+FROM total, balance
+ON CONFLICT (connection_id, native_asset) DO UPDATE SET
+    asset = EXCLUDED.asset, block_number = EXCLUDED.block_number, block_hash = EXCLUDED.block_hash,
+    taken_at = EXCLUDED.taken_at, balance = EXCLUDED.balance, ledger_total = EXCLUDED.ledger_total,
+    gap = EXCLUDED.gap, checked_at = EXCLUDED.checked_at
+RETURNING trim_scale(ledger_total)::text AS ledger_total, trim_scale(gap)::text AS gap
+`
+
+type UpsertBalanceCheckpointParams struct {
+	ConnectionID uuid.UUID
+	NativeAsset  string
+	Asset        string
+	BlockNumber  *int64
+	BlockHash    *string
+	TakenAt      time.Time
+	CheckedAt    time.Time
+	Free         string
+	Locked       string
+}
+
+type UpsertBalanceCheckpointRow struct {
+	LedgerTotal string
+	Gap         string
+}
+
+// The balance checkpoint of a connection and native asset, in the transaction of its page (SRS - Core Connector
+// contract; S3 D-5): ledger_total = sum of IN minus sum of OUT of the entries of the connection with that native
+// asset, those of the page included; gap = balance - ledger_total. It replaces the previous row.
+func (q *Queries) UpsertBalanceCheckpoint(ctx context.Context, arg UpsertBalanceCheckpointParams) (UpsertBalanceCheckpointRow, error) {
+	row := q.db.QueryRow(ctx, upsertBalanceCheckpoint,
+		arg.ConnectionID,
+		arg.NativeAsset,
+		arg.Asset,
+		arg.BlockNumber,
+		arg.BlockHash,
+		arg.TakenAt,
+		arg.CheckedAt,
+		arg.Free,
+		arg.Locked,
+	)
+	var i UpsertBalanceCheckpointRow
+	err := row.Scan(&i.LedgerTotal, &i.Gap)
+	return i, err
+}

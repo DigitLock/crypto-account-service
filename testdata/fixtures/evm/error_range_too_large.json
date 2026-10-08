@@ -1,0 +1,38 @@
+{
+  "description": "Written by hand, not recorded. A wallet run of fictitious addresses with log_range_max 20: the provider rejects blocks 0 to 19 with the Alchemy text of a response size, the halved range 0 to 9 is read without logs (EC-306).",
+  "context": {
+    "account": "0x00000000000000000000000000000000000000aa",
+    "backfill_floor": "0",
+    "connection_id": "0b0b0b0b-0000-4000-8000-0000000000a1",
+    "controller": "0x00000000000000000000000000000000000C0001",
+    "log_range_max": "20",
+    "asset": "0x00000000000000000000000000000000000C0002",
+    "treasury": "0x00000000000000000000000000000000000C0003",
+    "treasury_connection": "0b0b0b0b-0000-4000-8000-000000000001"
+  },
+  "calls": [
+    {"method": "eth_chainId", "params": [], "result": "0x7a69"},
+    {"method": "eth_call", "params": [{"data": "0xfc0c546a", "to": "0x00000000000000000000000000000000000c0001"}, "latest"],
+      "result": "0x00000000000000000000000000000000000000000000000000000000000c0002"},
+    {"method": "eth_call", "params": [{"data": "0x61d027b3", "to": "0x00000000000000000000000000000000000c0001"}, "latest"],
+      "result": "0x00000000000000000000000000000000000000000000000000000000000c0003"},
+    {"method": "eth_blockNumber", "params": [], "result": "0x1e"},
+    {"method": "eth_getLogs", "params": [{"address": ["0x00000000000000000000000000000000000c0002"], "fromBlock": "0x0", "toBlock": "0x13",
+      "topics": ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", "0x00000000000000000000000000000000000000000000000000000000000000aa"]}],
+      "error": {"code": -32602, "message": "Log response size exceeded. You can make eth_getLogs requests with up to a 2K block range and no limit on the response size, or you can request any block range with a cap of 10K logs in the response."}},
+    {"method": "eth_getLogs", "params": [{"address": ["0x00000000000000000000000000000000000c0002"], "fromBlock": "0x0", "toBlock": "0x9",
+      "topics": ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", "0x00000000000000000000000000000000000000000000000000000000000000aa"]}],
+      "result": []},
+    {"method": "eth_getLogs", "params": [{"address": ["0x00000000000000000000000000000000000c0002"], "fromBlock": "0x0", "toBlock": "0x9",
+      "topics": ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", null, "0x00000000000000000000000000000000000000000000000000000000000000aa"]}],
+      "result": []},
+    {"method": "eth_getLogs", "params": [{"address": ["0x00000000000000000000000000000000000c0001"], "fromBlock": "0x0", "toBlock": "0x9",
+      "topics": ["0xcc263056a0c3ff63165efb08fb26b874e1bf3201d043a612abfb1b21e6ba0d8d", null, "0x00000000000000000000000000000000000000000000000000000000000000aa"]}],
+      "result": []},
+    {"method": "eth_getLogs", "params": [{"address": ["0x00000000000000000000000000000000000c0001"], "fromBlock": "0x0", "toBlock": "0x9",
+      "topics": ["0x6c5895acb60b66e78106939eaaa3976db6325f801ff434fe24ff7cb0a6795a5f", null, null, "0x00000000000000000000000000000000000000000000000000000000000000aa"]}],
+      "result": []},
+    {"method": "eth_getBlockByNumber", "params": ["0x9", false],
+      "result": {"number": "0x9", "hash": "0x0100000000000000000000000000000000000000000000000000000000000009", "timestamp": "0x68e8c009"}}
+  ]
+}

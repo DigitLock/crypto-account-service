@@ -75,6 +75,19 @@ type AuthorizationEvent struct {
 	CreatedAt       time.Time
 }
 
+type BalanceCheckpoint struct {
+	ConnectionID uuid.UUID
+	NativeAsset  string
+	Asset        string
+	BlockNumber  *int64
+	BlockHash    *string
+	TakenAt      time.Time
+	Balance      pgtype.Numeric
+	LedgerTotal  pgtype.Numeric
+	Gap          pgtype.Numeric
+	CheckedAt    time.Time
+}
+
 type BalanceSnapshot struct {
 	ID           uuid.UUID
 	ConnectionID uuid.UUID
@@ -149,6 +162,18 @@ type OperatorTx struct {
 	BlockNumber     *int64
 	BlockHash       []byte
 	CreatedAt       time.Time
+}
+
+type ReconciliationRun struct {
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	SourceID   int16
+	PeriodFrom time.Time
+	PeriodTo   time.Time
+	ToBlock    int64
+	Totals     []byte
+	Mismatches []byte
+	CreatedAt  time.Time
 }
 
 type Return struct {

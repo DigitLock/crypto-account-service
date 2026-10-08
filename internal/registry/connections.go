@@ -109,13 +109,18 @@ func NewConnections(db DB, v vault.Vault, connectors *connector.Set, limiters *l
 
 // Sources returns the available sources, ordered by code.
 func (c *Connections) Sources(ctx context.Context) ([]connector.Source, error) {
-	rows, err := repository.New(c.db).ListSources(ctx)
+	q := repository.New(c.db)
+	rows, err := q.ListSources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	aliases, err := q.AliasesBySource(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var available []connector.Source
 	for _, row := range rows {
-		if src := toSource(row); c.connectors.Available(src) {
+		if src := toSource(row, aliases[row.Code]); c.connectors.Available(src) {
 			available = append(available, src)
 		}
 	}
@@ -134,7 +139,11 @@ func (c *Connections) Create(ctx context.Context, in CreateInput) (Connection, e
 	if err != nil {
 		return Connection{}, fmt.Errorf("read the source: %w", err)
 	}
-	src := toSource(row)
+	aliases, err := q.AliasesOfSource(ctx, row.Code)
+	if err != nil {
+		return Connection{}, fmt.Errorf("read the aliases of the source: %w", err)
+	}
+	src := toSource(row, aliases)
 	if !c.connectors.Available(src) {
 		return Connection{}, ErrSourceDisabled
 	}
@@ -295,8 +304,8 @@ func permissions(caps connector.Capabilities, reported []string) ([]string, erro
 	return []string{connector.PermissionRead}, nil
 }
 
-func toSource(row repository.Source) connector.Source {
-	return connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config}
+func toSource(row repository.Source, aliases []connector.Alias) connector.Source {
+	return connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config, Aliases: aliases}
 }
 
 // lastRunes returns the last n characters of s.

@@ -1,4 +1,5 @@
-// Command casctl manages tenants, service tokens and processor credentials of CAS (SRS — Core UC-105).
+// Command casctl manages tenants, service tokens and processor credentials of CAS, sets values of EVM sources and
+// reconciles a source on demand (SRS — Core UC-105).
 // It connects with the owner role through CASCTL_DATABASE_URL only. The group sim plays the processor against the
 // API of card-auth (SRS — Card Spend §2.1.1) and never opens the database.
 package main
@@ -15,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
@@ -55,6 +57,15 @@ type app struct {
 }
 
 func (a *app) registry(ctx context.Context) (*registry.Registry, error) {
+	pool, err := a.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return registry.New(pool), nil
+}
+
+// db opens the pool of the owner role on first use.
+func (a *app) db(ctx context.Context) (*pgxpool.Pool, error) {
 	if a.pool == nil {
 		url := a.getenv(dbURLVar)
 		if url == "" {
@@ -67,7 +78,7 @@ func (a *app) registry(ctx context.Context) (*registry.Registry, error) {
 		}
 		a.pool = pool
 	}
-	return registry.New(a.pool), nil
+	return a.pool, nil
 }
 
 func (a *app) close() {
@@ -92,7 +103,7 @@ func (a *app) rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd(), a.simCmd())
+	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd(), a.reconcileCmd(), a.simCmd())
 	return root
 }
 
@@ -319,7 +330,64 @@ func (a *app) processorCmd() *cobra.Command {
 }
 
 func (a *app) sourceCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "source", Short: "Development seeds of sources"}
+	cmd := &cobra.Command{Use: "source", Short: "Set values and the treasury connection of EVM sources; development seeds of sources"}
+	cmd.AddCommand(&cobra.Command{
+		Use: "set <source> <key>=<value>",
+		Short: "Set one value of an EVM source: controller_address, backfill_floor (sources.config) or " +
+			"token_address (alias of the tracked token, USDC with 6 decimals)",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key, value, ok := strings.Cut(args[1], "=")
+			if !ok {
+				return errors.New("the second argument must be <key>=<value>")
+			}
+			reg, err := a.registry(cmd.Context())
+			if err != nil {
+				return err
+			}
+			previous, stored, err := setSourceValue(cmd.Context(), reg, args[0], key, value)
+			if err != nil {
+				return err
+			}
+			if previous == "" {
+				previous = "unset"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Source %s, %s: previous %s, new %s\n", args[0], key, previous, stored)
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use: "set-treasury <source> <connection_id>",
+		Short: "Name the treasury connection of an EVM source: its ID to treasury_connection and its wallet address " +
+			"to treasury_address",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := uuid.Parse(args[1])
+			if err != nil || len(args[1]) != 36 {
+				return errors.New("the connection ID must be a UUID in its 36-character form")
+			}
+			reg, err := a.registry(cmd.Context())
+			if err != nil {
+				return err
+			}
+			previous, current, err := reg.SetTreasury(cmd.Context(), args[0], id)
+			if err != nil {
+				return err
+			}
+			unset := func(s string) string {
+				if s == "" {
+					return "unset"
+				}
+				return s
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "Source %s, %s: previous %s, new %s\n", args[0], registry.KeyTreasuryConnection,
+				unset(previous.Connection), current.Connection)
+			fmt.Fprintf(out, "Source %s, %s: previous %s, new %s\n", args[0], registry.KeyTreasuryAddress,
+				unset(previous.Address), current.Address)
+			return nil
+		},
+	})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "add-fake",
 		Short: "Add the source fake of the fake connector and the aliases of its assets. Development and demo only",

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -35,7 +37,7 @@ func startServer(t *testing.T, env map[string]string) running {
 	logs := &syncBuffer{}
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- run(runCtx, getenvFrom(env), logs) }()
+	go func() { done <- run(runCtx, getenvFrom(env), slices.Collect(maps.Keys(env)), logs) }()
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
@@ -123,12 +125,19 @@ func TestT535_ChainOutsideTheAllowList(t *testing.T) {
 	r := startServer(t, env)
 
 	var warning string
+	anvilUnavailable := false
 	for line := range strings.Lines(r.logs.String()) {
-		if strings.Contains(line, `"level":"WARN"`) && strings.Contains(line, `"source":"base-sepolia"`) {
-			warning = line
+		if strings.Contains(line, `"level":"WARN"`) && strings.Contains(line, "not available") {
+			switch {
+			case strings.Contains(line, `"source":"base-sepolia"`):
+				warning = line
+			case strings.Contains(line, `"source":"anvil"`):
+				anvilUnavailable = true
+			}
 		}
 	}
-	if !strings.Contains(warning, `"chain_id":84532`) || strings.Contains(r.logs.String(), `"source":"anvil"`) {
+	// Since S3 anvil, available without EVM_RPC_URL_ANVIL, has the WARN line of S3-T215 instead.
+	if !strings.Contains(warning, `"chain_id":84532`) || anvilUnavailable {
 		t.Errorf("start log: want one warning for base-sepolia with chain_id 84532 and none for anvil:\n%s",
 			r.logs.String())
 	}
@@ -249,4 +258,28 @@ func waitUntil(t *testing.T, what string, within time.Duration, cond func() bool
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("%s did not happen within %v", what, within)
+}
+
+// S3-T215, the start of server — Req: §2.1.1, §3.1; S3 D-16. One WARN line per enabled, allowed EVM source without
+// its primary endpoint, naming the variable, never a value. The cursors after the URL is set: internal/engine.
+func TestT215_WarningWithoutEndpoint(t *testing.T) {
+	env, _, _ := databaseEnv(t)
+	fakeKey := randomHex(t, 32)
+	env["EVM_RPC_URL_ANVIL"] = "http://127.0.0.1:1/v2/" + fakeKey
+	r := startServer(t, env)
+	r.stop()
+
+	var lines []string
+	for line := range strings.Lines(r.logs.String()) {
+		if strings.Contains(line, "EVM source without an RPC endpoint") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], `"level":"WARN"`) || !strings.Contains(lines[0], `"source":"base-sepolia"`) ||
+		!strings.Contains(lines[0], `"variable":"EVM_RPC_URL_BASE_SEPOLIA"`) {
+		t.Errorf("want one WARN line for base-sepolia, none for anvil with its URL set:\n%s", r.logs.String())
+	}
+	if strings.Contains(r.logs.String(), fakeKey) {
+		t.Error("the log contains the endpoint URL")
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/grpc/api"
 	"github.com/DigitLock/crypto-account-service/internal/health"
 	"github.com/DigitLock/crypto-account-service/internal/limiter"
+	"github.com/DigitLock/crypto-account-service/internal/reconciler"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
@@ -34,7 +36,7 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Getenv, os.Stderr)
+	err := run(ctx, os.Getenv, envNames(os.Environ()), os.Stderr)
 	stop()
 	if err != nil {
 		// Errors of run name variables and never carry a secret.
@@ -43,10 +45,21 @@ func main() {
 	}
 }
 
-// run starts the servers and blocks until ctx is cancelled or a server fails.
+// envNames returns the names of the variables of environ, in the form of os.Environ.
+func envNames(environ []string) []string {
+	names := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		names = append(names, name)
+	}
+	return names
+}
+
+// run starts the servers and blocks until ctx is cancelled or a server fails. names are the names of the
+// variables of the environment (config.Load).
 // The database is not pinged here: an unreachable database makes /readyz answer 503.
-func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
-	cfg, err := config.Load(getenv)
+func run(ctx context.Context, getenv func(string) string, names []string, stderr io.Writer) error {
+	cfg, err := config.Load(getenv, names...)
 	if err != nil {
 		return err
 	}
@@ -84,7 +97,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		_ = grpcLn.Close()
 		return err
 	}
-	connectors := newConnectors(cfg)
+	connectors := newConnectors(cfg, evm.NewPromMetrics(metrics), logger)
 	reporter := engine.NewPromReporter(metrics)
 	// One limiter per source for the whole process (FR-110): the engine and CreateConnection share it.
 	limiters := limiter.NewSet(limiter.SystemClock{}, reporter.BudgetWaited)
@@ -94,6 +107,10 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		Cards:       registry.NewCards(pool, time.Now),
 		Logger:      logger,
 		Metrics:     metrics,
+	})
+	// The reconciliation worker runs beside the streams while this instance holds the engine lock (S3 D-8, S3 D-41).
+	reconciliation := reconciler.New(reconciler.Config{
+		DB: pool, Connectors: connectors, Clock: limiter.SystemClock{}, Tick: cfg.SyncTick, Logger: logger, Metrics: metrics,
 	})
 	eng := engine.New(engine.Config{
 		MaxPagesPerRun:   cfg.SyncMaxPagesPerRun,
@@ -107,6 +124,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}, engine.Deps{
 		DB: pool, Vault: v, Connectors: connectors, Limiters: limiters, Locker: engine.PGLocker{Pool: pool},
 		Clock: limiter.SystemClock{}, Reporter: reporter, Logger: logger,
+		Companions: []func(context.Context){reconciliation.Run},
 	})
 
 	logger.Info("server starting", "config", cfg)
@@ -151,30 +169,46 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	return errors.Join(serveErr, shutdownErr)
 }
 
-// newConnectors registers the EVM connector with the allow-list and, only with ENABLE_FAKE_SOURCE,
-// the fake connector.
-func newConnectors(cfg config.Config) *connector.Set {
+// newConnectors registers the EVM connector with the allow-list and the endpoints and, only with
+// ENABLE_FAKE_SOURCE, the fake connector.
+func newConnectors(cfg config.Config, evmMetrics evm.Metrics, logger *slog.Logger) *connector.Set {
 	set := connector.NewSet()
-	set.RegisterEVM(evm.New(cfg.EVMAllowedChainIDs))
+	set.RegisterEVM(evm.New(cfg.EVMAllowedChainIDs, cfg.EVMRPC, evmMetrics, logger))
 	if cfg.EnableFakeSource {
 		set.Register(fake.Code, fake.New())
 	}
 	return set
 }
 
-// warnUnavailableSources logs one line per enabled EVM source that is not available (EC-318).
-// Availability is evaluated on every request; this is information for the operator only.
+// warnUnavailableSources logs one line per enabled EVM source that is not available (EC-318), and one line per
+// enabled and available EVM source without its primary endpoint, which declares no streams (S3 D-16). Availability
+// is evaluated on every request; this is information for the operator only.
 func warnUnavailableSources(ctx context.Context, logger *slog.Logger, db repository.DBTX, connectors *connector.Set) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	rows, err := repository.New(db).ListSources(ctx)
+	q := repository.New(db)
+	rows, err := q.ListSources(ctx)
 	if err != nil {
 		logger.Warn("cannot read the sources at start; the start goes on", "error", err)
 		return
 	}
+	aliases, err := q.AliasesBySource(ctx)
+	if err != nil {
+		logger.Warn("cannot read the aliases at start; the start goes on", "error", err)
+		return
+	}
 	for _, row := range rows {
-		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config}
-		if src.Kind != connector.KindEVM || !src.Enabled || connectors.Available(src) {
+		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config, Aliases: aliases[row.Code]}
+		if src.Kind != connector.KindEVM || !src.Enabled {
+			continue
+		}
+		if connectors.Available(src) {
+			if c, ok := connectors.For(src); ok {
+				if e, ok := c.(interface{ HasEndpoint(string) bool }); ok && !e.HasEndpoint(src.Code) {
+					logger.Warn("EVM source without an RPC endpoint: no streams are declared; wallet connections and cards work",
+						"source", src.Code, "variable", evm.PrimaryVariable(src.Code))
+				}
+			}
 			continue
 		}
 		if chainID, ok := connector.ChainID(src); ok {

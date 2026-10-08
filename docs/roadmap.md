@@ -16,7 +16,7 @@
 | 1 | S1 | Contracts | `v0.1.0` | `feature/v0.1.0` | Done | 2026-10-04 |
 | 2 | C1 | Core | `v0.2.0` | `feature/v0.2.0` | Done | 2026-10-05 |
 | 3 | S2 | card-auth | `v0.3.0` | `feature/v0.3.0` | Done | 2026-10-07 |
-| 4 | S3 | EVM connector, reconciliation | `v0.4.0` | `feature/v0.4.0` | Planned | — |
+| 4 | S3 | EVM connector, reconciliation | `v0.4.0` | `feature/v0.4.0` | Done | 2026-10-08 |
 | 5 | X1 | Binance balances | `v0.5.0` | `feature/v0.5.0` | Planned | — |
 | 6 | X2 | Binance history | `v0.6.0` | `feature/v0.6.0` | Planned | — |
 | 7 | W1 | Real-time triggers | `v0.7.0` | `feature/v0.7.0` | Planned | — |
@@ -97,6 +97,7 @@ One line per closed milestone or significant state. Newest last.
 | 2026-10-04 | S1 | `CardSpendController` and `MockUSDC` with 63 test-plan rows passing on Anvil; ABI frozen; contracts CI. Tag v0.1.0 |
 | 2026-10-05 | C1 | `server` with the gRPC API `cas.v1`, tenants and `casctl`, encrypted secrets, sync engine, rate limiter and ledger on PostgreSQL; 133 test-plan rows passing; contract frozen; Go, proto and secret-scan CI. Tag v0.2.0 |
 | 2026-10-07 | S2 | `card-auth` with the processor API (OpenAPI frozen) and `CardService` added to `cas.v1`; decision with a per-card lock, quote, on-chain checks and a stored-nonce operator queue; tracker to finality, returns and automatic refund of late debits; chain listener beside polling; processor simulator `casctl sim`. Contracts deployed on Base Sepolia, decision p95 0.696 s. 123 test-plan rows passing; Go CI in three parallel jobs. Tag v0.3.0 |
+| 2026-10-08 | S3 | EVM connector in `server`: balance snapshots and event logs from final blocks, reorg guard, start checks, fallback endpoint, completeness check with a zero gap; treasury connection of the platform tenant with a guard until it is named; reconciliation worker, `casctl reconcile` and `GetReconciliationReport` added to `cas.v1`. Done-when proven on Anvil; Base Sepolia measured: backfill of the S2 history, finality 20–25 min, provider limits, cost $0.02. 91 test-plan rows passing. Tag v0.4.0 |
 
 ---
 

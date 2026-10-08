@@ -9,8 +9,8 @@
 | Part | State |
 |---|---|
 | Requirements and design | Written for milestones C1, S1–S3, X1–X2, W1. X3, X4, E1: outlined in the BRD |
-| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI. C1 — Core done: `server` with the gRPC API `cas.v1`, `casctl`, encrypted secrets, sync engine and ledger on PostgreSQL, a fake connector, CI. S2 — card-auth done: `card-auth` with the processor API, decision, operator queue, tracker and chain listener; `CardService` in `server`; `casctl sim` and `casctl processor`; contracts deployed on Base Sepolia, decision p95 0.696 s ([Deployment Guide](docs/deployment-guide.md)) |
-| Milestone | Next: S3 — EVM connector, reconciliation, `v0.4.0`. Closed: S1 — Contracts, `v0.1.0`; C1 — Core, `v0.2.0`; S2 — card-auth, `v0.3.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
+| Implementation | S1 — Contracts done: `contracts/` with Foundry tests, Anvil scripts, frozen ABI, CI. C1 — Core done: `server` with the gRPC API `cas.v1`, `casctl`, encrypted secrets, sync engine and ledger on PostgreSQL, a fake connector, CI. S2 — card-auth done: `card-auth` with the processor API, decision, operator queue, tracker and chain listener; `CardService` in `server`; `casctl sim` and `casctl processor`; contracts deployed on Base Sepolia, decision p95 0.696 s ([Deployment Guide](docs/deployment-guide.md)). S3 — EVM connector and reconciliation done: wallet and treasury balances and event logs from final blocks with a reorg guard and a zero-gap completeness check; reconciliation of authorizations with on-chain debits and refunds, `GetReconciliationReport`, `casctl reconcile`; the S2 history on Base Sepolia indexed and reconciled ([Deployment Guide](docs/deployment-guide.md) §13) |
+| Milestone | Next: X1 — Binance balances, `v0.5.0`. Closed: S1 — Contracts, `v0.1.0`; C1 — Core, `v0.2.0`; S2 — card-auth, `v0.3.0`; S3 — EVM connector, reconciliation, `v0.4.0`. Order, versions and log: [roadmap](docs/roadmap.md) |
 
 ## Design highlights
 

@@ -7,10 +7,12 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -225,6 +227,50 @@ func (s *cardService) ListAuthorizations(ctx context.Context, req *casv1.ListAut
 	return resp, nil
 }
 
+// GetReconciliationReport returns a reconciliation run of the tenant on a source: the run run_id, or the newest
+// (SRS — Core §2.1.1; S3 D-10, S3 D-24). A run of another tenant or source is NOT_FOUND, as no run at all.
+func (s *cardService) GetReconciliationReport(ctx context.Context, req *casv1.GetReconciliationReportRequest) (*casv1.GetReconciliationReportResponse, error) {
+	if req.GetSource() == "" {
+		return nil, status.Error(codes.InvalidArgument, "source is required")
+	}
+	var runID *uuid.UUID
+	if raw := req.GetRunId(); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil || len(raw) != 36 {
+			return nil, status.Error(codes.InvalidArgument, "run_id must be a UUID in its 36-character form")
+		}
+		runID = &id
+	}
+	tenantID, _ := TenantID(ctx)
+	run, err := s.cards.ReconciliationRun(ctx, tenantID, req.GetSource(), runID)
+	if err != nil {
+		return nil, s.errorStatus(ctx, "get reconciliation report", err)
+	}
+	return &casv1.GetReconciliationReportResponse{Run: runToProto(run)}, nil
+}
+
+func runToProto(r registry.ReconciliationRun) *casv1.ReconciliationRun {
+	out := &casv1.ReconciliationRun{
+		RunId: r.ID.String(), Source: r.Source, PeriodFrom: timestamppb.New(r.PeriodFrom), PeriodTo: timestamppb.New(r.PeriodTo),
+		ToBlock: strconv.FormatInt(r.ToBlock, 10), CreatedAt: timestamppb.New(r.CreatedAt),
+		Totals: &casv1.ReconciliationTotals{
+			AuthorizationsChecked: r.Totals.AuthorizationsChecked, DebitsCount: r.Totals.DebitsCount,
+			DebitsAmount: r.Totals.DebitsAmount, ReturnsChecked: r.Totals.ReturnsChecked,
+			RefundsCount: r.Totals.RefundsCount, RefundsAmount: r.Totals.RefundsAmount,
+		},
+		Mismatches: make([]*casv1.ReconciliationMismatch, 0, len(r.Mismatches)),
+	}
+	for _, m := range r.Mismatches {
+		out.Mismatches = append(out.Mismatches, &casv1.ReconciliationMismatch{
+			Type:   casv1.ReconciliationMismatchType(casv1.ReconciliationMismatchType_value["RECONCILIATION_MISMATCH_TYPE_"+m.Type]),
+			AuthId: m.AuthID, ReturnId: m.ReturnID, ChainAuthId: m.ChainAuthID, ChainRefundId: m.ChainRefundID,
+			TxHash: m.TxHash, ExpectedAmount: m.ExpectedAmount, ActualAmount: m.ActualAmount, Asset: m.Asset,
+			CheckpointBalance: m.CheckpointBalance, LedgerTotal: m.LedgerTotal,
+		})
+	}
+	return out
+}
+
 // errorStatus maps an error of the card registry to its status.
 func (s *cardService) errorStatus(ctx context.Context, op string, err error) error {
 	switch {
@@ -239,6 +285,10 @@ func (s *cardService) errorStatus(ctx context.Context, op string, err error) err
 		return status.Error(codes.NotFound, "card not found")
 	case errors.Is(err, registry.ErrAuthorizationNotFound):
 		return status.Error(codes.NotFound, "authorization not found")
+	case errors.Is(err, registry.ErrSourceNotFound):
+		return status.Error(codes.NotFound, "source not found")
+	case errors.Is(err, registry.ErrRunNotFound):
+		return status.Error(codes.NotFound, "reconciliation run not found")
 	case ctx.Err() != nil:
 		return status.FromContextError(ctx.Err()).Err()
 	default:

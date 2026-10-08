@@ -3,7 +3,7 @@
 - **Milestone:** S2 — card-auth, version `v0.3.0`, branch `feature/v0.3.0`.
 - **Objects under test:** `card-auth`, the processor CLI, `CardService` in `server`, the migrations of the card tables, the role `cas_card_auth`, the deployment scripts on Base Sepolia, the CI workflows of S2.
 - **Parents:** [SRS — Card Spend](srs/card-spend.md) UC-1, UC-2, UC-3; [SRS — Core](srs/core.md) UC-103, UC-104 step 1; [PRD — Card Spend](prd/card-spend.md) EC-1 … EC-12; [BRD](brd.md) BR-6 … BR-11, G-1, G-2; ADR 3, 7, 10, 12, 13.
-- **Status:** Approved. Created in the discovery stage of S2 on 2026-10-05, completed stage by stage, run in st10a, signed off on 2026-10-07 (§6).
+- **Status:** Approved. Created in the discovery stage of S2 on 2026-10-05, completed stage by stage, run in st10a, signed off on 2026-10-07 (§6). §1 "Runs" updated on 2026-10-08 (S3 st9b): the job `hardtest` also runs a package of S3.
 
 ## 1. Environment
 
@@ -16,7 +16,7 @@
 | Public chain | Base Sepolia, chain ID 84532: phase 8 only. Alchemy primary, `https://sepolia.base.org` fallback. Keys in a file outside the repository named by `CAS_SEPOLIA_KEYS` (owner's decision of 2026-10-06; [Deployment Guide](deployment-guide.md) §2) |
 | CRS | A fake gRPC server in tests. A local CRS for phase 8 when a non-USD authorization is demonstrated |
 | Chain listener | A fake WebSocket JSON-RPC server in tests (phase 6); the provider in phase 8 |
-| Runs | `go test -race -count=1 -p 1 ./...`. In CI from st10a the workflow `go` runs the same flags in three parallel jobs, each with its own PostgreSQL 16: `processorapi` (`internal/processorapi`), `hardtest` (`internal/hardtest`, `internal/rehearsal`) and `rest` (every other package of `go list ./...`; format, vet, build, the generated-code checks and a guard that every package runs in exactly one job) |
+| Runs | `go test -race -count=1 -p 1 ./...`. In CI from st10a the workflow `go` runs the same flags in three parallel jobs, each with its own PostgreSQL 16: `processorapi` (`internal/processorapi`), `hardtest` (`internal/hardtest`, `internal/rehearsal`; from S3 st8a also `internal/donewhen`) and `rest` (every other package of `go list ./...`; format, vet, build, the generated-code checks and a guard that every package runs in exactly one job) |
 | Secrets | Operator, admin, treasury and cardholder keys of the tests are generated at run time and funded with `anvil_setBalance`. No real key anywhere |
 
 ## 2. Conventions

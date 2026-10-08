@@ -1,12 +1,18 @@
-// Package evm is the connector of EVM networks (SRS — EVM Connector). C1 holds the wallet address check
-// of UC-301 and the allow-list of chain IDs. It has no RPC client and imports nothing of the network.
+// Package evm is the connector of EVM networks (SRS — EVM Connector). C1 holds the wallet address check of
+// UC-301 and the allow-list of chain IDs; S3 adds the parsing of sources.config (config.go), the RPC access with
+// one endpoint per run (rpc.go), the start checks (checks.go), the balance stream (balances.go) and the log stream
+// (logs.go). It holds no key and sends no transaction (ADR-3, FR-313): read methods only.
 package evm
 
 import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"sync"
+	"time"
 
 	"golang.org/x/crypto/sha3"
 
@@ -15,28 +21,48 @@ import (
 
 // Connector is the connector of every source of kind EVM.
 type Connector struct {
-	allowed map[uint64]bool
+	allowed   map[uint64]bool
+	endpoints map[string]Endpoints // by source code
+	metrics   Metrics
+	logger    *slog.Logger
+
+	mu       sync.Mutex
+	networks map[string]*network // by source code
+	now      func() time.Time    // the clock of evm_indexer_lag_blocks
 }
 
 var _ connector.EVMConnector = (*Connector)(nil)
 
-// New returns the connector with the allow-list of chain IDs (EVM_ALLOWED_CHAIN_IDS).
-func New(allowedChainIDs []uint64) *Connector {
+// New returns the connector with the allow-list of chain IDs (EVM_ALLOWED_CHAIN_IDS), the endpoints of
+// EVM_RPC_URL_<SOURCE> and EVM_RPC_FALLBACK_URL_<SOURCE> by source code, the sink of its metrics and its logger.
+// No client is dialled here: a source gets its clients at its first run. metrics and logger may be nil.
+func New(allowedChainIDs []uint64, endpoints map[string]Endpoints, metrics Metrics, logger *slog.Logger) *Connector {
 	allowed := make(map[uint64]bool, len(allowedChainIDs))
 	for _, id := range allowedChainIDs {
 		allowed[id] = true
 	}
-	return &Connector{allowed: allowed}
+	if metrics == nil {
+		metrics = nopMetrics{}
+	}
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	return &Connector{allowed: allowed, endpoints: endpoints, metrics: metrics, logger: logger, now: time.Now,
+		networks: map[string]*network{}}
 }
 
 // AllowsChain reports whether chainID is in the allow-list.
 func (c *Connector) AllowsChain(chainID uint64) bool { return c.allowed[chainID] }
 
+// HasEndpoint reports whether EVM_RPC_URL_<SOURCE> of the source is set. Without it the source declares no
+// streams (S3 D-16).
+func (c *Connector) HasEndpoint(code string) bool { return c.endpoints[code].Primary.Value() != "" }
+
 // Capabilities: a wallet has no key and no permissions.
 func (c *Connector) Capabilities() connector.Capabilities { return connector.Capabilities{} }
 
 // CheckAccount checks a wallet address (UC-301) and returns it in EIP-55 form, without permissions. The check
-// is local: no request, so no reservation in the limiter.
+// is local: no request, so no reservation in the limiter (C1-T534).
 func (c *Connector) CheckAccount(_ context.Context, _ connector.Source, cred connector.Credentials, _ connector.Limiter) (connector.AccountInfo, error) {
 	if cred.ExchangeKey != nil {
 		return connector.AccountInfo{}, &connector.InvalidInputError{Message: "an EVM network takes a wallet, not an exchange key"}
@@ -48,25 +74,63 @@ func (c *Connector) CheckAccount(_ context.Context, _ connector.Source, cred con
 	return connector.AccountInfo{Identity: address}, nil
 }
 
-// Streams: a wallet connection has no stream in C1 (UC-101 postcondition).
-func (c *Connector) Streams(context.Context, connector.Source, connector.AccountInfo) ([]connector.Stream, error) {
-	return nil, nil
+// Streams declares balances and logs of a wallet connection when the source has a primary endpoint, and none
+// otherwise (S3 D-16). No RPC call. The logs stream starts in BACKFILL with an empty cursor: the first run reads
+// backfill_floor, so a floor set after the engine started is used (S3 D-36).
+func (c *Connector) Streams(_ context.Context, src connector.Source, _ connector.AccountInfo) ([]connector.Stream, error) {
+	if !c.HasEndpoint(src.Code) {
+		return nil, nil
+	}
+	balances, logs := Intervals(src)
+	empty := json.RawMessage(`{}`)
+	return []connector.Stream{
+		{Name: FamilyBalances, Family: FamilyBalances, Interval: balances, FirstMode: connector.ModeIncremental, FirstCursor: empty},
+		{Name: FamilyLogs, Family: FamilyLogs, Interval: logs, FirstMode: connector.ModeBackfill, FirstCursor: empty},
+	}, nil
 }
 
-// errNoStreams: the EVM connector of C1 declares no stream, so the engine never asks for pages or snapshots.
-var errNoStreams = errors.New("evm: the connector has no streams in C1")
-
-// Budgets: no budget; the RPC client comes in S3.
-func (c *Connector) Budgets(connector.Source) []connector.Budget { return nil }
-
-// FetchPage: the connector has no streams.
-func (c *Connector) FetchPage(context.Context, connector.Connection, string, connector.Mode, json.RawMessage) (connector.Page, error) {
-	return connector.Page{}, errNoStreams
+// Budgets: one budget per endpoint, rpc_rate_limit requests per second each (S3 D-12). A paused primary does not
+// block the fallback (§3.2 Reliability).
+func (c *Connector) Budgets(src connector.Source) []connector.Budget {
+	n := RPCRateLimit(src)
+	return []connector.Budget{
+		{Name: EndpointPrimary, Units: n, Window: time.Second},
+		{Name: EndpointFallback, Units: n, Window: time.Second},
+	}
 }
 
-// FetchSnapshot: the connector has no streams.
-func (c *Connector) FetchSnapshot(context.Context, connector.Connection) (connector.Snapshot, error) {
-	return connector.Snapshot{}, errNoStreams
+// FetchPage runs the logs stream (UC-303).
+func (c *Connector) FetchPage(ctx context.Context, conn connector.Connection, stream string, mode connector.Mode, cursor json.RawMessage) (connector.Page, error) {
+	if stream != FamilyLogs {
+		return connector.Page{}, fmt.Errorf("evm: unknown stream %q", stream)
+	}
+	cur, err := parseCursor(cursor)
+	if err != nil {
+		return connector.Page{}, err
+	}
+	s, err := c.open(ctx, conn)
+	var page connector.Page
+	if err == nil {
+		err = s.treasuryGuard(ctx)
+	}
+	if err == nil {
+		page, err = s.logs(ctx, mode, cur, cursor)
+	}
+	s.close(err)
+	s.indexerLag(page, err)
+	return page, err
+}
+
+// FetchSnapshot runs the balances stream (UC-302): the endpoint choice and the start checks, then the balances of
+// the tracked tokens at the head block (balances.go).
+func (c *Connector) FetchSnapshot(ctx context.Context, conn connector.Connection) (connector.Snapshot, error) {
+	s, err := c.open(ctx, conn)
+	var snap connector.Snapshot
+	if err == nil {
+		snap, err = s.snapshot(ctx)
+	}
+	s.close(err)
+	return snap, err
 }
 
 // CheckAddress applies UC-301 steps 1 to 3 and returns the address in EIP-55 form.

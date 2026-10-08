@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -16,6 +17,7 @@ type PromReporter struct {
 	wait        *prometheus.HistogramVec
 	connections *prometheus.GaugeVec
 	staleness   *prometheus.GaugeVec
+	gaps        *prometheus.GaugeVec
 }
 
 var _ Reporter = (*PromReporter)(nil)
@@ -48,8 +50,11 @@ func NewPromReporter(reg prometheus.Registerer) *PromReporter {
 		staleness: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "sync_staleness_seconds", Help: "Now minus the oldest last_success_at among the streams the engine runs.",
 		}, []string{"source"}),
+		gaps: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ledger_gap", Help: "Gap of the last balance checkpoint: balance at the source minus the ledger total.",
+		}, []string{"source", "connection", "asset"}),
 	}
-	reg.MustRegister(r.runs, r.inserted, r.skipped, r.unmapped, r.rejections, r.wait, r.connections, r.staleness)
+	reg.MustRegister(r.runs, r.inserted, r.skipped, r.unmapped, r.rejections, r.wait, r.connections, r.staleness, r.gaps)
 	return r
 }
 
@@ -89,6 +94,16 @@ func (r *PromReporter) Connections(byStatus map[string]int) {
 	for status, n := range byStatus {
 		r.connections.WithLabelValues(status).Set(float64(n))
 	}
+}
+
+// LedgerGap implements Reporter. The gap is a plain decimal; a metric value is a float, so it is parsed here, at
+// the edge, and nowhere on the path of amounts.
+func (r *PromReporter) LedgerGap(source, connection, asset, gap string) {
+	v, err := strconv.ParseFloat(gap, 64)
+	if err != nil {
+		return
+	}
+	r.gaps.WithLabelValues(source, connection, asset).Set(v)
 }
 
 // Staleness implements Reporter.

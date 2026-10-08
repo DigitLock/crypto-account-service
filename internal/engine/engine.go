@@ -67,6 +67,9 @@ type Reporter interface {
 	Connections(byStatus map[string]int)
 	// Staleness: per available source, now minus the oldest last_success_at of the streams the engine runs.
 	Staleness(bySource map[string]time.Duration)
+	// LedgerGap: the gap of the balance checkpoint of a connection and asset, a plain decimal, after the commit of its
+	// page (S3 D-19).
+	LedgerGap(source, connection, asset, gap string)
 }
 
 // Config are the settings of SRS — Core §3.1.
@@ -99,6 +102,10 @@ type Deps struct {
 	Clock    limiter.Clock
 	Reporter Reporter
 	Logger   *slog.Logger
+	// Companions run beside the streams while this instance holds the engine lock (S3 D-41): each starts in its
+	// own goroutine once the lock is taken, with a context that ends when the lock is lost or Run's context ends;
+	// Run waits for them before it releases the lock. The reconciliation worker of server is one (SRS — Core §3.2).
+	Companions []func(ctx context.Context)
 }
 
 // Engine runs streams. It is safe for concurrent use.
@@ -113,6 +120,7 @@ type Engine struct {
 	reporter   Reporter
 	logger     *slog.Logger
 	ledger     *ledger.Writer
+	companions []func(ctx context.Context)
 
 	mu        sync.Mutex
 	inFlight  map[uuid.UUID]bool
@@ -131,16 +139,17 @@ func New(cfg Config, deps Deps) *Engine {
 	return &Engine{
 		cfg: cfg, db: deps.DB, vault: deps.Vault, connectors: deps.Connectors, limiters: deps.Limiters,
 		locker: deps.Locker, clock: deps.Clock, reporter: deps.Reporter, logger: deps.Logger,
-		ledger:    ledger.NewWriter(deps.DB, deps.Clock.Now),
-		inFlight:  map[uuid.UUID]bool{},
-		keyChecks: map[uuid.UUID]keyBackoff{},
+		ledger:     ledger.NewWriter(deps.DB, deps.Clock.Now),
+		companions: deps.Companions,
+		inFlight:   map[uuid.UUID]bool{},
+		keyChecks:  map[uuid.UUID]keyBackoff{},
 	}
 }
 
 // Run takes the engine lock every SYNC_LOCK_RETRY and, while it holds it, creates the cursors of streams
 // declared later, then runs a pass every SYNC_TICK on SYNC_WORKERS workers. A lost lock stops the runs and
-// starts over. When ctx ends, no new run starts, the running ones stop at their next step, the lock is
-// released and Run returns after them.
+// starts over. The companions run while the lock is held. When ctx ends, no new run starts, the running ones
+// stop at their next step, the lock is released and Run returns after them and the companions.
 func (e *Engine) Run(ctx context.Context) error {
 	for {
 		lease, err := e.locker.TryLock(ctx)
@@ -166,9 +175,13 @@ func (e *Engine) Run(ctx context.Context) error {
 
 func (e *Engine) runLocked(ctx context.Context, lease Lease) {
 	runCtx, cancel := context.WithCancel(ctx)
-	var workers sync.WaitGroup
+	var workers, companions sync.WaitGroup
+	defer companions.Wait()
 	defer workers.Wait()
 	defer cancel()
+	for _, fn := range e.companions {
+		companions.Go(func() { fn(runCtx) })
+	}
 
 	e.CreateMissingCursors(runCtx)
 	var lastGauges time.Time
@@ -335,7 +348,15 @@ func (e *Engine) runWork(ctx context.Context, w work) {
 		}
 		return
 	}
-	src := connector.Source{Code: row.SourceCode, Kind: row.SourceKind, Enabled: row.SourceEnabled, Config: row.SourceConfig}
+	aliases, err := repository.New(e.db).AliasesOfSource(ctx, row.SourceCode)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.logger.ErrorContext(ctx, "cannot read the aliases of a source", "source", row.SourceCode, "error", err)
+		}
+		return
+	}
+	src := connector.Source{Code: row.SourceCode, Kind: row.SourceKind, Enabled: row.SourceEnabled, Config: row.SourceConfig,
+		Aliases: aliases}
 	// Not run and no failure counted while the source is not available (UC-102 preconditions).
 	if !e.connectors.Available(src) {
 		return
@@ -573,6 +594,9 @@ func (e *Engine) runStream(ctx context.Context, r *run, s connector.Stream) outc
 			e.reporter.DuplicatesSkipped(r.source.Code, res.Skipped)
 		}
 		e.reportUnmapped(ctx, r, res.Unmapped)
+		for _, g := range res.Gaps {
+			e.reporter.LedgerGap(r.source.Code, r.id.String(), g.Asset, g.Gap)
+		}
 		mode, cursor = page.Mode, page.Cursor
 		switch {
 		case !page.More:
@@ -737,9 +761,17 @@ func (e *Engine) CreateMissingCursors(ctx context.Context) {
 		}
 		return
 	}
+	aliases, err := q.AliasesBySource(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.logger.ErrorContext(ctx, "cannot read the aliases for missing cursors", "error", err)
+		}
+		return
+	}
 	now := e.now()
 	for _, row := range rows {
-		src := connector.Source{Code: row.SourceCode, Kind: row.SourceKind, Enabled: row.SourceEnabled, Config: row.SourceConfig}
+		src := connector.Source{Code: row.SourceCode, Kind: row.SourceKind, Enabled: row.SourceEnabled, Config: row.SourceConfig,
+			Aliases: aliases[row.SourceCode]}
 		if !e.connectors.Available(src) {
 			continue
 		}
@@ -800,9 +832,16 @@ func (e *Engine) RefreshGauges(ctx context.Context) {
 		}
 		return
 	}
+	aliases, err := q.AliasesBySource(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			e.logger.ErrorContext(ctx, "cannot read the aliases", "error", err)
+		}
+		return
+	}
 	bySource := map[string]time.Duration{}
 	for _, row := range rows {
-		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config}
+		src := connector.Source{Code: row.Code, Kind: row.Kind, Enabled: row.Enabled, Config: row.Config, Aliases: aliases[row.Code]}
 		if !e.connectors.Available(src) {
 			continue
 		}

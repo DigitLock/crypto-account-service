@@ -1,0 +1,24 @@
+{
+  "description": "Written by hand, not recorded. A wallet run of fictitious addresses: the start checks pass, then the first eth_getLogs answers HTTP 429 without Retry-After (EC-313). Used by the shared connector test suite, case RateLimited.",
+  "context": {
+    "account": "0x00000000000000000000000000000000000000aa",
+    "backfill_floor": "0",
+    "connection_id": "0b0b0b0b-0000-4000-8000-0000000000a1",
+    "controller": "0x00000000000000000000000000000000000C0001",
+    "log_range_max": "2000",
+    "asset": "0x00000000000000000000000000000000000C0002",
+    "treasury": "0x00000000000000000000000000000000000C0003",
+    "treasury_connection": "0b0b0b0b-0000-4000-8000-000000000001"
+  },
+  "calls": [
+    {"method": "eth_chainId", "params": [], "result": "0x7a69"},
+    {"method": "eth_call", "params": [{"data": "0xfc0c546a", "to": "0x00000000000000000000000000000000000c0001"}, "latest"],
+      "result": "0x00000000000000000000000000000000000000000000000000000000000c0002"},
+    {"method": "eth_call", "params": [{"data": "0x61d027b3", "to": "0x00000000000000000000000000000000000c0001"}, "latest"],
+      "result": "0x00000000000000000000000000000000000000000000000000000000000c0003"},
+    {"method": "eth_blockNumber", "params": [], "result": "0x1e"},
+    {"method": "eth_getLogs", "params": [{"address": ["0x00000000000000000000000000000000000c0002"], "fromBlock": "0x0", "toBlock": "0x14",
+      "topics": ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", "0x00000000000000000000000000000000000000000000000000000000000000aa"]}],
+      "http_status": 429}
+  ]
+}

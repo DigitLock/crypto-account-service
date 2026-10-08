@@ -79,14 +79,15 @@ type env struct {
 // nopReporter discards what the engine reports.
 type nopReporter struct{}
 
-func (nopReporter) RunFinished(string, string, bool)   {}
-func (nopReporter) EntriesInserted(string, int)        {}
-func (nopReporter) DuplicatesSkipped(string, int)      {}
-func (nopReporter) UnmappedAsset(string, string)       {}
-func (nopReporter) BudgetWaited(string, time.Duration) {}
-func (nopReporter) RateLimited(string)                 {}
-func (nopReporter) Connections(map[string]int)         {}
-func (nopReporter) Staleness(map[string]time.Duration) {}
+func (nopReporter) RunFinished(string, string, bool)         {}
+func (nopReporter) EntriesInserted(string, int)              {}
+func (nopReporter) DuplicatesSkipped(string, int)            {}
+func (nopReporter) UnmappedAsset(string, string)             {}
+func (nopReporter) BudgetWaited(string, time.Duration)       {}
+func (nopReporter) RateLimited(string)                       {}
+func (nopReporter) Connections(map[string]int)               {}
+func (nopReporter) Staleness(map[string]time.Duration)       {}
+func (nopReporter) LedgerGap(string, string, string, string) {}
 
 // engine is an engine on the pool of cas_server with the clock, connectors and limiters of the tests.
 func (e *env) engine() *engine.Engine {
@@ -197,7 +198,7 @@ func dial(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
 func (e *env) connectors() *connector.Set {
 	set := connector.NewSet()
 	set.Register(fake.Code, e.fake)
-	set.RegisterEVM(evm.New([]uint64{31337, 84532}))
+	set.RegisterEVM(evm.New([]uint64{31337, 84532}, nil, nil, nil))
 	return set
 }
 
@@ -396,7 +397,8 @@ func tenantRows(t *testing.T, pool *pgxpool.Pool) string {
 
 // C1-T407 — Req: FR-105. Every method of every service of cas.v1, read from the descriptors, so that a
 // method added later is covered. With a valid token a method must not answer UNAUTHENTICATED.
-// Since S2 st4 this covers CardService too: the 8 methods of C1 and the 6 of CardService.
+// Since S2 st4 this covers CardService too: the 8 methods of C1 and the 6 of CardService. Since S3 st2 also
+// GetReconciliationReport, built in S3 st7b: every method of cas.v1 is implemented.
 func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 	e := setup(t)
 	e.tenant(t, "tenant-a")
@@ -415,10 +417,9 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 		}
 		return true
 	})
-	if len(methods) != 14 {
-		t.Errorf("cas.v1 has %d methods, want 14", len(methods))
+	if len(methods) != 15 {
+		t.Errorf("cas.v1 has %d methods, want 15", len(methods))
 	}
-
 	for _, md := range methods {
 		name := "/" + string(md.Parent().FullName()) + "/" + string(md.Name())
 		t.Run(string(md.Name()), func(t *testing.T) {
@@ -432,9 +433,9 @@ func TestT407_EveryMethodNeedsAToken(t *testing.T) {
 				return conn.Invoke(callCtx, name, in, out)
 			}
 			assertCode(t, "without a token", call(ctx), codes.Unauthenticated)
-			// With a valid token the method runs: any answer but UNAUTHENTICATED, and every method of cas.v1
-			// is implemented.
-			if err := call(bearer(tok.Value)); status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.Unimplemented {
+			// With a valid token the method runs: any answer but UNAUTHENTICATED, and it is implemented.
+			err := call(bearer(tok.Value))
+			if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.Unimplemented {
 				t.Errorf("with a valid token: %v", err)
 			}
 		})

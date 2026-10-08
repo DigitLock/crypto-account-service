@@ -1,5 +1,5 @@
-// Contract of Crypto Account Service: cards and authorizations.
-// Specification: docs/srs/core.md §2.1.1, §2.1.5; docs/srs/card-spend.md §2.1.4.
+// Contract of Crypto Account Service: cards, authorizations and reconciliation runs.
+// Specification: docs/srs/core.md §2.1.1, §2.1.5; docs/srs/card-spend.md §2.1.4, UC-4.
 syntax = "proto3";
 
 package cas.v1;
@@ -25,6 +25,10 @@ service CardService {
   rpc GetAuthorization(GetAuthorizationRequest) returns (GetAuthorizationResponse);
   // ListAuthorizations returns authorizations without returns and history, newest first.
   rpc ListAuthorizations(ListAuthorizationsRequest) returns (ListAuthorizationsResponse);
+  // GetReconciliationReport returns one reconciliation run of the tenant on a source (SRS — Core §2.1.1). From S3.
+  // INVALID_ARGUMENT: source empty, or run_id malformed. NOT_FOUND: unknown source; a run_id of another tenant or
+  // another source; no run at all.
+  rpc GetReconciliationReport(GetReconciliationReportRequest) returns (GetReconciliationReportResponse);
 }
 
 // State of a card.
@@ -118,6 +122,25 @@ enum ReturnStatus {
   RETURN_STATUS_NOTHING_TO_RETURN = 6;
 }
 
+// Type of a reconciliation mismatch (SRS — Card Spend UC-4; S3 D-21).
+enum ReconciliationMismatchType {
+  RECONCILIATION_MISMATCH_TYPE_UNSPECIFIED = 0;
+  // Rule 1: an APPROVED or DEBIT_CONFIRMED authorization has no Debited event.
+  RECONCILIATION_MISMATCH_TYPE_MISSING_DEBIT = 1;
+  // Rules 1 and 3: the amount of the event differs from token_amount of the authorization or the return.
+  RECONCILIATION_MISMATCH_TYPE_AMOUNT_MISMATCH = 2;
+  // Rule 2: a Debited event matches no authorization of any tenant. Platform run only.
+  RECONCILIATION_MISMATCH_TYPE_UNKNOWN_DEBIT = 3;
+  // Rule 2a: a Debited event belongs to a DECLINED or DEBIT_LOST authorization.
+  RECONCILIATION_MISMATCH_TYPE_UNEXPECTED_DEBIT = 4;
+  // Rule 3: a CONFIRMED return has no Refunded event.
+  RECONCILIATION_MISMATCH_TYPE_MISSING_REFUND = 5;
+  // Rule 4: a Refunded event matches no return of any tenant. Platform run only.
+  RECONCILIATION_MISMATCH_TYPE_UNKNOWN_REFUND = 6;
+  // Rule 5: the gap of the treasury balance checkpoint is not 0. Platform run only.
+  RECONCILIATION_MISMATCH_TYPE_TREASURY_MISMATCH = 7;
+}
+
 // A processor card reference bound to a wallet connection (SRS — Core §2.1.5).
 message Card {
   // Opaque card reference from the processor, 1 to 64 characters. No card number.
@@ -209,6 +232,73 @@ message Authorization {
   google.protobuf.Timestamp decided_at = 16;
 }
 
+// Counts and sums of one reconciliation run (SRS — Core §2.1.1 Reconciliation run). Amounts in token base units:
+// integer strings.
+message ReconciliationTotals {
+  // Authorizations checked by rules 1 and 2a.
+  int64 authorizations_checked = 1;
+  // Debited events checked.
+  int64 debits_count = 2;
+  // Sum of the Debited events checked, base units.
+  string debits_amount = 3;
+  // Returns checked by rule 3.
+  int64 returns_checked = 4;
+  // Refunded events checked.
+  int64 refunds_count = 5;
+  // Sum of the Refunded events checked, base units.
+  string refunds_amount = 6;
+}
+
+// One mismatch of a reconciliation run (SRS — Core §2.1.1 Reconciliation run). A field is empty when the type has
+// no value for it.
+message ReconciliationMismatch {
+  // Always set.
+  ReconciliationMismatchType type = 1;
+  // Processor's authorization ID of the caller's own authorization. Empty for a return, for UNKNOWN_* and
+  // TREASURY_MISMATCH: never an ID of another tenant.
+  string auth_id = 2;
+  // Processor's return ID of the caller's own return. Empty for an authorization, for UNKNOWN_* and
+  // TREASURY_MISMATCH: never an ID of another tenant.
+  string return_id = 3;
+  // authId of the contract: 0x + 64 hex. Set for every mismatch of a debit.
+  string chain_auth_id = 4;
+  // refundId of the contract: 0x + 64 hex. Set for every mismatch of a refund.
+  string chain_refund_id = 5;
+  // Transaction of the event. For MISSING_*: the transaction of card-auth by the rule of SRS — Card Spend §2.1.4,
+  // empty when there is none.
+  string tx_hash = 6;
+  // Amount of CAS, base units: an integer string.
+  string expected_amount = 7;
+  // Amount of the event, base units: an integer string.
+  string actual_amount = 8;
+  // TREASURY_MISMATCH only: canonical asset code.
+  string asset = 9;
+  // TREASURY_MISMATCH only: balance of the checkpoint, a decimal string in asset units.
+  string checkpoint_balance = 10;
+  // TREASURY_MISMATCH only: Σ IN − Σ OUT of the treasury ledger, a decimal string in asset units; may be negative.
+  string ledger_total = 11;
+}
+
+// A reconciliation run of one tenant on one source (SRS — Core §2.1.1 Reconciliation run; SRS — Card Spend UC-4).
+message ReconciliationRun {
+  // UUID of the run.
+  string run_id = 1;
+  // Source code: base-sepolia.
+  string source = 2;
+  // Start of the checked period.
+  google.protobuf.Timestamp period_from = 3;
+  // End of the checked period: last_time of the treasury's logs cursor.
+  google.protobuf.Timestamp period_to = 4;
+  // Last block whose logs the run read, an integer string: next_block − 1 of the treasury's logs cursor.
+  string to_block = 5;
+  // Counts and sums.
+  ReconciliationTotals totals = 6;
+  // Mismatches found. Empty when the run found none.
+  repeated ReconciliationMismatch mismatches = 7;
+  // When the run was stored.
+  google.protobuf.Timestamp created_at = 8;
+}
+
 message RegisterCardRequest {
   // Required, 1 to 64 characters. Unique per tenant.
   string card_ref = 1;
@@ -297,4 +387,16 @@ message ListAuthorizationsResponse {
   repeated Authorization authorizations = 1;
   // Empty on the last page.
   string next_page_token = 2;
+}
+
+message GetReconciliationReportRequest {
+  // Required. Source code: base-sepolia.
+  string source = 1;
+  // Optional. UUID of a run. Empty: the newest run of the caller's tenant for the source.
+  string run_id = 2;
+}
+
+message GetReconciliationReportResponse {
+  // The run.
+  ReconciliationRun run = 1;
 }

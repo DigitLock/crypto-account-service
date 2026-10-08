@@ -37,7 +37,7 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Operator | Key of `card-auth` allowed to call `debit` and `refund` in the contract. |
 | Admin | Separate key allowed to set limits and pause the contract. |
 | Controller | The `CardSpendController` contract: moves tokens wallet → treasury for a debit and back for a refund. |
-| Treasury | Address that receives debited tokens and funds refunds. CAS watches it as a connection of the platform's own tenant. |
+| Treasury | Address that receives debited tokens and funds refunds. CAS watches it as a connection of the platform tenant: the treasury connection. |
 | Nonce | Sequence number of a sender's transactions. One operator key has one sequence. |
 | Gas | Fee paid for a transaction in the network's native coin. The operator pays it. |
 | Preconfirmation | Early signal from the block builder that a transaction will be in the next block. On Base it arrives about every 200 ms. It can still be dropped. A preconfirmed log or receipt carries a zero block hash. |
@@ -73,6 +73,7 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Term | Meaning |
 |---|---|
 | Tenant | A consuming system: a partner, ET, the demo. Owns all its data. |
+| Platform tenant | The platform's own tenant, `cas-platform`. Owns the treasury connection of each network and gets the reconciliation of the treasury. An ordinary tenant otherwise. |
 | Owner | The tenant's user, known to CAS only as an opaque `owner_ref`. In the PRDs: account owner, cardholder. |
 | Source | An exchange or an EVM network that CAS can read. |
 | Connection | One account at one source: an exchange API key or a wallet address. |
@@ -89,7 +90,9 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Idempotency key | `(connection, stream, external ID, leg)`. An entry with a known key is not imported again. |
 | `seq` | Position of a ledger entry in the order of arrival. Consumers pull "everything after `seq`". |
 | Final record | A source record whose outcome and amounts will not change. Only final records are imported. |
-| Completeness gap | Difference between the ledger sum and the balance of an asset. Shows history CAS could not read. |
+| Completeness gap | Balance at the source minus the ledger sum of an asset (SRS — Core §2.4 `balance_checkpoints`). Shows history CAS could not read. |
+| Balance checkpoint | Balances of a connection at the point its imported records end (EVM: the final block). Compared with the ledger sum to give the completeness gap; the last one is stored per connection and native asset. |
+| Reconciliation run | One check of the authorizations, returns and treasury of one tenant on one network against the on-chain events. Stored with its period, totals and mismatches. |
 | Debit | On-chain transfer wallet → treasury for one authorization. |
 | Return | On-chain transfer treasury → wallet: reversal, refund, or automatic refund of a late debit. |
 | Inclusion signal | Evidence that a debit executed: its `Debited` log or a successful receipt. |

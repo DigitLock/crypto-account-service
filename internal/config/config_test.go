@@ -230,3 +230,94 @@ func TestT103_InvalidConfiguration(t *testing.T) {
 		})
 	}
 }
+
+// S3-T105, the part of st2 — Req: SRS — EVM Connector §3.1, §3.2 Security; S3 D-16. The endpoint URLs carry a
+// fake key generated at run time in the path and the query; they appear in no error and no configuration dump.
+// The failed runs on each endpoint come in st3.
+func TestT105_EVMEndpointsNeverPrinted(t *testing.T) {
+	key := hex.EncodeToString(randomBytes(t, 16))
+	primary := "https://rpc.example.invalid/v2/" + key + "?apikey=" + key
+	fallback := "http://127.0.0.1:8545/" + key + "?token=" + key
+	names := func(env map[string]string) []string {
+		var out []string
+		for name := range env {
+			out = append(out, name)
+		}
+		return out
+	}
+
+	t.Run("read by source code", func(t *testing.T) {
+		env := testEnv(t)
+		env["EVM_RPC_URL_BASE_SEPOLIA"] = primary
+		env["EVM_RPC_FALLBACK_URL_BASE_SEPOLIA"] = fallback
+		env["EVM_RPC_URL_ANVIL"] = fallback
+		env["EVM_RPC_FALLBACK_URL_SOME_NET_2"] = primary // a fallback without a primary is kept: no endpoint
+		env["EVM_RPC_URL_UNSET"] = ""                    // empty counts as unset
+		cfg, err := Load(getenvFrom(env), names(env)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.EVMRPC) != 3 {
+			t.Errorf("EVMRPC has %d sources, want 3", len(cfg.EVMRPC))
+		}
+		for code, want := range map[string][2]string{
+			"base-sepolia": {primary, fallback},
+			"anvil":        {fallback, ""},
+			"some-net-2":   {"", primary},
+		} {
+			e := cfg.EVMRPC[code]
+			if e.Primary.Value() != want[0] || e.Fallback.Value() != want[1] {
+				t.Errorf("%s: endpoints differ from the environment", code)
+			}
+		}
+
+		var buf bytes.Buffer
+		slog.New(slog.NewJSONHandler(&buf, nil)).Info("server starting", "config", cfg)
+		var line struct {
+			Config map[string]any `json:"config"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+			t.Fatal(err)
+		}
+		for name, want := range map[string]string{
+			"EVM_RPC_URL_ANVIL":                 "set",
+			"EVM_RPC_FALLBACK_URL_ANVIL":        "unset",
+			"EVM_RPC_URL_BASE_SEPOLIA":          "set",
+			"EVM_RPC_FALLBACK_URL_BASE_SEPOLIA": "set",
+			"EVM_RPC_URL_SOME_NET_2":            "unset",
+			"EVM_RPC_FALLBACK_URL_SOME_NET_2":   "set",
+		} {
+			if got := line.Config[name]; got != want {
+				t.Errorf("dump %s = %v, want %s", name, got, want)
+			}
+		}
+		if _, ok := line.Config["EVM_RPC_URL_UNSET"]; ok {
+			t.Error("an empty variable is in the dump")
+		}
+		assertNoValues(t, buf.String(), key, primary, fallback, "rpc.example.invalid")
+		assertNoValues(t, fmt.Sprintf("%v %+v %#v", cfg, cfg, cfg), key)
+	})
+
+	t.Run("malformed value stops the start", func(t *testing.T) {
+		for name, value := range map[string]string{
+			"EVM_RPC_URL_ANVIL":                 "ws://127.0.0.1:8545/" + key,
+			"EVM_RPC_FALLBACK_URL_BASE_SEPOLIA": "rpc.example.invalid/" + key,
+			"EVM_RPC_URL_BASE_SEPOLIA":          "https:///v2/" + key,
+			"EVM_RPC_URL_ANVIL_2":               "https://rpc.example.invalid/%zz" + key,
+			"EVM_RPC_URL_base_sepolia":          primary, // the suffix is upper case
+			"EVM_RPC_URL_":                      primary,
+		} {
+			env := testEnv(t)
+			env[name] = value
+			_, err := Load(getenvFrom(env), names(env)...)
+			if err == nil {
+				t.Errorf("%s: Load accepted a malformed value", name)
+				continue
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error %q does not name %s", err, name)
+			}
+			assertNoValues(t, err.Error(), key, value, "rpc.example.invalid", env["DATABASE_URL"])
+		}
+	})
+}

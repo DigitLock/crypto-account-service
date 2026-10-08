@@ -42,3 +42,27 @@ VALUES (
     sqlc.arg(snapshot_id), sqlc.arg(account_type), sqlc.arg(native_asset), sqlc.arg(asset),
     (sqlc.arg(free)::text)::numeric, (sqlc.arg(locked)::text)::numeric
 );
+
+-- name: UpsertBalanceCheckpoint :one
+-- The balance checkpoint of a connection and native asset, in the transaction of its page (SRS - Core Connector
+-- contract; S3 D-5): ledger_total = sum of IN minus sum of OUT of the entries of the connection with that native
+-- asset, those of the page included; gap = balance - ledger_total. It replaces the previous row.
+WITH total AS (
+    SELECT COALESCE(SUM(CASE WHEN direction = 'IN' THEN amount ELSE -amount END), 0) AS ledger_total
+    FROM ledger_entries
+    WHERE connection_id = sqlc.arg(connection_id) AND native_asset = sqlc.arg(native_asset)::text
+), balance AS (
+    SELECT (sqlc.arg(free)::text)::numeric + (sqlc.arg(locked)::text)::numeric AS balance
+)
+INSERT INTO balance_checkpoints (
+    connection_id, native_asset, asset, block_number, block_hash, taken_at, balance, ledger_total, gap, checked_at
+)
+SELECT sqlc.arg(connection_id), sqlc.arg(native_asset)::text, sqlc.arg(asset), sqlc.narg(block_number)::bigint,
+       sqlc.narg(block_hash)::text, sqlc.arg(taken_at), balance.balance, total.ledger_total,
+       balance.balance - total.ledger_total, sqlc.arg(checked_at)
+FROM total, balance
+ON CONFLICT (connection_id, native_asset) DO UPDATE SET
+    asset = EXCLUDED.asset, block_number = EXCLUDED.block_number, block_hash = EXCLUDED.block_hash,
+    taken_at = EXCLUDED.taken_at, balance = EXCLUDED.balance, ledger_total = EXCLUDED.ledger_total,
+    gap = EXCLUDED.gap, checked_at = EXCLUDED.checked_at
+RETURNING trim_scale(ledger_total)::text AS ledger_total, trim_scale(gap)::text AS gap;
