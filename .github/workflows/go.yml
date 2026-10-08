@@ -45,7 +45,7 @@ concurrency:
 # package exactly once.
 env:
   PACKAGES_PROCESSORAPI: ./internal/processorapi
-  PACKAGES_HARDTEST: ./internal/hardtest ./internal/rehearsal
+  PACKAGES_HARDTEST: ./internal/hardtest ./internal/rehearsal ./internal/donewhen
   TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/cas_test?sslmode=disable
   TEST_DATABASE_URL_SERVER: postgres://cas_server:cas_server@localhost:5432/cas_test?sslmode=disable
   TEST_DATABASE_URL_CARD_AUTH: postgres://cas_card_auth:cas_card_auth@localhost:5432/cas_test?sslmode=disable
@@ -208,7 +208,8 @@ jobs:
           # shellcheck disable=SC2086
           go test -race -count=1 -p 1 $PACKAGES_PROCESSORAPI
 
-  # The hard tests of card-auth and casctl as processes, and the rehearsal of scripts/sepolia/ on Anvil.
+  # The hard tests of card-auth and casctl as processes, the rehearsal of scripts/sepolia/ and the done-when scenario of
+  # S3 with server, card-auth and casctl as processes on Anvil.
   hardtest:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -237,7 +238,7 @@ jobs:
       - name: Go version
         run: go version
 
-      # anvil, forge and cast for the hard tests and the rehearsal (internal/testchain).
+      # anvil, forge and cast for the hard tests, the rehearsal and the done-when scenario (internal/testchain).
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: v1.8.3

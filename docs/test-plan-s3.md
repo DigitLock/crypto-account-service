@@ -156,7 +156,7 @@
 | ID | Description | Preconditions | Steps | Expected | Req | Status |
 |---|---|---|---|---|---|---|
 | S3-T701 | Scripted scenario | Common; `server` and `card-auth` as binaries on the test database | Mint to W; transfer in; transfer out; authorize (debit); return (refund); mine to finality; wait for the runs | The expected entries of W and T, each once; gap 0 for W and T | FR-317, FR-307, FR-308, FR-315; done-when 1 | — |
-| S3-T702 | Reorg below the cursor | T701 synced; a state saved before the cursor | `evm_revert` to it; mine other blocks past the cursor; run `logs` of W and T | Both streams fail with `REORG_BELOW_FINAL`; no entry, cursor or checkpoint changed; metric and critical log line | FR-312; done-when 2 | — |
+| S3-T702 | Reorg below the cursor | T701 synced; `evm_snapshot` taken then; `card-auth` stopped; both `logs` cursors moved past the snapshot | `evm_revert` to it; mine other blocks past the cursors and to finality; let `server` run | Both streams fail with `REORG_BELOW_FINAL`; no entry, cursor or checkpoint changed; `evm_reorg_below_final_total` grows by at least one per stream; one critical log line per failed run with the stored and the found hash | FR-312, EC-308; done-when 2 | — |
 | S3-T703 | Reconciliation of the scenario | T701 | Run reconciliation; send a debit with an unknown `authId` with the operator key; mine to finality; run again | First runs empty; then the `cas-platform` run reports `UNKNOWN_DEBIT` and the gauge is 1 | FR-21, FR-22; done-when 3 | — |
 
 ### Phase 8 — Base Sepolia (st8)
@@ -200,7 +200,7 @@
 | EC-305 | T207 | EC-313 | T212, T213 |
 | EC-306 | T412, T804 | EC-314 | T415 |
 | EC-307 | T413 | EC-315 | T409 |
-| EC-308 | T204, T205 | EC-316 | T419 |
+| EC-308 | T204, T205, T702 | EC-316 | T419 |
 | EC-309 | T411 | EC-317 | T504, T510, T802 |
 | EC-310 | T406 | EC-122 | T108, T506 |
 | EC-311 | T407 | EC-123 | T616 |
