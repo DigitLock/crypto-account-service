@@ -102,6 +102,10 @@ type Deps struct {
 	Clock    limiter.Clock
 	Reporter Reporter
 	Logger   *slog.Logger
+	// Companions run beside the streams while this instance holds the engine lock (S3 D-41): each starts in its
+	// own goroutine once the lock is taken, with a context that ends when the lock is lost or Run's context ends;
+	// Run waits for them before it releases the lock. The reconciliation worker of server is one (SRS — Core §3.2).
+	Companions []func(ctx context.Context)
 }
 
 // Engine runs streams. It is safe for concurrent use.
@@ -116,6 +120,7 @@ type Engine struct {
 	reporter   Reporter
 	logger     *slog.Logger
 	ledger     *ledger.Writer
+	companions []func(ctx context.Context)
 
 	mu        sync.Mutex
 	inFlight  map[uuid.UUID]bool
@@ -134,16 +139,17 @@ func New(cfg Config, deps Deps) *Engine {
 	return &Engine{
 		cfg: cfg, db: deps.DB, vault: deps.Vault, connectors: deps.Connectors, limiters: deps.Limiters,
 		locker: deps.Locker, clock: deps.Clock, reporter: deps.Reporter, logger: deps.Logger,
-		ledger:    ledger.NewWriter(deps.DB, deps.Clock.Now),
-		inFlight:  map[uuid.UUID]bool{},
-		keyChecks: map[uuid.UUID]keyBackoff{},
+		ledger:     ledger.NewWriter(deps.DB, deps.Clock.Now),
+		companions: deps.Companions,
+		inFlight:   map[uuid.UUID]bool{},
+		keyChecks:  map[uuid.UUID]keyBackoff{},
 	}
 }
 
 // Run takes the engine lock every SYNC_LOCK_RETRY and, while it holds it, creates the cursors of streams
 // declared later, then runs a pass every SYNC_TICK on SYNC_WORKERS workers. A lost lock stops the runs and
-// starts over. When ctx ends, no new run starts, the running ones stop at their next step, the lock is
-// released and Run returns after them.
+// starts over. The companions run while the lock is held. When ctx ends, no new run starts, the running ones
+// stop at their next step, the lock is released and Run returns after them and the companions.
 func (e *Engine) Run(ctx context.Context) error {
 	for {
 		lease, err := e.locker.TryLock(ctx)
@@ -169,9 +175,13 @@ func (e *Engine) Run(ctx context.Context) error {
 
 func (e *Engine) runLocked(ctx context.Context, lease Lease) {
 	runCtx, cancel := context.WithCancel(ctx)
-	var workers sync.WaitGroup
+	var workers, companions sync.WaitGroup
+	defer companions.Wait()
 	defer workers.Wait()
 	defer cancel()
+	for _, fn := range e.companions {
+		companions.Go(func() { fn(runCtx) })
+	}
 
 	e.CreateMissingCursors(runCtx)
 	var lastGauges time.Time

@@ -27,6 +27,7 @@ import (
 	"github.com/DigitLock/crypto-account-service/internal/grpc/api"
 	"github.com/DigitLock/crypto-account-service/internal/health"
 	"github.com/DigitLock/crypto-account-service/internal/limiter"
+	"github.com/DigitLock/crypto-account-service/internal/reconciler"
 	"github.com/DigitLock/crypto-account-service/internal/registry"
 	"github.com/DigitLock/crypto-account-service/internal/repository"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
@@ -107,6 +108,10 @@ func run(ctx context.Context, getenv func(string) string, names []string, stderr
 		Logger:      logger,
 		Metrics:     metrics,
 	})
+	// The reconciliation worker runs beside the streams while this instance holds the engine lock (S3 D-8, S3 D-41).
+	reconciliation := reconciler.New(reconciler.Config{
+		DB: pool, Connectors: connectors, Clock: limiter.SystemClock{}, Tick: cfg.SyncTick, Logger: logger, Metrics: metrics,
+	})
 	eng := engine.New(engine.Config{
 		MaxPagesPerRun:   cfg.SyncMaxPagesPerRun,
 		FailureThreshold: cfg.SyncFailureThreshold,
@@ -119,6 +124,7 @@ func run(ctx context.Context, getenv func(string) string, names []string, stderr
 	}, engine.Deps{
 		DB: pool, Vault: v, Connectors: connectors, Limiters: limiters, Locker: engine.PGLocker{Pool: pool},
 		Clock: limiter.SystemClock{}, Reporter: reporter, Logger: logger,
+		Companions: []func(context.Context){reconciliation.Run},
 	})
 
 	logger.Info("server starting", "config", cfg)

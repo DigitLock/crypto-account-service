@@ -24,6 +24,9 @@ var s3Tables = []string{"balance_checkpoints", "reconciliation_runs"}
 // s2Version is the last migration of S2: the schema before S3.
 const s2Version = 6
 
+// runsIndexVersion is the migration of the index of reconciliation_runs led by the source (S3 st7b).
+const runsIndexVersion = 9
+
 // baseSepoliaMockUSDC is MockUSDC of base-sepolia (SRS — EVM Connector §2.4 Seed data; S3 D-27).
 const baseSepoliaMockUSDC = "0x6c0434c821694513FFfd5364D63f27F05d73f3aB"
 
@@ -199,7 +202,7 @@ func TestT106_MigrationsOfS3(t *testing.T) {
 			"grant balance_checkpoints cas_server UPDATE",
 			"grant reconciliation_runs cas_server INSERT",
 			"grant reconciliation_runs cas_server SELECT",
-			"index CREATE INDEX reconciliation_runs_tenant_source_created_idx ON public.reconciliation_runs USING btree (tenant_id, source_id, created_at DESC)",
+			"index CREATE INDEX reconciliation_runs_source_tenant_created_idx ON public.reconciliation_runs USING btree (source_id, tenant_id, created_at DESC, id DESC)",
 			"index CREATE UNIQUE INDEX balance_checkpoints_pkey ON public.balance_checkpoints USING btree (connection_id, native_asset)",
 			"index CREATE UNIQUE INDEX reconciliation_runs_pkey ON public.reconciliation_runs USING btree (id)",
 		}
@@ -299,6 +302,36 @@ func TestT106_MigrationsOfS3(t *testing.T) {
 		mustQueryRow(t, owner, &runs, `SELECT count(*) FROM reconciliation_runs WHERE tenant_id = $1`, f.tenantID)
 		if checkpoints != 0 || runs != 1 {
 			t.Errorf("after the delete: %d checkpoints, %d runs; want 0 and 1", checkpoints, runs)
+		}
+	})
+
+	// Migration 000009: the index of reconciliation_runs led by the source replaces the one led by the tenant.
+	t.Run("000009 up and down", func(t *testing.T) {
+		indexes := func() []string {
+			t.Helper()
+			rows, err := owner.Query(ctx, `SELECT indexdef FROM pg_indexes WHERE tablename = 'reconciliation_runs'
+				AND indexname <> 'reconciliation_runs_pkey' ORDER BY indexname`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			if err != nil {
+				t.Fatal(err)
+			}
+			return defs
+		}
+		bySource := "CREATE INDEX reconciliation_runs_source_tenant_created_idx ON public.reconciliation_runs USING btree (source_id, tenant_id, created_at DESC, id DESC)"
+		byTenant := "CREATE INDEX reconciliation_runs_tenant_source_created_idx ON public.reconciliation_runs USING btree (tenant_id, source_id, created_at DESC)"
+		if got := indexes(); !slices.Equal(got, []string{bySource}) {
+			t.Errorf("indexes at the latest version = %v, want %v", got, bySource)
+		}
+		migrateTo(t, m, runsIndexVersion-1)
+		if got := indexes(); !slices.Equal(got, []string{byTenant}) {
+			t.Errorf("indexes after down to %d = %v, want %v", runsIndexVersion-1, got, byTenant)
+		}
+		migrateTo(t, m, runsIndexVersion)
+		if got := indexes(); !slices.Equal(got, []string{bySource}) {
+			t.Errorf("indexes after up again = %v, want %v", got, bySource)
 		}
 	})
 
