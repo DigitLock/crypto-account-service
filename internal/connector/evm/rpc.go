@@ -46,6 +46,7 @@ type network struct {
 	treasuryOK     bool
 	treasuryKnown  bool                 // treasury holds treasury() of the controller
 	treasuryWarned bool                 // the WARN line of an unset treasury_connection is written once per start
+	guarded        map[string]bool      // connection ID → its logs runs are refused by the treasury guard (S3 D-42)
 	rangeSize      uint64               // log range size after splitting (EC-306); 0: log_range_max
 	processed      map[string]processed // connection ID → last processed block of its INCREMENTAL logs stream
 	checkpointAt   map[string]time.Time // connection ID → time of its last balance checkpoint (UC-304)
@@ -62,7 +63,8 @@ func (c *Connector) network(code string) *network {
 	defer c.mu.Unlock()
 	n, ok := c.networks[code]
 	if !ok {
-		n = &network{chainChecked: map[string]bool{}, processed: map[string]processed{}, checkpointAt: map[string]time.Time{}}
+		n = &network{chainChecked: map[string]bool{}, processed: map[string]processed{}, checkpointAt: map[string]time.Time{},
+			guarded: map[string]bool{}}
 		c.networks[code] = n
 	}
 	return n

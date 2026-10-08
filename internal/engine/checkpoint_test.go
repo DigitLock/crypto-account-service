@@ -314,3 +314,49 @@ func TestT510_OversizedBalanceDoesNotStopTheImport(t *testing.T) {
 		t.Error("ledger_gap reported for W")
 	}
 }
+
+// S3-T511, on Anvil through the engine — Req: §2.1.1 Roles; FR-307; S3 D-42. A connection of the treasury address is
+// created through the API while the source has its endpoint and a Debited is final on chain. Before set-treasury its
+// logs runs fail with the check treasury: no entry, the cursor {}, one WARN line. After set-treasury (the registry
+// call of casctl) the next run of the same engine, without a restart, imports CARD_DEBIT IN.
+func TestT511_TreasuryAddressGuardOnAnvil(t *testing.T) {
+	h := setup(t)
+	c := testchain.Start(t)
+	debited(t, c)
+	final(t, c)
+	h.useAnvilAt(t, c, c.RPCURL, fromZero)
+	client, callCtx := h.tenantClient(t, "cas-platform")
+	resp, err := client.CreateConnection(callCtx, &casv1.CreateConnectionRequest{OwnerRef: "treasury", Source: "anvil",
+		Label: "Treasury", Credential: &casv1.CreateConnectionRequest_Wallet{Wallet: &casv1.Wallet{Address: c.Treasury.Hex()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.MustParse(resp.GetConnection().GetConnectionId())
+
+	e := h.engine(h.server)
+	for run := 1; run <= 2; run++ {
+		h.pass(t, e)
+		logs := h.cursor(t, id, "logs")
+		if logs.failures != run || logs.lastError == nil || !strings.Contains(*logs.lastError, "start check treasury failed") ||
+			logs.cursor != "{}" {
+			t.Fatalf("run %d: logs %+v; want failure %d with the check treasury, cursor {}", run, logs, run)
+		}
+		if n := h.count(t, `SELECT count(*) FROM ledger_entries WHERE connection_id = $1`, id); n != 0 {
+			t.Fatalf("run %d: %d entries of the unnamed treasury connection", run, n)
+		}
+		h.clock.Advance(h.cfg.BackoffMax)
+	}
+	if n := strings.Count(h.log.String(), "EVM logs run refused"); n != 1 ||
+		!strings.Contains(h.log.String(), "casctl source set-treasury anvil "+id.String()) {
+		t.Errorf("%d WARN lines of the guard, want 1 with the hint:\n%s", n, h.log.String())
+	}
+
+	if _, _, err := h.reg.SetTreasury(ctx, "anvil", id); err != nil {
+		t.Fatal(err)
+	}
+	h.pass(t, e)
+	if logs := h.cursor(t, id, "logs"); logs.failures != 0 || logs.lastSuccessAt == nil {
+		t.Errorf("logs after set-treasury %+v, want a success", logs)
+	}
+	wantEntries(t, h.logEntries(t, id), c.Token, "CARD_DEBIT IN 20")
+}

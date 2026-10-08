@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/DigitLock/crypto-account-service/internal/connector"
@@ -34,7 +35,7 @@ func (r *rig) clockAt(t time.Time) func(time.Duration) {
 // token at F, pinned by the hash of the range-end header. A BACKFILL page at F, a page below F and a second page
 // inside the interval carry none.
 func TestT501_WhenACheckpointIsReturned(t *testing.T) {
-	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).
+	srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).
 		// 1. W, INCREMENTAL, ends at F = 30: checkpoint.
 		head(t, 40).header(t, hexutil.EncodeUint64(20), 20, 1).page(t, 21, 30).
 		balance(t, fxToken, blockHash(30, 1), big.NewInt(12_500_000)).
@@ -95,7 +96,7 @@ func TestT501_WhenACheckpointIsReturned(t *testing.T) {
 func TestT504_StateNotServed(t *testing.T) {
 	deposit := transferLog(fxOther, fxAccount, usdcUnits(10), 25, 1, 0)
 	at30 := balanceParams(t, fxToken, fxAccount, blockHash(30, 1))
-	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).
+	srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).
 		head(t, 40).header(t, hexutil.EncodeUint64(20), 20, 1).
 		logs(t, 21, 30, nil, []any{deposit}, nil).header(t, hexutil.EncodeUint64(30), 30, 1).blockByHash(t, 25).
 		rpcError(t, "eth_call", at30, -32000, "missing trie node 6a1f… (path ) state 0x… is not available").
@@ -126,7 +127,7 @@ func TestT504_StateNotServed(t *testing.T) {
 	srv.AssertAllServed()
 
 	t.Run("rate limit fails the run", func(t *testing.T) {
-		srv := rpcfixture.Serve(t, (&script{}).checks(t, false).
+		srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).
 			head(t, 40).header(t, hexutil.EncodeUint64(20), 20, 1).page(t, 21, 30).
 			status(t, "eth_call", at30, http.StatusTooManyRequests).file())
 		r := newRig(srv.URL(), "")
@@ -146,7 +147,7 @@ func TestT504_StateNotServed(t *testing.T) {
 func TestT510_OversizedCheckpointBalance(t *testing.T) {
 	huge := new(big.Int).Exp(big.NewInt(10), big.NewInt(26), nil) // 10^26 base units, 6 decimals
 	deposit := transferLog(fxOther, fxAccount, usdcUnits(10), 25, 1, 0)
-	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).
+	srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).
 		head(t, 40).header(t, hexutil.EncodeUint64(20), 20, 1).
 		logs(t, 21, 30, nil, []any{deposit}, nil).header(t, hexutil.EncodeUint64(30), 30, 1).blockByHash(t, 25).
 		balance(t, fxToken, blockHash(30, 1), huge).
@@ -181,4 +182,96 @@ func TestT510_OversizedCheckpointBalance(t *testing.T) {
 		t.Errorf("run 2 after the interval: %v, checkpoint %+v; want block 40 with 10", err, page.Checkpoint)
 	}
 	srv.AssertAllServed()
+}
+
+// fxTreasuryConn is the ID of a wallet connection of the treasury address in the fixture runs of S3-T511.
+const fxTreasuryConn = "0b0b0b0b-0000-4000-8000-000000000002"
+
+// treasuryWallet is a connection of the treasury address fxTreasury on src.
+func (r *rig) treasuryWallet(src connector.Source) connector.Connection {
+	return connector.Connection{ID: fxTreasuryConn, Source: src, Account: fxTreasury.Hex(), Limiter: r.lim}
+}
+
+// refused checks a logs run refused by the treasury guard: the check treasury, no page.
+func refused(t *testing.T, run string, page connector.Page, err error) {
+	t.Helper()
+	var check *StartCheckError
+	if !errors.As(err, &check) || check.Check != CheckTreasury || !strings.Contains(err.Error(), fxTreasuryConn) ||
+		page.Cursor != nil || len(page.Entries) != 0 {
+		t.Errorf("%s: %v, page %+v; want the check treasury and no page", run, err, page)
+	}
+}
+
+// S3-T511 — Req: §2.1.1 Roles; FR-307; S3 D-42, S3 D-23. A logs run of a connection whose address is treasury() of
+// the controller, while it is not the treasury_connection of the source, fails as a failed check treasury before
+// any log is read: no eth_getLogs, no page, evm_start_check_failed{check=treasury} 1, the endpoint kept, one WARN
+// line per connection without URL. Named, its next run reads as the treasury connection, without a restart.
+func TestT511_TreasuryAddressGuard(t *testing.T) {
+	t.Run("treasury_connection unset, then named", func(t *testing.T) {
+		srv := rpcfixture.Serve(t, (&script{}).
+			logsChecks(t).                       // run 1: the checks, then treasury() for the guard; run 2 reads nothing
+			constant(t, "treasury", fxTreasury). // run 3, named: the treasury check, not passed before
+			head(t, 25).
+			result(t, "eth_getLogs", logQuery(0, 15, fxToken, sigTransfer, addressTopic(fxTreasury)), []any{}).
+			result(t, "eth_getLogs", logQuery(0, 15, fxToken, sigTransfer, nil, addressTopic(fxTreasury)),
+				[]any{transferLog(fxAccount, fxTreasury, usdcUnits(20), 5, 1, 0)}).
+			result(t, "eth_getLogs", logQuery(0, 15, fxController, []any{sigDebited, sigRefunded}),
+				[]any{debitedLog(1, fxAccount, usdcUnits(20), 5, 1, 1)}).
+			header(t, hexutil.EncodeUint64(15), 15, 1).
+			blockByHash(t, 5).
+			file())
+		r := newRig(srv.URL(), "")
+		for _, run := range []string{"run 1", "run 2"} {
+			page, err := r.logs(r.treasuryWallet(fxSource("")), `{}`)
+			refused(t, run, page, err)
+			if failed, _ := r.m.check("anvil", CheckTreasury); !failed {
+				t.Errorf("%s: evm_start_check_failed{check=treasury} is not 1", run)
+			}
+		}
+		if r.c.network("anvil").onFallback {
+			t.Error("a refusal of the guard moved the source to the fallback")
+		}
+		log := r.log.String()
+		if n := strings.Count(log, "EVM logs run refused"); n != 1 || !strings.Contains(log, `"level":"WARN"`) ||
+			!strings.Contains(log, "casctl source set-treasury anvil "+fxTreasuryConn) ||
+			!strings.Contains(log, `"treasury_connection":"unset"`) || strings.Contains(log, srv.URL()) {
+			t.Errorf("%d WARN lines of the guard, want 1 with the hint and without URL:\n%s", n, log)
+		}
+
+		named := fxSource(`"treasury_connection": "` + fxTreasuryConn + `", "treasury_address": "` + fxTreasury.Hex() + `"`)
+		page, err := r.logs(r.treasuryWallet(named), `{}`)
+		if err != nil || entryKinds(page) != "CARD_DEBIT IN 20" || *cursorOf(t, page).NextBlock != 16 {
+			t.Errorf("run 3, named: %v, entries %q; want CARD_DEBIT IN 20 and the cursor at 16", err, entryKinds(page))
+		}
+		if failed, set := r.m.check("anvil", CheckTreasury); failed || !set {
+			t.Errorf("evm_start_check_failed{check=treasury} = %v (set %v), want 0 once named", failed, set)
+		}
+		srv.AssertAllServed()
+	})
+
+	t.Run("treasury_connection names another connection", func(t *testing.T) {
+		srv := rpcfixture.Serve(t, (&script{}).checks(t, true).file()) // the treasury check reads treasury(); the guard reuses it
+		r := newRig(srv.URL(), "")
+		page, err := r.logs(r.treasuryWallet(fxSource(withTreasury())), `{}`)
+		refused(t, "second watcher", page, err)
+		if failed, _ := r.m.check("anvil", CheckTreasury); !failed {
+			t.Error("evm_start_check_failed{check=treasury} is not 1")
+		}
+		if log := r.log.String(); strings.Count(log, "EVM logs run refused") != 1 ||
+			!strings.Contains(log, `"treasury_connection":"`+fxTreasuryConnection+`"`) {
+			t.Errorf("WARN line of the guard:\n%s", log)
+		}
+		srv.AssertAllServed()
+	})
+
+	t.Run("balances not affected", func(t *testing.T) {
+		srv := rpcfixture.Serve(t, (&script{}).checks(t, false).latest(t, 30, 1).
+			result(t, "eth_call", balanceParams(t, fxToken, fxTreasury, blockHash(30, 1)),
+				hexutil.Bytes(common.LeftPadBytes(usdcUnits(5).Bytes(), 32))).file())
+		r := newRig(srv.URL(), "")
+		if _, err := r.FetchSnapshotOf(r.treasuryWallet(fxSource(""))); err != nil {
+			t.Errorf("balances of the unnamed treasury connection: %v", err)
+		}
+		srv.AssertAllServed()
+	})
 }

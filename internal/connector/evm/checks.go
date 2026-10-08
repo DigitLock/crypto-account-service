@@ -50,7 +50,74 @@ func (s *session) checkFailed(ctx context.Context, check, detail string) error {
 	return &StartCheckError{Check: check, Detail: detail}
 }
 
-func (s *session) checkPassed(check string) { s.c.metrics.StartCheck(s.src.Code, check, false) }
+func (s *session) checkPassed(check string) {
+	if check == CheckTreasury {
+		s.net.mu.Lock()
+		guarded := len(s.net.guarded) > 0
+		s.net.mu.Unlock()
+		if guarded {
+			return // a connection refused by the treasury guard keeps the metric at 1
+		}
+	}
+	s.c.metrics.StartCheck(s.src.Code, check, false)
+}
+
+// treasuryGuard refuses a logs run of a connection whose wallet address is treasury() of the controller while the
+// connection is not the treasury_connection of the source (S3 D-42): read as a plain wallet, it would import the
+// debits as DEPOSIT and the refunds as WITHDRAWAL and move its cursor past them. The refusal is a failed check
+// treasury: no log is read, the cursor stays, the endpoint does not change. One WARN line per connection until its
+// run passes. treasury() is read as for the pairing, once per network; an RPC error of that read fails the run as
+// an RPC error. The source's treasury_connection is read at every run, so naming the connection lifts the refusal
+// at its next run.
+func (s *session) treasuryGuard(ctx context.Context) error {
+	if s.cfg.TreasuryConnection != "" && strings.EqualFold(s.cfg.TreasuryConnection, s.conn.ID) {
+		return s.guardPassed()
+	}
+	account, err := CheckAddress(s.conn.Account)
+	if err != nil {
+		return nil // readPage reports a malformed account
+	}
+	treasury, err := s.treasuryAddress(ctx)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(account, treasury.Hex()) {
+		return s.guardPassed()
+	}
+
+	named := "unset"
+	if s.cfg.TreasuryConnection != "" {
+		named = s.cfg.TreasuryConnection
+	}
+	s.net.mu.Lock()
+	warn := !s.net.guarded[s.conn.ID]
+	s.net.guarded[s.conn.ID] = true
+	s.net.mu.Unlock()
+	s.c.metrics.StartCheck(s.src.Code, CheckTreasury, true)
+	if warn {
+		s.c.logger.WarnContext(ctx, "EVM logs run refused: the address of the connection is treasury() of the controller, "+
+			"but the connection is not the treasury connection of the source; no log is read until it is named",
+			"source", s.src.Code, "connection_id", s.conn.ID, "address", treasury.Hex(), "treasury_connection", named,
+			"hint", "casctl source set-treasury "+s.src.Code+" "+s.conn.ID)
+	}
+	return &StartCheckError{Check: CheckTreasury, Detail: fmt.Sprintf("connection %s watches treasury() %s of the "+
+		"controller but is not the treasury_connection of the source (%s): casctl source set-treasury %s %s",
+		s.conn.ID, treasury.Hex(), named, s.src.Code, s.conn.ID)}
+}
+
+// guardPassed ends the refusal of the connection, if any; the metric returns to 0 when no connection of the network
+// is refused any more.
+func (s *session) guardPassed() error {
+	s.net.mu.Lock()
+	_, was := s.net.guarded[s.conn.ID]
+	delete(s.net.guarded, s.conn.ID)
+	reset := was && len(s.net.guarded) == 0
+	s.net.mu.Unlock()
+	if reset {
+		s.c.metrics.StartCheck(s.src.Code, CheckTreasury, false)
+	}
+	return nil
+}
 
 // startChecks runs the checks that have not passed yet (S3 D-23): the chain ID of the endpoint of the run, token()
 // of the controller among the tracked tokens and every tracked token with 0 to 18 decimals, treasury() of the

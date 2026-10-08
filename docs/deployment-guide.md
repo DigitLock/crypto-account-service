@@ -1,6 +1,6 @@
 # Deployment Guide — Base Sepolia
 
-- **Version:** 1.1, 2026-10-08, S3 st8b: §13, the EVM connector and reconciliation of `server` on Base Sepolia, with the evidence of 2026-10-08; the measured finality distance in §5.3 and §7. Version 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Completed in S2 st10a, 2026-10-06: the idle RPC load after the fix of st9b (S2-T808); the port defaults of `measure.sh`, the fallback check of `run-card-auth.sh` and the probe of the primary, to match the scripts and the code; the mode of `cas-sepolia-deployment.env` as the script creates it. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
+- **Version:** 1.1, 2026-10-08, S3 st8b and st8c: §13, the EVM connector and reconciliation of `server` on Base Sepolia, with the evidence of 2026-10-08; the measured finality distance in §5.3 and §7; the treasury guard of `server` (S3 D-42) in §13.2 and §13.3. Version 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Completed in S2 st10a, 2026-10-06: the idle RPC load after the fix of st9b (S2-T808); the port defaults of `measure.sh`, the fallback check of `run-card-auth.sh` and the probe of the primary, to match the scripts and the code; the mode of `cas-sepolia-deployment.env` as the script creates it. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
 - **Status:** Pre-approved: used by the owner for S2 st9b on 2026-10-06.
 - **Parents:** [SRS — Card Spend](srs/card-spend.md) §3.1, §3.2, UC-4; [SRS — Core](srs/core.md) UC-105, `CreateConnection`, `RegisterCard`, `GetReconciliationReport`, §3.2; [SRS — EVM Connector](srs/evm-connector.md) §2.4, §3.1; [test plan S2](test-plan-s2.md) phase 8; [test plan S3](test-plan-s3.md) phase 8.
 
@@ -287,7 +287,7 @@ Funded from the CDP faucet, about 0.0017 ETH in total.
 | `EVM_RPC_FALLBACK_URL_BASE_SEPOLIA` | `https://sepolia.base.org` | `.env` |
 | `CAS_PLATFORM_TOKEN` | Service token of `cas-platform` | `cas-sepolia-credentials.env`, mode 600 |
 
-- Both endpoint variables are set only at step 5 of §13.3: a treasury connection that syncs before `set-treasury` is read as a plain wallet (§13.3, note).
+- The endpoint variables are added at step 5 of §13.3, after `set-treasury`. If they are already set, the order still holds: until step 4 the `logs` runs of the treasury connection are refused (S3 D-42): one WARN line with the hint, `evm_start_check_failed{check="treasury"}` 1; its next run after step 4 reads it as the treasury.
 
 ### 13.3 Steps
 
@@ -301,7 +301,7 @@ Funded from the CDP faucet, about 0.0017 ETH in total.
 | 6 | `card-auth` (§5.3 step 4), only when authorizations are sent | Not needed for the index and reconciliation | — |
 | 7 | Checks, commands below | `/metrics`, `ListLedgerEntries`, `GetReconciliationReport` | Values of §13.6 |
 
-- Note on the order: a treasury connection whose `logs` stream runs before `set-treasury` takes the transfers of debits and refunds as `DEPOSIT` and `WITHDRAWAL` and moves its cursor past them. The order above declares no stream until both are set.
+- Note on the order: before `set-treasury` the `logs` stream of the treasury connection is refused, not read as a plain wallet (S3 D-42). The first `logs` run after step 4 can wait for the backoff of the refused runs, up to `SYNC_BACKOFF_MAX`; `TriggerSync` of the connection makes it due. The order above declares no stream until both are set, so nothing is refused.
 - Step 2: the token is printed once; it goes straight into the credentials file:
 
 ```sh
@@ -341,7 +341,8 @@ grpc "$CAS_PLATFORM_TOKEN" CardService/GetReconciliationReport '{"source":"base-
 | `evm_rpc_requests_total{endpoint="primary"}` | Grows; `endpoint="fallback"` absent or 0 |
 | `evm_rpc_fallback_active` | 0 |
 | `evm_log_range_blocks` | 2000; 500 after a run on the fallback, until a restart (SRS — EVM Connector EC-306) |
-| `evm_reorg_below_final_total`, `evm_start_check_failed`, `evm_completeness_skipped_total`, `evm_skipped_logs_total`, `evm_unmatched_controller_events_total` | 0 |
+| `evm_reorg_below_final_total`, `evm_completeness_skipped_total`, `evm_skipped_logs_total`, `evm_unmatched_controller_events_total` | 0 |
+| `evm_start_check_failed` | 0; 1 for the check `treasury` while a connection of the treasury address is not named (S3 D-42) |
 | `ledger_gap{source="base-sepolia"}` | 0 for both connections, once a checkpoint is taken |
 | `reconciliation_mismatches{source="base-sepolia"}` | 0 for every type |
 

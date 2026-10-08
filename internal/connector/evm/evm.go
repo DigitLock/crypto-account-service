@@ -111,6 +111,9 @@ func (c *Connector) FetchPage(ctx context.Context, conn connector.Connection, st
 	s, err := c.open(ctx, conn)
 	var page connector.Page
 	if err == nil {
+		err = s.treasuryGuard(ctx)
+	}
+	if err == nil {
 		page, err = s.logs(ctx, mode, cur, cursor)
 	}
 	s.close(err)

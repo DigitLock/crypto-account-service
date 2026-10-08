@@ -71,7 +71,7 @@ func TestT412_RangeHalvedOnRejection(t *testing.T) {
 			"Log response size exceeded. You can make eth_getLogs requests with up to a 2K block range")
 	}
 	// Head 3010, confirmations 10: F = 3000.
-	s := (&script{}).checks(t, false).head(t, 3010)
+	s := (&script{}).logsChecks(t).head(t, 3010)
 	tooLarge(s, 0, 1999)
 	s.status(t, "eth_getLogs", walletQueries(0, 999, fxAccount)[0], http.StatusRequestEntityTooLarge)
 	s.page(t, 0, 499)
@@ -104,7 +104,7 @@ func TestT412_RangeHalvedOnRejection(t *testing.T) {
 	srv.AssertAllServed()
 
 	t.Run("down to one block, then failure", func(t *testing.T) {
-		s := (&script{}).checks(t, false).head(t, 30)
+		s := (&script{}).logsChecks(t).head(t, 30)
 		for _, rg := range [][2]uint64{{0, 3}, {0, 1}, {0, 0}} {
 			tooLarge(s, rg[0], rg[1])
 		}
@@ -167,7 +167,7 @@ func TestT412_TooLargeTexts(t *testing.T) {
 	}
 
 	t.Run("-32005 too large is not a rate limit", func(t *testing.T) {
-		srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 30).
+		srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).head(t, 30).
 			rpcError(t, "eth_getLogs", walletQueries(0, 19, fxAccount)[0], -32005, "query returned more than 10000 results").
 			page(t, 0, 9).file())
 		r := newRig(srv.URL(), "")
@@ -193,7 +193,7 @@ func (e jsonError) ErrorCode() int { return e.code }
 // S3-T413 — Req: EC-307. A lagging node: no logs, and the header of the range end is missing. The run fails, not
 // "no logs"; no cursor is returned, so the engine does not move it.
 func TestT413_LaggingNode(t *testing.T) {
-	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 30).noLogs(t, 0, 20).
+	srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).head(t, 30).noLogs(t, 0, 20).
 		noHeader(t, hexutil.EncodeUint64(20)).file())
 	r := newRig(srv.URL(), "")
 	page, err := r.logs(r.conn("w", fxSource("")), `{}`)
@@ -206,7 +206,7 @@ func TestT413_LaggingNode(t *testing.T) {
 // S3-T416, the connector part — Req: §2.4 Cursor formats; S3 D-7. The cursor of a page: the next block, the hash
 // and the time of the range end; the first run starts from {} at backfill_floor.
 func TestT416_CursorFormat(t *testing.T) {
-	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 30).page(t, 7, 20).file())
+	srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).head(t, 30).page(t, 7, 20).file())
 	r := newRig(srv.URL(), "")
 	page, err := r.logs(r.conn("w", fxSource(`"backfill_floor": 7`)), `{}`)
 	if err != nil {

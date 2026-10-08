@@ -34,7 +34,7 @@ func TestT203_NoLogAboveFinal(t *testing.T) {
 
 	// Head 25, confirmations 10: F = 15; the cursor at 5 with the hash of block 4.
 	// The fixture holds the eth_getLogs of blocks 5 to 7 only, and the header of 7.
-	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 25).header(t, hexutil.EncodeUint64(4), 4, 1).
+	srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).head(t, 25).header(t, hexutil.EncodeUint64(4), 4, 1).
 		page(t, 5, 7).file())
 	r := newRig(srv.URL(), "")
 	page, err := r.logs(r.conn("w", fxSource(`"log_range_max": 3`)), cursorJSON(5, blockHash(4, 1)))
@@ -50,7 +50,7 @@ func TestT203_NoLogAboveFinal(t *testing.T) {
 // S3-T205 — Req: FR-312, EC-308. The block next_block − 1 is missing: REORG_BELOW_FINAL, as T204.
 func TestT205_MissingBlockBelowCursor(t *testing.T) {
 	block := hexutil.EncodeUint64(19)
-	srv := rpcfixture.Serve(t, (&script{}).checks(t, false).
+	srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).
 		head(t, 40).noHeader(t, block).
 		head(t, 41).noHeader(t, block).file())
 	r := newRig(srv.URL(), "")
@@ -84,7 +84,7 @@ func TestT206_FirstRunWithoutGuard(t *testing.T) {
 		if cursor == `{"next_block": 3}` {
 			from = 3
 		}
-		srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 25).page(t, from, 15).file())
+		srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).head(t, 25).page(t, from, 15).file())
 		r := newRig(srv.URL(), "")
 		page, err := r.logs(r.conn("w", fxSource("")), cursor)
 		if err != nil || *cursorOf(t, page).NextBlock != 16 {
@@ -183,8 +183,9 @@ func TestT209_StartCheckTreasury(t *testing.T) {
 	})
 
 	t.Run("b: no treasury connection", func(t *testing.T) {
-		// Head 5: no block is final; both runs succeed without reading treasury().
-		srv := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 5).head(t, 6).file())
+		// Head 5: no block is final; both runs succeed. The treasury check is skipped; treasury() is read once, by the
+		// treasury guard of the logs stream (S3 D-42), not by the check.
+		srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).head(t, 5).head(t, 6).file())
 		r := newRig(srv.URL(), "")
 		conn := r.conn("w", fxSource(""))
 		for run := range 2 {
@@ -228,7 +229,7 @@ func TestT210_ChecksRepeatedUntilPassed(t *testing.T) {
 // S3-T211 — Req: UC-303 step 1; FR-305. The first run on the fallback reads its chain ID first; another chain ID
 // fails the run as T207.
 func TestT211_ChainIDOnEndpointChange(t *testing.T) {
-	primary := rpcfixture.Serve(t, (&script{}).checks(t, false).status(t, "eth_blockNumber", nil, http.StatusBadGateway).file())
+	primary := rpcfixture.Serve(t, (&script{}).logsChecks(t).status(t, "eth_blockNumber", nil, http.StatusBadGateway).file())
 	fallback := rpcfixture.Serve(t, (&script{}).chainID(t, 1).file())
 	r := newRig(primary.URL(), fallback.URL())
 	conn := r.conn("w", fxSource(""))
@@ -248,8 +249,8 @@ func TestT211_ChainIDOnEndpointChange(t *testing.T) {
 // connections.
 func TestT212_FallbackAndReturn(t *testing.T) {
 	primary := rpcfixture.Serve(t, (&script{}).
-		checks(t, false).status(t, "eth_blockNumber", nil, http.StatusServiceUnavailable). // run 1 (W1) fails
-		head(t, 5).                                                                        // run 3 (W1)
+		logsChecks(t).status(t, "eth_blockNumber", nil, http.StatusServiceUnavailable). // run 1 (W1) fails
+		head(t, 5).                                                                     // run 3 (W1)
 		file())
 	fallback := rpcfixture.Serve(t, (&script{}).
 		chainID(t, 31337).head(t, 5). // run 2 (W2): its chain ID first, then only the fallback
@@ -274,14 +275,15 @@ func TestT212_FallbackAndReturn(t *testing.T) {
 	if r.m.fallback["anvil"] || r.m.requestsOf(EndpointPrimary) != primaryCalls+1 {
 		t.Error("run 3 did not go back to the primary")
 	}
-	if r.lim.reserved[EndpointFallback] != 2 || r.lim.reserved[EndpointPrimary] != 4 {
-		t.Errorf("reservations %v, want 4 on the primary and 2 on the fallback", r.lim.reserved)
+	// The primary: chain ID, token, treasury() of the guard, the failed head, the head of run 3.
+	if r.lim.reserved[EndpointFallback] != 2 || r.lim.reserved[EndpointPrimary] != 5 {
+		t.Errorf("reservations %v, want 5 on the primary and 2 on the fallback", r.lim.reserved)
 	}
 	primary.AssertAllServed()
 	fallback.AssertAllServed()
 
 	t.Run("no fallback configured", func(t *testing.T) {
-		srv := rpcfixture.Serve(t, (&script{}).checks(t, false).status(t, "eth_blockNumber", nil, http.StatusBadGateway).
+		srv := rpcfixture.Serve(t, (&script{}).logsChecks(t).status(t, "eth_blockNumber", nil, http.StatusBadGateway).
 			head(t, 5).file())
 		r := newRig(srv.URL(), "")
 		if _, err := r.logs(r.conn("w", fxSource("")), `{}`); !isRPCFailure(err) {
@@ -320,7 +322,7 @@ func TestT213_RateLimit(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fallback := rpcfixture.Serve(t, (&script{}).checks(t, false).head(t, 5).file())
+			fallback := rpcfixture.Serve(t, (&script{}).logsChecks(t).head(t, 5).file())
 			r := newRig(c.primary(t), fallback.URL())
 			conn := r.conn("w", fxSource(""))
 			_, err := r.logs(conn, `{}`)

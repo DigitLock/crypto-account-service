@@ -27,6 +27,9 @@ import (
 var (
 	selectorToken     = []byte{0xfc, 0x0c, 0x54, 0x6a}
 	selectorBalanceOf = []byte{0x70, 0xa0, 0x82, 0x31}
+	selectorTreasury  = []byte{0x61, 0xd0, 0x27, 0xb3}
+	// nodeTreasury is treasury() of the controller at balanceNode: an address of no connection of the tests.
+	nodeTreasury = common.HexToAddress("0x0000000000000000000000000000000000007e45")
 )
 
 // Failure modes of balanceOf at balanceNode.
@@ -113,6 +116,8 @@ func (n *balanceNode) serve(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case bytes.Equal(call.Data[:4], selectorToken):
 			answer(tokenAnswer())
+		case bytes.Equal(call.Data[:4], selectorTreasury): // the treasury guard of a logs run (S3 D-42)
+			answer(hexutil.Bytes(common.LeftPadBytes(nodeTreasury.Bytes(), 32)))
 		case bytes.Equal(call.Data[:4], selectorBalanceOf) && len(call.Data) == 36:
 			var pin map[string]common.Hash
 			if json.Unmarshal(req.Params[1], &pin) != nil || len(pin) != 1 || pin["blockHash"] != n.hash {

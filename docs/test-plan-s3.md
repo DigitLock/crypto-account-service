@@ -37,7 +37,7 @@
 | 2 | Finality, reorg guard, start checks | st3 | 15 |
 | 3 | Balance stream | st4 | 7 |
 | 4 | Log stream, connector suite | st5 | 20 |
-| 5 | Completeness and treasury | st6 | 9 |
+| 5 | Completeness and treasury | st6, st8c | 11 |
 | 6 | Reconciliation | st7 | 16 |
 | 7 | Done-when on Anvil | st8 | 3 |
 | 8 | Base Sepolia | st8 | 6 |
@@ -129,6 +129,7 @@
 | S3-T508 | Zero gap, wallet and treasury | Mint, transfer in, transfer out, debit, refund, final | Run both connections to a checkpoint | `gap` 0 for W and T | FR-315 | — |
 | S3-T509 | Checkpoint of the treasury readable by reconciliation | T508 | Read `balance_checkpoints` of T with `TEST_DATABASE_URL_SERVER` | Row present with the block of the treasury's `logs` cursor or below | Card Spend UC-4 rule 5; S3 D-5 | — |
 | S3-T510 | Oversized checkpoint balance | W `INCREMENTAL`; checkpoint due; a balance of W with more than 20 integer digits (fixtures; mint on Anvil) | Run `logs` | No checkpoint; `evm_completeness_skipped_total` +1 and one WARN line without URL; the entries and cursor of the page committed, the stream not failed; the next due page with a normal balance carries a checkpoint | EC-319, EC-317; S3 D-39 | — |
+| S3-T511 | Treasury address before it is named | A wallet connection of the treasury address; fixtures, and Anvil with a final debit | Run `logs` with `treasury_connection` unset; with it naming another connection; name it with `set-treasury`; run again | Before naming: the run fails with the check `treasury`, no log read, no entry, cursor unchanged, `evm_start_check_failed{check=treasury}` 1, one WARN line with the hint and without URL; the `balances` stream runs. After naming, without a restart: `CARD_DEBIT IN` imported | §2.1.1 Roles; FR-307; S3 D-42 | — |
 
 ### Phase 6 — Reconciliation (st7)
 
@@ -188,7 +189,7 @@
 | FR-304 | T302 | FR-313 | T214 |
 | FR-305 | T207, T211 | FR-314 | T207, T208, T209 |
 | FR-306 | T203 | FR-315 | T502, T503, T508, T701, T802 |
-| FR-307 | T404, T405, T701, T801 | FR-316 | T420 |
+| FR-307 | T404, T405, T511, T701, T801 | FR-316 | T420 |
 | FR-308 | T401, T402, T403, T701, T801 | FR-317 | T701 |
 | FR-309 | T409 | FR-21 | T602, T603, T605, T606, T611, T703 |
 | FR-310 | T410, T411 | FR-22 | T604, T607, T703 |

@@ -275,6 +275,12 @@ func (s *script) checks(t *testing.T, treasury bool) *script {
 	return s
 }
 
+// logsChecks are the checks before a logs run of a wallet in a source without a treasury connection: the start
+// checks, then treasury() of the controller, read once per network by the treasury guard (S3 D-42).
+func (s *script) logsChecks(t *testing.T) *script {
+	return s.checks(t, false).constant(t, "treasury", fxTreasury)
+}
+
 func (s *script) head(t *testing.T, n uint64) *script {
 	return s.result(t, "eth_blockNumber", nil, hexutil.Uint64(n))
 }
