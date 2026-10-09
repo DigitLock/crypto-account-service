@@ -562,8 +562,14 @@ func TestT109_ReplayCommittedFixtures(t *testing.T) {
 			}
 			return nil
 		},
-		"error_bad_signature.json": keyRejected,
-		"error_bad_key.json":       keyRejected,
+		"error_bad_signature.json":  keyRejected,
+		"error_bad_key.json":        keyRejected,
+		"key_read_only.json":        checkAccount(false, nil),
+		"key_ip_restricted.json":    checkAccount(true, nil),
+		"key_not_read_only.json":    checkAccount(false, &connector.KeyNotReadOnlyError{Permissions: []string{"enableWithdrawals"}}),
+		"key_reading_disabled.json": checkAccount(false, connector.ErrKeyRejected),
+		"key_rejected.json":         checkAccount(false, connector.ErrKeyRejected),
+		"key_account_rejected.json": checkAccount(false, connector.ErrKeyRejected),
 	}
 	entries, err := os.ReadDir(fixturesDir)
 	if err != nil {
@@ -591,6 +597,32 @@ func TestT109_ReplayCommittedFixtures(t *testing.T) {
 		if !slices.Contains(seen, name) {
 			t.Errorf("%s is missing from %s", name, fixturesDir)
 		}
+	}
+}
+
+// checkAccount runs the key check of UC-201 on a fixture: the account with the fictitious uid and ipRestrict, or the
+// error want.
+func checkAccount(ipRestricted bool, want error) func(h *harness) error {
+	return func(h *harness) error {
+		info, err := h.c.CheckAccount(context.Background(), source(`{"base_url": "`+h.s.cfg.BaseURL+`"}`),
+			connector.Credentials{ExchangeKey: h.s.key}, h.lim)
+		var notReadOnly, wantNotReadOnly *connector.KeyNotReadOnlyError
+		switch {
+		case errors.As(want, &wantNotReadOnly):
+			if !errors.As(err, &notReadOnly) || !slices.Equal(notReadOnly.Permissions, wantNotReadOnly.Permissions) {
+				return errors.New("want KeyNotReadOnlyError " + wantNotReadOnly.Error() + ", got: " + errString(err))
+			}
+		case want != nil:
+			if !errors.Is(err, want) {
+				return errors.New("want " + want.Error() + ", got: " + errString(err))
+			}
+		case err != nil:
+			return err
+		case info.Identity != strconv.Itoa(httpfixture.FictitiousUID) || !slices.Equal(info.Permissions, []string{"READ"}) ||
+			info.IPRestricted == nil || *info.IPRestricted != ipRestricted:
+			return errors.New("unexpected account info")
+		}
+		return nil
 	}
 }
 

@@ -1,8 +1,8 @@
 // Package binance is the connector of the Binance exchange (SRS — Binance). X1 st2 holds the transport: the
 // parsing of sources.config (config.go), the HMAC-SHA256 signature (sign.go), the HTTP client with the answers to
 // errors and the time offset (this file), the decimal amounts (decimal.go) and the metrics (metrics.go). X1 st3 adds
-// the budgets of the rate limiter (budgets.go) and their use by every request. The key check and the balance
-// snapshot come with st4 and st5.
+// the budgets of the rate limiter (budgets.go) and their use by every request. X1 st4 adds the key check of UC-201
+// and the rest of connector.Connector (account.go). The balance snapshot comes with st5.
 //
 // Read calls only (ADR-3): the connector has no call that needs a trade, withdrawal or transfer permission. The key
 // and the secret are vault.Secret values; they and any signature never appear in a log line, an error or a returned
@@ -47,8 +47,8 @@ type endpoint struct {
 	weight       int
 }
 
-// Endpoints of X1 (SRS — Binance §2.1.2). The calls of the /sapi rows come with st4 (apiRestrictions) and st5 (the
-// snapshot).
+// Endpoints of X1 (SRS — Binance §2.1.2). apiRestrictions is called by the key check; the other /sapi rows by the
+// snapshot of st5.
 var (
 	endpointTime    = endpoint{method: http.MethodGet, path: "/api/v3/time", budget: BudgetAPI, weight: 1}
 	endpointAccount = endpoint{method: http.MethodGet, path: "/api/v3/account", signed: true, budget: BudgetAPI, weight: 20}

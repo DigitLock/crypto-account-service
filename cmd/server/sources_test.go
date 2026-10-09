@@ -145,8 +145,9 @@ func TestT535_ChainOutsideTheAllowList(t *testing.T) {
 		t.Error("the start log line does not show EVM_ALLOWED_CHAIN_IDS")
 	}
 
-	if got := sourceCodes(t, r, callCtx); strings.Join(got, ",") != "anvil" {
-		t.Errorf("sources = %v, want [anvil]", got)
+	// binance is registered always from X1 st4 (X1 D-33).
+	if got := sourceCodes(t, r, callCtx); strings.Join(got, ",") != "anvil,binance" {
+		t.Errorf("sources = %v, want [anvil binance]", got)
 	}
 	_, err := r.client.CreateConnection(callCtx, &casv1.CreateConnectionRequest{
 		OwnerRef: "owner-1", Source: "base-sepolia",
@@ -189,8 +190,8 @@ func TestT536_FakeSourceBehindItsFlag(t *testing.T) {
 		}
 		withFlag["ENABLE_FAKE_SOURCE"] = "true"
 		r := startServer(t, withFlag)
-		if got := sourceCodes(t, r, callCtx); strings.Join(got, ",") != "anvil,base-sepolia,fake" {
-			t.Errorf("sources = %v, want anvil, base-sepolia, fake", got)
+		if got := sourceCodes(t, r, callCtx); strings.Join(got, ",") != "anvil,base-sepolia,binance,fake" {
+			t.Errorf("sources = %v, want anvil, base-sepolia, binance, fake", got)
 		}
 		if _, err := r.client.CreateConnection(callCtx, request); err != nil {
 			t.Errorf("create on fake: %v", err)

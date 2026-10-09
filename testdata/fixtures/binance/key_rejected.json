@@ -1,0 +1,30 @@
+{
+  "description": "Key check of a key Binance rejects: apiRestrictions answers 401 with -2015. apiRestrictions written by hand from the example of the Binance documentation, fictitious values; time and account from the recorded answers of the test network (uid 100000001)",
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/v3/time",
+      "query": "",
+      "http_status": 200,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "23"
+      },
+      "body": {
+        "serverTime": 1791547304746
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/sapi/v1/account/apiRestrictions",
+      "query": "recvWindow=5000",
+      "http_status": 401,
+      "headers": {
+        "X-SAPI-USED-IP-WEIGHT-1M": "1"
+      },
+      "body": {
+        "code": -2015,
+        "msg": "Invalid API-key, IP, or permissions for action."
+      }
+    }
+  ]
+}

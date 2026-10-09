@@ -72,6 +72,9 @@ type AccountInfo struct {
 	Identity string
 	// Permissions of a key as reported by the source. Empty for a wallet.
 	Permissions []string
+	// IPRestricted reports whether the source restricts the key to IP addresses; nil when the source cannot tell
+	// (X1 D-2).
+	IPRestricted *bool
 }
 
 // Stream is a stream a connector declares for a connection.

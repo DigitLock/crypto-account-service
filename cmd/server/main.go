@@ -21,6 +21,7 @@ import (
 
 	"github.com/DigitLock/crypto-account-service/internal/config"
 	"github.com/DigitLock/crypto-account-service/internal/connector"
+	"github.com/DigitLock/crypto-account-service/internal/connector/binance"
 	"github.com/DigitLock/crypto-account-service/internal/connector/evm"
 	"github.com/DigitLock/crypto-account-service/internal/connector/fake"
 	"github.com/DigitLock/crypto-account-service/internal/engine"
@@ -97,7 +98,7 @@ func run(ctx context.Context, getenv func(string) string, names []string, stderr
 		_ = grpcLn.Close()
 		return err
 	}
-	connectors := newConnectors(cfg, evm.NewPromMetrics(metrics), logger)
+	connectors := newConnectors(cfg, evm.NewPromMetrics(metrics), binance.NewPromMetrics(metrics), logger)
 	reporter := engine.NewPromReporter(metrics)
 	// One limiter per source for the whole process (FR-110): the engine and CreateConnection share it.
 	limiters := limiter.NewSet(limiter.SystemClock{}, reporter.BudgetWaited)
@@ -169,11 +170,12 @@ func run(ctx context.Context, getenv func(string) string, names []string, stderr
 	return errors.Join(serveErr, shutdownErr)
 }
 
-// newConnectors registers the EVM connector with the allow-list and the endpoints and, only with
-// ENABLE_FAKE_SOURCE, the fake connector.
-func newConnectors(cfg config.Config, evmMetrics evm.Metrics, logger *slog.Logger) *connector.Set {
+// newConnectors registers the EVM connector with the allow-list and the endpoints, the Binance connector under
+// binance (X1 D-33) and, only with ENABLE_FAKE_SOURCE, the fake connector.
+func newConnectors(cfg config.Config, evmMetrics evm.Metrics, binanceMetrics binance.Metrics, logger *slog.Logger) *connector.Set {
 	set := connector.NewSet()
 	set.RegisterEVM(evm.New(cfg.EVMAllowedChainIDs, cfg.EVMRPC, evmMetrics, logger))
+	set.Register(binance.Code, binance.New(binanceMetrics, logger))
 	if cfg.EnableFakeSource {
 		set.Register(fake.Code, fake.New())
 	}

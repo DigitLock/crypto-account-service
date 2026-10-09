@@ -212,6 +212,10 @@ func (c *Connections) Create(ctx context.Context, in CreateInput) (Connection, e
 		params.Permissions = perms
 		params.PermissionsCheckedAt = &now
 		details["permissions"] = perms
+		if info.IPRestricted != nil {
+			// Noted in the audit row only: the response and the periodic key check do not use it (X1 D-2).
+			details["ip_restricted"] = *info.IPRestricted
+		}
 	}
 
 	streams, err := conn.Streams(ctx, src, info)

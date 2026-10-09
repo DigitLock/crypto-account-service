@@ -30,6 +30,7 @@ import (
 
 	"github.com/DigitLock/crypto-account-service/internal/auth"
 	"github.com/DigitLock/crypto-account-service/internal/connector"
+	"github.com/DigitLock/crypto-account-service/internal/connector/binance"
 	"github.com/DigitLock/crypto-account-service/internal/connector/evm"
 	"github.com/DigitLock/crypto-account-service/internal/connector/fake"
 	"github.com/DigitLock/crypto-account-service/internal/engine"
@@ -70,6 +71,7 @@ type env struct {
 	logger    *slog.Logger
 	tokens    []string
 	fake      *fake.Connector
+	binance   *binance.Connector
 	vault     *vault.Envelope
 	masterKey []byte
 	now       time.Time
@@ -128,6 +130,7 @@ func setup(t *testing.T) *env {
 	e.reg = registry.New(e.owner)
 	e.logger = slog.New(slog.NewJSONHandler(e.log, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	e.fake = fake.New()
+	e.binance = binance.New(nil, e.logger)
 	e.now = testNow
 	e.limiters = limiter.NewSet(testClock{e}, nil)
 	e.masterKey = randomBytes(t, 32)
@@ -194,10 +197,12 @@ func dial(t *testing.T, srv *grpc.Server) *grpc.ClientConn {
 	return conn
 }
 
-// connectors is the set of the tests: the scripted fake and the EVM connector with the default allow-list.
+// connectors is the set of the tests: the scripted fake, the Binance connector, registered always as in cmd/server
+// (X1 D-33), and the EVM connector with the default allow-list.
 func (e *env) connectors() *connector.Set {
 	set := connector.NewSet()
 	set.Register(fake.Code, e.fake)
+	set.Register(binance.Code, e.binance)
 	set.RegisterEVM(evm.New([]uint64{31337, 84532}, nil, nil, nil))
 	return set
 }

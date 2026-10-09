@@ -175,7 +175,7 @@ func TestT501_ListSources(t *testing.T) {
 	for _, s := range resp.GetSources() {
 		got = append(got, s.GetCode()+":"+s.GetKind().String())
 	}
-	want := []string{"anvil:SOURCE_KIND_EVM", "base-sepolia:SOURCE_KIND_EVM", "fake:SOURCE_KIND_EXCHANGE"}
+	want := []string{"anvil:SOURCE_KIND_EVM", "base-sepolia:SOURCE_KIND_EVM", "binance:SOURCE_KIND_EXCHANGE", "fake:SOURCE_KIND_EXCHANGE"}
 	if !slices.Equal(got, want) {
 		t.Errorf("sources = %v, want %v", got, want)
 	}

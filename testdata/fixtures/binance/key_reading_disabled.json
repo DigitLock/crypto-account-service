@@ -1,0 +1,41 @@
+{
+  "description": "Key check of a key that cannot read: enableReading false; the account is not read. apiRestrictions written by hand from the example of the Binance documentation, fictitious values; time and account from the recorded answers of the test network (uid 100000001)",
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/v3/time",
+      "query": "",
+      "http_status": 200,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "23"
+      },
+      "body": {
+        "serverTime": 1791547304746
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/sapi/v1/account/apiRestrictions",
+      "query": "recvWindow=5000",
+      "http_status": 200,
+      "headers": {
+        "X-SAPI-USED-IP-WEIGHT-1M": "1"
+      },
+      "body": {
+        "ipRestrict": false,
+        "createTime": 1790000000000,
+        "enableReading": false,
+        "enableWithdrawals": false,
+        "enableInternalTransfer": false,
+        "enableMargin": false,
+        "enableFutures": false,
+        "permitsUniversalTransfer": false,
+        "enableVanillaOptions": false,
+        "enableFixApiTrade": false,
+        "enableFixReadOnly": false,
+        "enableSpotAndMarginTrading": false,
+        "enablePortfolioMarginTrading": false
+      }
+    }
+  ]
+}

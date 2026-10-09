@@ -169,11 +169,11 @@ See §2.1.1; two requests in a row.
 
 | # | Step | On failure |
 |---|---|---|
-| 1 | `apiRestrictions` with the given key | Binance rejects the key → `KEY_INVALID`, with a hint that the key may be restricted to another IP |
+| 1 | `apiRestrictions` with the given key | Binance rejects the key → `KEY_INVALID`, with a hint that the key may be restricted to another IP (message of SRS — Core, X1 D-32) |
 | 2 | Require `enableReading = true` | `KEY_INVALID` |
 | 3 | Reject if any permission other than `enableReading` and `enableFixReadOnly` is `true`. A permission is a boolean field whose name starts with `enable` or `permits`: as of 2026-10-09 `enableWithdrawals`, `enableInternalTransfer`, `permitsUniversalTransfer`, `enableSpotAndMarginTrading`, `enableMargin`, `enableFutures`, `enableVanillaOptions`, `enablePortfolioMarginTrading`, `enableFixApiTrade`, and any such field Binance adds. Other fields (`ipRestrict`, `createTime`, any other) are not permissions (X1 D-1) | `KEY_NOT_READ_ONLY`, with the Binance names of the enabled permissions |
-| 4 | `account`: take `uid` as the account identity | `KEY_INVALID` |
-| 5 | Return permissions `["READ"]`, the `uid` and `ipRestrict` as the IP restriction of the key (`AccountInfo.IPRestricted`, X1 D-2) | — |
+| 4 | `account`: take `uid`, a JSON integer, as the account identity in its decimal form | Binance rejects the key → `KEY_INVALID`; no `uid` → plain failure of the check |
+| 5 | Return permissions `["READ"]`, the `uid` and `ipRestrict` as the IP restriction of the key (`AccountInfo.IPRestricted`, X1 D-2); not reported when `ipRestrict` is missing or not a boolean | — |
 
 ##### Preconditions
 - The time offset is known.

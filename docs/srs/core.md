@@ -137,7 +137,7 @@ sequenceDiagram
 | Reason | Status | Meaning |
 |---|---|---|
 | `KEY_NOT_READ_ONLY` | `FAILED_PRECONDITION` | The key allows trading, withdrawal or transfer |
-| `KEY_INVALID` | `FAILED_PRECONDITION` | The source rejects the key |
+| `KEY_INVALID` | `FAILED_PRECONDITION` | The source rejects the key. Message for every source: "the source rejects the key: it may be mistyped, revoked or restricted to another IP address" (X1 D-32) |
 | `SOURCE_DISABLED` | `FAILED_PRECONDITION` | The source is not available |
 | `CREDENTIALS_INVALID` | `FAILED_PRECONDITION` | The connection is stopped: its key was rejected or is no longer read-only |
 | `CONNECTION_NOT_USABLE` | `FAILED_PRECONDITION` | `RegisterCard`: the connection is not a wallet, not `ACTIVE` or `DEGRADED`, or belongs to another owner (EC-113). From S2 |
@@ -313,7 +313,7 @@ See Common rules.
 
 - On the wire the response carries this object in its field `connection`. `GetConnection` and `ListConnections` return the same object.
 - `FAILED_PRECONDITION / KEY_NOT_READ_ONLY`: the key allows trading, withdrawal or transfer.
-- `FAILED_PRECONDITION / KEY_INVALID`: the source rejects the key.
+- `FAILED_PRECONDITION / KEY_INVALID`: the source rejects the key; the message names the possible causes: mistyped, revoked or restricted to another IP address (X1 D-32).
 - `ALREADY_EXISTS`: this exchange account or wallet address is already connected in the tenant.
 - `NOT_FOUND`: no source with this code.
 - `FAILED_PRECONDITION / SOURCE_DISABLED`: the source is not available.

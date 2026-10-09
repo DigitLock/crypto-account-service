@@ -36,6 +36,9 @@ const (
 	minAPISecret, maxAPISecret = 16, 4096
 )
 
+// msgKeyInvalid is the message of KEY_INVALID for every source (X1 D-32).
+const msgKeyInvalid = "the source rejects the key: it may be mistyped, revoked or restricted to another IP address"
+
 // connectionService implements ConnectionService. Methods of later stages answer UNIMPLEMENTED.
 type connectionService struct {
 	casv1.UnimplementedConnectionServiceServer
@@ -124,7 +127,7 @@ func (s *connectionService) errorStatus(ctx context.Context, op string, err erro
 	case errors.Is(err, registry.ErrSourceDisabled):
 		return withReason(codes.FailedPrecondition, "the source is not available", reasonSourceDisabled)
 	case errors.Is(err, registry.ErrKeyInvalid):
-		return withReason(codes.FailedPrecondition, "the source rejects the key", reasonKeyInvalid)
+		return withReason(codes.FailedPrecondition, msgKeyInvalid, reasonKeyInvalid)
 	case errors.As(err, &notReadOnly):
 		return withReason(codes.FailedPrecondition,
 			"the key is not read-only: "+strings.Join(notReadOnly.Permissions, ", "), reasonKeyNotReadOnly)
