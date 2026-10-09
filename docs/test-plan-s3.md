@@ -4,7 +4,7 @@
 - **Objects under test:** the EVM connector of `server` (streams `balances` and `logs`, finality, reorg guard, start checks, balance checkpoint), the shared connector test suite, the treasury connection, the reconciliation worker and `GetReconciliationReport`, the `casctl` commands `source set`, `source set-treasury` and `reconcile`, the migrations of S3, the CI of S3.
 - **Parents:** [SRS — EVM Connector](srs/evm-connector.md) UC-302, UC-303, UC-304, §2.1.1, §2.6, §3; [SRS — Card Spend](srs/card-spend.md) UC-4, §4 issue 4; [SRS — Core](srs/core.md) §2.1.1 (`GetReconciliationReport`, Connector contract), UC-102, UC-105 rows 8–10, §2.4, §3.2; [BRD](brd.md) BR-4, BR-12, G-4; ADR 2, 3, 5, 6, 11.
 - **Decisions:** `S3 D-n`, register of the S3 discovery (2026-10-07). The bare `D-n` of SRS — Card Spend are decisions of S2.
-- **Status:** Approved. Created in the discovery stage of S3 on 2026-10-07; completed stage by stage; run in st9a on 2026-10-08; signed off on 2026-10-08 (§6): 90 of 91 rows `Pass`, S3-T905 at the close.
+- **Status:** Approved. Created in the discovery stage of S3 on 2026-10-07; completed stage by stage; run in st9a on 2026-10-08; signed off on 2026-10-08 (§6): 90 of 91 rows `Pass`, S3-T905 at the close; S3-T905 `Pass` at the close on 2026-10-08, marked in the first commit of X1 (§5): 91 of 91 rows `Pass`.
 
 ## 1. Environment
 
@@ -179,7 +179,7 @@
 | S3-T902 | `go` workflow | Branch | Push | The new packages run in exactly one job; Anvil available in the jobs that need it; every job within 12 min | Handoff §3.4 | Pass |
 | S3-T903 | `proto` workflow with the new image | st2 commit | Push | Green against the new image | QA gate st2 | Pass |
 | S3-T904 | Documents match the code | st9 | Compare SRS — EVM Connector, SRS — Card Spend UC-4, SRS — Core, glossary, `docs/README.md` with the code | No mismatch | Package 9.2 | Pass |
-| S3-T905 | Tag guard by hand | Pull request merged | `git fetch`; HEAD = `origin/main`; `git merge-base --is-ancestor <last commit of the branch> HEAD`; `gh run watch --exit-status` for each run of the merge commit; then `git tag -a v0.4.0` | Every step passes before the tag; the tag is on the merge commit | Handoff §3.4; package decision 4 | — |
+| S3-T905 | Tag guard by hand | Pull request merged | `git fetch`; HEAD = `origin/main`; `git merge-base --is-ancestor <last commit of the branch> HEAD`; `gh run watch --exit-status` for each run of the merge commit; then `git tag -a v0.4.0` | Every step passes before the tag; the tag is on the merge commit | Handoff §3.4; package decision 4 | Pass |
 
 ### Coverage of the requirements
 
@@ -232,6 +232,7 @@ Batches run in the QA stage st9 in phase order; one line per batch and attempt. 
 | 2026-10-08 | Phase 8 | 1 | 6 | 0 | — | Owner, 2026-10-08: evidence of [Deployment Guide](deployment-guide.md) §13.6, not rerun |
 | 2026-10-08 | Phase 9 | 1 | 3 | 0 | — | T901 – T903: runs of the workflows on the pushes of the branch (`go` and `secrets` on `9db6c7f`, `proto` on `7fb2516`) and local checks. T904 and T905 not run: the owner's document stage, the close |
 | 2026-10-08 | Phase 9 | 2 | 1 | 0 | — | T904: the 14 mismatches found in st9a fixed in the documents in st9b (§7); T905 at the close |
+| 2026-10-08 | Phase 9 | 3 | 1 | 0 | — | T905 at the close, by the owner: HEAD = `origin/main` = `8e7785a`, the merge commit of PR #7 with two parents; `git merge-base --is-ancestor c7629d9 HEAD` passed; `gh run watch --exit-status` succeeded for `go`, `proto` and `secrets` of `8e7785a`; then the annotated tag `v0.4.0` on `8e7785a`; branch deleted last. Marked here in the first commit of X1: a row cannot be marked before the merge it checks |
 
 ## 6. Success criteria and sign-off
 

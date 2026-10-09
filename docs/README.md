@@ -17,10 +17,11 @@ Source of truth for CAS requirements and design. Markdown in the repository.
 | C4 | `c4/context.md`, `c4/container.md` | Context and container diagrams | Approved |
 | Glossary | `glossary.md` | Card, on-chain, exchange and CAS terms | Approved |
 | Roadmap | `roadmap.md` | Order of the milestones, versions, status, log | Living |
-| Test Plan — S1 | `test-plan-s1.md` | Test matrix of the contracts, run log, sign-off of S1 | Signed off 2026-10-04 |
+| Test Plan — S1 | `test-plan-s1.md` | Test matrix of the contracts, run log, sign-off of S1 | Approved |
 | Test Plan — C1 | `test-plan-c1.md` | Test matrix of Core, run log, sign-off of C1 | Approved |
 | Test Plan — S2 | `test-plan-s2.md` | Test matrix of `card-auth` and the card registry, run log, sign-off of S2 | Approved |
 | Test Plan — S3 | `test-plan-s3.md` | Test matrix of the EVM connector, the treasury connection and reconciliation, run log, sign-off of S3 | Approved |
+| Test Plan — X1 | `test-plan-x1.md` | Test matrix of the Binance connector: transport, rate limits, key check, balance snapshot, the shared connector test suite, the real-account check; run log, sign-off of X1 | Draft |
 | Deployment Guide | `deployment-guide.md` | How to deploy the contracts and run `card-auth` on Base Sepolia; test accounts, admin operations with `cast`; from S3, `server` with the EVM connector and reconciliation (§13) | Pre-approved, used in S2 st9b and S3 st8b |
 | Backlog | `backlog.md` | Postponed items | Living |
 

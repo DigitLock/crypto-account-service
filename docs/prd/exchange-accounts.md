@@ -8,7 +8,7 @@
 - **Link to architecture documentation:** [C4](../c4/), [ADR](../adr/README.md) 1–6, 13, [SRS — Core](../srs/core.md)
 - **Link to Rollout plan:** §4
 - **Other related documents:** SRS — Binance (`../srs/exchange-binance.md`)
-- **Document Version:** 1.0, 2026-10-04, approved
+- **Document Version:** 1.1, 2026-10-09: the test network in §2.5 and §4.3, by the discovery of X1 (X1 D-20). Version 1.0, 2026-10-04, approved
 
 ---
 
@@ -70,7 +70,7 @@
 | | The exchange reports key permissions. Binance does; where an exchange does not, a manual check is accepted. |
 | **Constraints** | Binance counts request weight per IP: all connections share one budget. |
 | | Binance trade history is per trading pair; deposits and withdrawals are read in windows below 90 days. |
-| | The Binance test network has no wallet, Earn or key-permission endpoints: those parts are tested on recorded fixtures and a read-only real account. |
+| | The Binance test network, and Binance Demo Mode, serve no wallet, Earn or key-permission endpoints (checked 2026-10-09): no connection can be created there. Those parts are tested on fixtures and on a read-only real account; the test network serves signing, the time offset and the spot balances in live tests. |
 | | Trades on pairs that were delisted may be unreachable through the API. |
 | | Kraken offers its spot test environment on request only: fixtures are the only test data. |
 | | Real balances never appear in the public demo. |
@@ -245,9 +245,9 @@ Platform-wide risks are in BRD §10. Module-specific additions:
 
 | Environment | Data | Purpose |
 |---|---|---|
-| Development (self-hosted home server) | Binance test network, fixtures | Development, automated tests |
+| Development (self-hosted home server) | Fixtures; the Binance test network in live tests only | Development, automated tests |
 | Production sync (VPS) | Real account, read-only key restricted to the VPS IP | Real balances for ET |
-| Public demo | Test network and fixtures only | Portfolio |
+| Public demo | Fixtures only for Binance: no connection to the test network is possible (X1 D-20) | Portfolio |
 
 ---
 
