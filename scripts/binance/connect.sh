@@ -10,6 +10,10 @@
 #        BINANCE_API_KEY and BINANCE_API_SECRET of the environment file.
 #     Prints connection_id, status, key fingerprint and permissions: what CreateConnection returns. ip_restricted is
 #     in the audit row of CONNECTION_CREATED only (X1 D-2); this script does not read it.
+#   scripts/binance/connect.sh balances <connection_id> [--amounts]
+#     AccountDataService/GetBalances with the token of the credentials file (X1 D-44). Prints as_of, stale and the count
+#     of balances per account type. With --amounts, a line saying the table is for a local comparison with the exchange
+#     UI and is not to be shared, then account type, asset, free and locked of each balance.
 #   scripts/binance/connect.sh delete <connection_id>
 #     ConnectionService/DeleteConnection with the token of the credentials file.
 #
@@ -82,7 +86,14 @@ file_value() {
 	printf '%s' "$value"
 }
 
-usage() { die "usage: $SCRIPT_NAME create | $SCRIPT_NAME delete <connection_id>"; }
+usage() {
+	die "usage: $SCRIPT_NAME create | $SCRIPT_NAME balances <connection_id> [--amounts] | $SCRIPT_NAME delete <connection_id>"
+}
+
+# check_id ID refuses an ID that is not a connection_id.
+check_id() {
+	[[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || die "the connection_id is not a UUID"
+}
 
 [ $# -ge 1 ] || usage
 command=$1
@@ -90,7 +101,11 @@ case "$command" in
 create) [ $# -eq 1 ] || usage ;;
 delete)
 	[ $# -eq 2 ] || usage
-	[[ "$2" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || die "the connection_id is not a UUID"
+	check_id "$2"
+	;;
+balances)
+	[ $# -eq 2 ] || { [ $# -eq 3 ] && [ "$3" = --amounts ]; } || usage
+	check_id "$2"
 	;;
 *) usage ;;
 esac
@@ -187,6 +202,23 @@ create)
 		grpc cas.v1.ConnectionService/CreateConnection) || failed CreateConnection
 	printf '%s' "$response" | jq -r '.connection |
 		"connection_id: \(.connectionId)\nstatus: \(.status)\nkey_fingerprint: \(.keyFingerprint)\npermissions: \(.permissions // [] | join(","))"'
+	;;
+balances)
+	[ -n "$token" ] || die "no token of $TENANT in the credentials file: run create first"
+	response=$(ID="$2" jq -cn '{connection_id: env.ID}' | grpc cas.v1.AccountDataService/GetBalances) || failed GetBalances
+	printf '%s' "$response" | jq -r --arg id "$2" '
+		"connection_id: \($id)",
+		"as_of: \(.connections[0].asOf // "none")",
+		"stale: \(.connections[0].stale // false)",
+		(["SPOT", "FUNDING", "EARN_FLEXIBLE", "EARN_LOCKED"][] as $type |
+			"\($type): \([.balances[]? | select(.accountType == "ACCOUNT_TYPE_" + $type)] | length)")'
+	if [ "${3:-}" = --amounts ]; then
+		echo "The table below is for a local comparison with the exchange UI only: do not copy, paste or share it (X1 D-44)."
+		printf '%s' "$response" | jq -r '
+			"account_type\tasset\tfree\tlocked",
+			([.balances[]? | [(.accountType | ltrimstr("ACCOUNT_TYPE_")), .asset, (.free // "0"), (.locked // "0")]] |
+				sort[] | @tsv)'
+	fi
 	;;
 delete)
 	[ -n "$token" ] || die "no token of $TENANT in the credentials file: run create first"

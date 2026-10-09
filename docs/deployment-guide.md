@@ -352,6 +352,7 @@ grpc "$CAS_PLATFORM_TOKEN" CardService/GetReconciliationReport '{"source":"base-
 - `CAS_PLATFORM_TOKEN`, `CAS_SERVICE_TOKEN`, the processor password: only in the credentials file, mode 600. `make casctl ARGS="token list"` shows key IDs only.
 - `DATABASE_URL` and `CASCTL_DATABASE_URL`: `.env` only.
 - Safe to paste: addresses, connection IDs, block numbers, transaction hashes, metric lines, the answers of `ListLedgerEntries` and `GetReconciliationReport`.
+- `make casctl ARGS="connection inspect <connection_id>"` (from X1, X1 D-45): status, permissions, `ip_restricted` of the audit row, ciphertext present yes or no, counts of snapshots, balance rows, cursors and ledger entries, audit rows per action, a `uid` in the audit details yes or no; for a deleted connection `not found` and the same counts. Never the account identity, a `uid`, an asset, an amount or the fingerprint: safe to paste. Used by the Binance real-account checks ([Binance Key Guide](binance-key-guide.md)).
 
 ### 13.5 Stop and cost
 

@@ -63,10 +63,12 @@ func restrictionsWithdrawals(t *testing.T, readOnly []httpfixture.Call) httpfixt
 	return c
 }
 
-// X1-T506 — Req: X1 D-19, X1 D-39, X1 D-40, X1 D-41. connect.sh against the running server and a fake Binance server,
+// X1-T506, X1-T603, X1-T608 — Req: X1 D-19, X1 D-39, X1 D-40, X1 D-41, X1 D-44. connect.sh against the running server and a fake Binance server,
 // with marker values of BINANCE_API_KEY and BINANCE_API_SECRET in a temporary environment file; buf and jq run
 // through shims that record their argv and their environment. A key that can withdraw is refused with the gRPC code and reason; the read-only key is connected ACTIVE; the
-// output holds connection_id, status, fingerprint and permissions; delete removes the connection. The markers appear
+// output holds connection_id, status, fingerprint and permissions; balances prints as_of, stale and the counts per
+// account type, and with --amounts the warning line and the table; delete removes the connection, after which
+// balances answers not_found. The markers appear
 // in no argv, no environment, no output and no file left in the temporary directories. Refusals: a CAS_GRPC_ADDR that is not local,
 // a missing key.
 func TestT506_ConnectScript(t *testing.T) {
@@ -157,10 +159,44 @@ func TestT506_ConnectScript(t *testing.T) {
 		t.Errorf("credentials file: %v %v, want mode 600", info, err)
 	}
 
+	// X1-T603: a snapshot of fictitious balances, written as the engine would; the engine of server does not run here.
+	if _, err := owner.Exec(ctx, `WITH s AS (INSERT INTO balance_snapshots (connection_id, taken_at)
+			VALUES ($1, '2026-10-09T12:00:00Z') RETURNING id)
+		INSERT INTO snapshot_balances (snapshot_id, account_type, native_asset, asset, free, locked)
+		SELECT s.id, v.t, v.a, v.a, v.f, v.l FROM s, (VALUES
+			('SPOT', 'BTC', 0.001, 0), ('SPOT', 'TSTX', 1, 0), ('FUNDING', 'USDT', 1.5, 1),
+			('EARN_FLEXIBLE', 'USDT', 12.5, 0), ('EARN_LOCKED', 'DOT', 0, 5)) AS v (t, a, f, l)`, id); err != nil {
+		t.Fatal(err)
+	}
+	counts := runConnect(t, r.out, env, "balances", id)
+	wantCounts := "connection_id: " + id + "\nas_of: 2026-10-09T12:00:00Z\nstale: true\nSPOT: 2\nFUNDING: 1\nEARN_FLEXIBLE: 1\nEARN_LOCKED: 1\n"
+	if counts.code != 0 || counts.out != wantCounts {
+		t.Errorf("balances: exit %d\n%s\nwant:\n%s", counts.code, counts.out, wantCounts)
+	}
+	if strings.Contains(counts.out, "0.001") || strings.Contains(counts.out, "TSTX") {
+		t.Errorf("balances without --amounts shows an amount or an asset:\n%s", counts.out)
+	}
+	amounts := runConnect(t, r.out, env, "balances", id, "--amounts")
+	for _, want := range []string{
+		"The table below is for a local comparison with the exchange UI only: do not copy, paste or share it (X1 D-44).\n" +
+			"account_type\tasset\tfree\tlocked\n",
+		"SPOT\tBTC\t0.001\t0\n", "FUNDING\tUSDT\t1.5\t1\n", "EARN_LOCKED\tDOT\t0\t5\n",
+	} {
+		if amounts.code != 0 || !strings.Contains(amounts.out, want) {
+			t.Errorf("balances --amounts: exit %d, want %q in:\n%s", amounts.code, want, amounts.out)
+		}
+	}
+
 	deleted := runConnect(t, r.out, env, "delete", id)
 	var n int
 	if err := owner.QueryRow(ctx, `SELECT count(*) FROM connections WHERE id = $1`, id).Scan(&n); err != nil || deleted.code != 0 || n != 0 {
 		t.Errorf("delete: exit %d, %d rows\n%s", deleted.code, n, deleted.out)
+	}
+
+	// X1-T608: after the deletion GetBalances answers NOT_FOUND.
+	gone := runConnect(t, r.out, env, "balances", id)
+	if gone.code == 0 || !strings.Contains(gone.out, "GetBalances failed: not_found: ") {
+		t.Errorf("balances after delete: exit %d\n%s", gone.code, gone.out)
 	}
 
 	notLocal := runConnect(t, r.out, with(without(env, "CAS_GRPC_ADDR"), "CAS_GRPC_ADDR=example.com:50053"), "create")

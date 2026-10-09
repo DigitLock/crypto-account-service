@@ -15,7 +15,7 @@ FROZEN_OPENAPI := api/openapi/frozen/card-auth.yaml
 
 .PHONY: build run casctl fmt vet test check secrets tools proto proto-check proto-freeze crs-proto crs-proto-check buf-version plugins \
 	migrate-tool migrate-url migrate-up migrate-down migrate-version sqlc-tool sqlc-generate sqlc-check \
-	bindings bindings-check openapi-check openapi-freeze fixtures-record binance-aliases binance-live fixtures-record-binance
+	bindings bindings-check openapi-check openapi-freeze fixtures-record binance-aliases binance-live binance-real fixtures-record-binance
 
 build:
 	go build -o bin/ ./cmd/...
@@ -59,6 +59,12 @@ binance-aliases:
 # balances; the spot step of the snapshot (X1-T416), printing the status and the count of SPOT balances. Nothing stored.
 binance-live:
 	go test -count=1 -v -run '^(TestT111_SignedAccountOnTestnet|TestT416_SpotStepOnTestnet)$$' ./internal/connector/binance -live
+
+# Dry run on the owner's real Binance account (X1 D-43; X1-T601, T605, T607) with BINANCE_API_KEY and BINANCE_API_SECRET of
+# .env and the production base URL: the key check and the snapshot once, nothing stored, no connection created. Prints
+# statuses, counts, field names and used-weight headers only: never a uid, an asset, an amount, the key or a URL.
+binance-real:
+	go test -count=1 -v -run '^TestT601_RealAccountDryRun$$' ./internal/connector/binance -real
 
 # Records the committed fixtures of testdata/fixtures/binance/ from the Binance test network, with the same variables:
 # time.json, account.json, error_bad_signature.json, error_bad_key.json. Only this target writes them; the /sapi
