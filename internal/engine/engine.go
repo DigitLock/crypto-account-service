@@ -70,7 +70,20 @@ type Reporter interface {
 	// LedgerGap: the gap of the balance checkpoint of a connection and asset, a plain decimal, after the commit of its
 	// page (S3 D-19).
 	LedgerGap(source, connection, asset, gap string)
+	// KeyCheckFinished: a periodic key check of the engine ended with result KeyCheckSuccess, KeyCheckInvalid or
+	// KeyCheckFailure (X1 D-50). The check of CreateConnection is not reported.
+	KeyCheckFinished(source, result string)
 }
+
+// Results of a periodic key check (X1 D-50): the label result of key_checks_total.
+const (
+	// KeyCheckSuccess: the key is accepted and read-only; permissions_checked_at moves.
+	KeyCheckSuccess = "success"
+	// KeyCheckInvalid: the key is rejected or no longer read-only; the connection goes to CREDENTIALS_INVALID.
+	KeyCheckInvalid = "invalid"
+	// KeyCheckFailure: a rate limit, the source unreachable or any other error; the status stays (EC-118).
+	KeyCheckFailure = "failure"
+)
 
 // Config are the settings of SRS — Core §3.1.
 type Config struct {
@@ -479,6 +492,7 @@ func (e *Engine) checkKey(ctx context.Context, r *run) outcome {
 	e.mu.Lock()
 	delete(e.keyChecks, r.id)
 	e.mu.Unlock()
+	e.reporter.KeyCheckFinished(r.source.Code, KeyCheckSuccess)
 	return next
 }
 
@@ -491,6 +505,7 @@ func (e *Engine) keyCheckFailed(ctx context.Context, r *run, err error) {
 	if isRateLimit {
 		e.reporter.RateLimited(r.source.Code)
 	}
+	e.reporter.KeyCheckFinished(r.source.Code, KeyCheckFailure)
 	e.mu.Lock()
 	b := e.keyChecks[r.id]
 	b.attempts++
@@ -542,6 +557,7 @@ func (e *Engine) invalidate(ctx context.Context, r *run, inv invalidation) outco
 	if err != nil {
 		e.logger.ErrorContext(ctx, "cannot store the result of a key check", "connection_id", r.id, "error", err)
 	}
+	e.reporter.KeyCheckFinished(r.source.Code, KeyCheckInvalid)
 	e.mu.Lock()
 	delete(e.keyChecks, r.id)
 	e.mu.Unlock()

@@ -18,6 +18,7 @@ type PromReporter struct {
 	connections *prometheus.GaugeVec
 	staleness   *prometheus.GaugeVec
 	gaps        *prometheus.GaugeVec
+	keyChecks   *prometheus.CounterVec
 }
 
 var _ Reporter = (*PromReporter)(nil)
@@ -53,8 +54,12 @@ func NewPromReporter(reg prometheus.Registerer) *PromReporter {
 		gaps: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "ledger_gap", Help: "Gap of the last balance checkpoint: balance at the source minus the ledger total.",
 		}, []string{"source", "connection", "asset"}),
+		keyChecks: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "key_checks_total", Help: "Periodic key checks of the engine by result: success, invalid or failure.",
+		}, []string{"source", "result"}),
 	}
-	reg.MustRegister(r.runs, r.inserted, r.skipped, r.unmapped, r.rejections, r.wait, r.connections, r.staleness, r.gaps)
+	reg.MustRegister(r.runs, r.inserted, r.skipped, r.unmapped, r.rejections, r.wait, r.connections, r.staleness, r.gaps,
+		r.keyChecks)
 	return r
 }
 
@@ -104,6 +109,11 @@ func (r *PromReporter) LedgerGap(source, connection, asset, gap string) {
 		return
 	}
 	r.gaps.WithLabelValues(source, connection, asset).Set(v)
+}
+
+// KeyCheckFinished implements Reporter.
+func (r *PromReporter) KeyCheckFinished(source, result string) {
+	r.keyChecks.WithLabelValues(source, result).Inc()
 }
 
 // Staleness implements Reporter.

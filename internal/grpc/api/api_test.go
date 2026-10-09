@@ -90,6 +90,7 @@ func (nopReporter) RateLimited(string)                       {}
 func (nopReporter) Connections(map[string]int)               {}
 func (nopReporter) Staleness(map[string]time.Duration)       {}
 func (nopReporter) LedgerGap(string, string, string, string) {}
+func (nopReporter) KeyCheckFinished(string, string)          {}
 
 // engine is an engine on the pool of cas_server with the clock, connectors and limiters of the tests.
 func (e *env) engine() *engine.Engine {

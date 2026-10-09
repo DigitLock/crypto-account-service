@@ -1041,13 +1041,14 @@ The last balance checkpoint per connection and native asset, with its gap (Conne
 #### 2.5.1 Metrics
 
 - Exposed in the Prometheus text format at `/metrics` on the health port.
-- Every metric of the table exists from C1, except `ledger_gap` from S3.
+- Every metric of the table exists from C1, except `ledger_gap` from S3 and `key_checks_total` from X1.
 
 | Service | Metric name | Value | Alert | Description | Requestor |
 |---|---|---|---|---|---|
 | server | `sync_runs_total{source,stream,result}` | — | Failure share > 20% for 15 min | Sync runs by outcome: `success` or `failure`. `stream` is the stream family | BR-3 |
 | server | `sync_staleness_seconds{source}` | < `stale_after` | Above `stale_after` | Now minus the oldest `last_success_at` among the streams the engine runs. A stream that never succeeded is not counted; 0 without streams | BR-3 |
 | server | `connections{status}` | — | Any `CREDENTIALS_INVALID` | Connections by state | BR-1 |
+| server | `key_checks_total{source,result}` | — | Any `invalid`, as the status change it mirrors | Periodic key checks of the engine (FR-119) by result: `success` (accepted and read-only), `invalid` (rejected or no longer read-only: `CREDENTIALS_INVALID`, EC-108, EC-116), `failure` (rate limit, unreachable or another error: status unchanged, EC-118). The check of `CreateConnection` is not counted. From X1 (X1 D-50) | BR-2 |
 | server | `ledger_entries_inserted_total{source}` | — | — | New entries | BR-4 |
 | server | `ledger_duplicates_skipped_total{source}` | — | — | Records skipped by the idempotency key | BR-4 |
 | server | `unmapped_assets_total{source}` | 0 | Any | Native codes without an alias | BR-4 |

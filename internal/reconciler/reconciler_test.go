@@ -354,6 +354,7 @@ func (nopReporter) RateLimited(string)                       {}
 func (nopReporter) Connections(map[string]int)               {}
 func (nopReporter) Staleness(map[string]time.Duration)       {}
 func (nopReporter) LedgerGap(string, string, string, string) {}
+func (nopReporter) KeyCheckFinished(string, string)          {}
 
 // eventually polls cond for up to 5 s.
 func eventually(t *testing.T, what string, cond func() bool) {

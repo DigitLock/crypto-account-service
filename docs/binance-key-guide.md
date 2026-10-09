@@ -28,9 +28,15 @@
 | 6 | Connect (X1-T602) | `scripts/binance/connect.sh create` | Tenant `x1-real` created or existing; the service token key ID; `connection_id`, status, key fingerprint, permissions |
 | 7 | Check the stored connection | `make casctl ARGS="connection inspect <connection_id>"` | Status, permissions, `ip_restricted`, ciphertext yes, counts of snapshots, balance rows, cursors, audit rows; `uid in audit details: no` |
 | 8 | Compare the balances with the exchange UI (X1-T603, T604) | `scripts/binance/connect.sh balances <connection_id>`; for the comparison only, `… --amounts` | `as_of`, `stale`, the count per account type; with `--amounts` a table for the local comparison: do not copy or share it |
-| 9 | Let `server` run at least 2 hours, then read its metrics (X1-T606) | `curl -s http://127.0.0.1:8091/metrics` | Expected: 8 balance runs, 4 periodic key checks, `binance_rate_limit_responses_total` 0, `rate_limit_rejections_total{source="binance"}` 0, `binance_used_weight` under the share of each budget |
+| 9 | Let `server` run at least 2 hours, then read its metrics (X1-T606) | `curl -s http://127.0.0.1:8091/metrics \| grep -E '^(binance_\|rate_limit_rejections_total\|sync_runs_total\|key_checks_total\|unmapped_assets_total)'` | Expected: `sync_runs_total{source="binance",stream="balances",result="success"}` at least 8, no `failure`; `key_checks_total{source="binance",result="success"}` at least 4, no `invalid` or `failure` (X1 D-50); `binance_rate_limit_responses_total` 0; `rate_limit_rejections_total{source="binance"}` 0; `binance_used_weight` under the share of each budget |
 | 10 | Delete the connection (X1-T608) | `scripts/binance/connect.sh delete <connection_id>`, then `connect.sh balances <connection_id>` and `make casctl ARGS="connection inspect <connection_id>"` | `deleted`; `not_found`; `not found`, 0 snapshots, balance rows and cursors, audit rows only, `uid in audit details: no` |
 | 11 | Delete the key on Binance and remove both lines from `.env` | — | — |
+
+The command of step 9, to copy:
+
+```sh
+curl -s http://127.0.0.1:8091/metrics | grep -E '^(binance_|rate_limit_rejections_total|sync_runs_total|key_checks_total|unmapped_assets_total)'
+```
 
 ## 3. What to record for the report
 

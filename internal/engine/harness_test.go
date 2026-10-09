@@ -123,6 +123,7 @@ type recorder struct {
 	connections map[string]int
 	staleness   map[string]time.Duration
 	gaps        map[string]string // source/connection/asset → gap
+	keyChecks   map[string]int    // source/result
 }
 
 func (r *recorder) RunFinished(source, family string, success bool) {
@@ -178,6 +179,26 @@ func (r *recorder) LedgerGap(source, connection, asset, gap string) {
 	}
 	r.gaps[source+"/"+connection+"/"+asset] = gap
 	r.mu.Unlock()
+}
+
+func (r *recorder) KeyCheckFinished(source, result string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.keyChecks == nil {
+		r.keyChecks = map[string]int{}
+	}
+	r.keyChecks[source+"/"+result]++
+}
+
+// keyChecksOf returns the reported key checks by source/result.
+func (r *recorder) keyChecksOf() map[string]int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]int{}
+	for k, v := range r.keyChecks {
+		out[k] = v
+	}
+	return out
 }
 
 func (r *recorder) gap(source, connection, asset string) (string, bool) {
