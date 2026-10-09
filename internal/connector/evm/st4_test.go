@@ -248,6 +248,8 @@ func (l orderLimiter) Reserve(_ context.Context, budget string, cost int) error 
 
 func (l orderLimiter) Pause(string, time.Duration) {}
 
+func (l orderLimiter) Observe(budget string, _ int) { l.log.add("observe " + budget) }
+
 // countingProxy records each request as "send <endpoint> <method>" before it forwards it to target.
 func countingProxy(t *testing.T, log *orderLog, endpoint, target string) string {
 	t.Helper()

@@ -1,7 +1,8 @@
 // Package binance is the connector of the Binance exchange (SRS — Binance). X1 st2 holds the transport: the
 // parsing of sources.config (config.go), the HMAC-SHA256 signature (sign.go), the HTTP client with the answers to
-// errors and the time offset (this file), the decimal amounts (decimal.go) and the metrics (metrics.go). The
-// limiter budgets, the key check and the balance snapshot come with st3, st4 and st5.
+// errors and the time offset (this file), the decimal amounts (decimal.go) and the metrics (metrics.go). X1 st3 adds
+// the budgets of the rate limiter (budgets.go) and their use by every request. The key check and the balance
+// snapshot come with st4 and st5.
 //
 // Read calls only (ADR-3): the connector has no call that needs a trade, withdrawal or transfer permission. The key
 // and the secret are vault.Secret values; they and any signature never appear in a log line, an error or a returned
@@ -37,10 +38,6 @@ const (
 	headerAPIKey = "X-MBX-APIKEY"
 )
 
-// BudgetAPI is the budget of every /api endpoint: one weight limit per IP (SRS — Binance §2.1.1 Rate limits). The
-// budgets of the /sapi endpoints come with st3.
-const BudgetAPI = "api"
-
 // endpoint is a row of the endpoint catalogue (SRS — Binance §2.1.2): the request, whether it is signed, and the
 // budget and weight it reserves in the limiter.
 type endpoint struct {
@@ -50,12 +47,26 @@ type endpoint struct {
 	weight       int
 }
 
-// Endpoints of st2. The others of X1 (apiRestrictions, get-funding-asset, the Earn positions) come with st4 and
-// st5.
+// Endpoints of X1 (SRS — Binance §2.1.2). The calls of the /sapi rows come with st4 (apiRestrictions) and st5 (the
+// snapshot).
 var (
 	endpointTime    = endpoint{method: http.MethodGet, path: "/api/v3/time", budget: BudgetAPI, weight: 1}
 	endpointAccount = endpoint{method: http.MethodGet, path: "/api/v3/account", signed: true, budget: BudgetAPI, weight: 20}
+
+	endpointRestrictions = sapiEndpoint(http.MethodGet, "/sapi/v1/account/apiRestrictions", 1)
+	endpointFunding      = sapiEndpoint(http.MethodPost, "/sapi/v1/asset/get-funding-asset", 1)
+	endpointFlexible     = sapiEndpoint(http.MethodGet, "/sapi/v1/simple-earn/flexible/position", 150)
+	endpointLocked       = sapiEndpoint(http.MethodGet, "/sapi/v1/simple-earn/locked/position", 150)
 )
+
+// endpoints are the rows of X1, the /api rows first. Budgets declares the budgets of these rows.
+var endpoints = []endpoint{endpointTime, endpointAccount, endpointRestrictions, endpointFunding, endpointFlexible, endpointLocked}
+
+// sapiEndpoint is a signed /sapi row with the budget of its own: the /sapi endpoints of X1 are IP-limited, each
+// with a limit of its own (SRS — Binance §2.1.1 Rate limits).
+func sapiEndpoint(method, path string, weight int) endpoint {
+	return endpoint{method: method, path: path, signed: true, budget: SAPIBudget(path), weight: weight}
+}
 
 // Error codes of Binance mapped by the table "Answers to errors" (SRS — Binance §2.1.1; X1 D-3).
 const (
@@ -119,32 +130,26 @@ func (c *Connector) clockOf(baseURL string) *clock {
 	return cl
 }
 
-// limits is the seam of the rate limiter (SRS — Binance §2.1.1 Rate limits; X1 D-7): reserve the weight before
-// every request, observe the used-weight headers after the answer, pause the budget on 429 or 418. st3 implements
-// it with the limiter of the source (Reserve, Observe, Pause); in st2 it is noLimits.
-type limits interface {
-	reserve(ctx context.Context, ep endpoint) error
-	observe(ep endpoint, header http.Header)
-	pause(ep endpoint, d time.Duration)
-}
-
-type noLimits struct{}
-
-func (noLimits) reserve(context.Context, endpoint) error { return nil }
-func (noLimits) observe(endpoint, http.Header)           {}
-func (noLimits) pause(endpoint, time.Duration)           {}
-
 // session is the calls of one run, one key check or one test: the configuration of the source, the key when the
-// calls are signed, and the limiter.
+// calls are signed, and the limiter of the source (SRS — Binance §2.1.1 Rate limits): every request reserves the
+// weight of its row first, every answer reports its used-weight header, 429 and 418 pause the budget of the row.
 type session struct {
 	c   *Connector
 	cfg Config
 	key *connector.ExchangeKey // nil: public calls only
-	lim limits
+	lim connector.Limiter
 }
 
-func (c *Connector) session(src connector.Source, key *connector.ExchangeKey) *session {
-	return &session{c: c, cfg: ParseConfig(src), key: key, lim: noLimits{}}
+// errNoLimiter: the caller gave no limiter. Every request reserves its weight first (FR-110).
+var errNoLimiter = errors.New("binance: no limiter given: every request reserves its weight in the limiter of the source")
+
+// session returns the session of a call of the engine or of CreateConnection, with the limiter it is given:
+// Connection.Limiter, or the limiter of CheckAccount.
+func (c *Connector) session(src connector.Source, key *connector.ExchangeKey, lim connector.Limiter) (*session, error) {
+	if lim == nil {
+		return nil, errNoLimiter
+	}
+	return &session{c: c, cfg: ParseConfig(src), key: key, lim: lim}, nil
 }
 
 // call sends one request of ep with its parameters and returns the body of a 2xx answer. A signed request reads
@@ -218,7 +223,7 @@ func (s *session) syncTime(ctx context.Context, force bool) error {
 // weight first, waits at most the call timeout and maps the answer by the table "Answers to errors". Neither the
 // query nor the URL goes into an error; the log line has the URL without the signature.
 func (s *session) send(ctx context.Context, ep endpoint, query string) ([]byte, error) {
-	if err := s.lim.reserve(ctx, ep); err != nil {
+	if err := s.lim.Reserve(ctx, ep.budget, ep.weight); err != nil {
 		return nil, err
 	}
 	target := s.cfg.BaseURL + ep.path
@@ -259,7 +264,7 @@ func (s *session) send(ctx context.Context, ep endpoint, query string) ([]byte, 
 		s.c.logger.Debug("binance request", "method", ep.method, "url", logged, "status", resp.StatusCode, "error", "body not read")
 		return nil, fmt.Errorf("binance: %s %s: HTTP %d, the body was not read: %w", ep.method, ep.path, resp.StatusCode, connector.ErrUnreachable)
 	}
-	s.lim.observe(ep, resp.Header)
+	s.observe(ep, resp.Header)
 	s.c.logger.Debug("binance request", "method", ep.method, "url", logged, "status", resp.StatusCode,
 		"ms", s.c.now().Sub(start).Milliseconds())
 	if len(body) > maxBody {
@@ -271,6 +276,22 @@ func (s *session) send(ctx context.Context, ep endpoint, query string) ([]byte, 
 	return body, nil
 }
 
+// observe reports the used-weight header of an answer to the limiter and to binance_used_weight (X1 D-7, X1 D-16):
+// X-MBX-USED-WEIGHT-1M for the /api budget, X-SAPI-USED-IP-WEIGHT-1M for the budget of a /sapi endpoint. A missing
+// or malformed header reports nothing.
+func (s *session) observe(ep endpoint, header http.Header) {
+	name := headerUsedWeightAPI
+	if ep.budget != BudgetAPI {
+		name = headerUsedWeightSAPIIP
+	}
+	used, err := strconv.Atoi(strings.TrimSpace(header.Get(name)))
+	if err != nil || used < 0 {
+		return
+	}
+	s.lim.Observe(ep.budget, used)
+	s.c.metrics.UsedWeight(ep.budget, used)
+}
+
 // answer maps an answer by the table "Answers to errors" (SRS — Binance §2.1.1; X1 D-3); nil for 2xx.
 func (s *session) answer(ep endpoint, status int, header http.Header, body []byte) error {
 	where := fmt.Sprintf("binance: %s %s: HTTP %d", ep.method, ep.path, status)
@@ -280,7 +301,8 @@ func (s *session) answer(ep endpoint, status int, header http.Header, body []byt
 		if !ok {
 			pause = DefaultRateLimitPause
 		}
-		s.lim.pause(ep, pause)
+		s.lim.Pause(ep.budget, pause)
+		s.c.metrics.RateLimitResponse(status)
 		return fmt.Errorf("%s: %w", where, &connector.RateLimitError{Budget: ep.budget, Pause: pause})
 	case status >= 500:
 		return fmt.Errorf("%s: %w", where, connector.ErrUnreachable)

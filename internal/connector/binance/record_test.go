@@ -124,8 +124,8 @@ func TestT110_RecordSignedAccount(t *testing.T) {
 	if a := parseAccount(t, body); a.UID == nil || a.UID.String() != strconv.Itoa(realUID) {
 		t.Fatalf("the connector must get the answer as received, uid included")
 	}
-	bad := h.c.session(source(`{"base_url": "`+upstream.URL+`"}`), &connector.ExchangeKey{
-		APIKey: vault.NewSecret("fictitious" + randomHex(t, 16)), APISecret: key.APISecret})
+	bad := mustSession(t, h.c, source(`{"base_url": "`+upstream.URL+`"}`), &connector.ExchangeKey{
+		APIKey: vault.NewSecret("fictitious" + randomHex(t, 16)), APISecret: key.APISecret}, h.lim)
 	if _, err := bad.call(context.Background(), endpointAccount, param{"omitZeroBalances", "true"}); !errors.Is(err, connector.ErrKeyRejected) {
 		t.Fatalf("fictitious key: %v; want key rejected", err)
 	}
@@ -253,7 +253,7 @@ func TestT110_RecordFromTestnet(t *testing.T) {
 		rec := &httpfixture.Recorder{}
 		conn := New(nil, nil) // a new connector per file: each file starts with its own read of the time
 		conn.client.Transport = rec
-		if err := c.run(conn.session(src, c.key)); err != nil {
+		if err := c.run(mustSession(t, conn, src, c.key, realLimiter(t, conn, src))); err != nil {
 			t.Fatalf("%s: %v", c.file, err)
 		}
 		f, err := rec.File(c.description)

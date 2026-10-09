@@ -1,7 +1,8 @@
 // Package limiter is the rate limiter of one source (SRS — Core §2.1.1 Connector contract, FR-110).
 // The engine builds one per source from the budgets its connector declares. A budget holds a number of
 // cost units per time window; a reservation that does not fit waits for the next window; a pause the
-// source demands blocks its budget until it ends while the other budgets go on. Time and waiting come
+// source demands blocks its budget until it ends while the other budgets go on; the units the source reports as
+// used raise the count of the current window (Observe, X1 D-7). Time and waiting come
 // from an injected clock.
 package limiter
 
@@ -137,6 +138,23 @@ func (l *Limiter) Pause(name string, d time.Duration) {
 	}
 }
 
+// Observe makes a budget count at least used units in its current window: the units the source reports as used
+// (X1 D-7). When no window runs, a window starts now with used units. A running pause stays. An unknown budget or a
+// negative used is ignored.
+func (l *Limiter) Observe(name string, used int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.budgets[name]
+	if !ok || used < 0 {
+		return
+	}
+	now := l.clock.Now()
+	if b.windowStart.IsZero() || !now.Before(b.windowStart.Add(b.window)) {
+		b.windowStart, b.used = now, 0
+	}
+	b.used = max(b.used, used)
+}
+
 // ErrNoBudget: a bounded reservation found no budget within its wait.
 var ErrNoBudget = errors.New("limiter: no budget within the wait")
 
@@ -161,6 +179,8 @@ func (b boundedLimiter) Reserve(ctx context.Context, budget string, cost int) er
 }
 
 func (b boundedLimiter) Pause(budget string, d time.Duration) { b.l.Pause(budget, d) }
+
+func (b boundedLimiter) Observe(budget string, used int) { b.l.Observe(budget, used) }
 
 // Set holds one limiter per source for the whole process (FR-110). The engine and the account check of
 // CreateConnection draw on the same limiters.

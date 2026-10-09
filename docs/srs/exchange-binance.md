@@ -116,9 +116,11 @@ X1 D-3. Binance error codes as of 2026-10-09.
 
 - The limits are constants of the connector with the values of this table, re-checked before each milestone; `Budgets` makes no call (X1 D-6).
 - The limiter keeps one budget per limit: `/api` per IP, each `/sapi` endpoint per IP. A UID-limited endpoint needs a budget per account. X1 has none: its four `/sapi` endpoints are IP-limited; X2 decides (backlog item 2).
-- Before a request its weight is reserved; after the response the used weight of the header is reported to the limiter (`Limiter.Observe`, SRS — Core Connector contract): the budget counts at least Binance's count (X1 D-7).
+- Budget names (X1 D-25): `api` for every `/api` endpoint; `sapi:` + path for each `/sapi` endpoint, e.g. `sapi:/sapi/v1/account/apiRestrictions`. Each budget has `floor(limit × budget_share)` units per minute, at least 1: with 0.5, `api` 3000 and each `sapi:` budget 6000.
+- Before a request the weight of its row of §2.1.2 is reserved in its budget, the time call included; after the response the used weight of the header is reported to the limiter (`Limiter.Observe`, SRS — Core Connector contract): the budget counts at least Binance's count (X1 D-7).
+- Headers to budgets: `X-MBX-USED-WEIGHT-1M` of an `/api` answer → `api`; `X-SAPI-USED-IP-WEIGHT-1M` of a `/sapi` answer → the budget of that endpoint. `X-SAPI-USED-UID-WEIGHT-1M` is not read in X1: no UID-limited endpoint. A missing or malformed header reports nothing.
 - The connector uses at most `budget_share` of each limit: the IP is shared with other services.
-- `429` or `418`: every request of that budget stops for `Retry-After` seconds; 60 s without the header (X1 D-3).
+- `429` or `418`: every request of that budget stops for `Retry-After` seconds; 60 s without the header (X1 D-3). The connector pauses the budget before it returns `RateLimitError` and sends no further request of that budget in the call.
 - An HTTP `403` is a WAF rule; it is handled by "Answers to errors".
 - EC-205 and EC-221 apply from X1, as FR-213 and FR-214: the limiter and the time offset exist before the first live call.
 

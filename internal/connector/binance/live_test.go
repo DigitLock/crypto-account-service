@@ -17,7 +17,8 @@ func TestT111_SignedAccountOnTestnet(t *testing.T) {
 	base, key := testnet(t)
 	reg := prometheus.NewRegistry()
 	c := New(NewPromMetrics(reg), nil)
-	s := c.session(source(`{"base_url": "`+base+`"}`), key)
+	src := source(`{"base_url": "` + base + `"}`)
+	s := mustSession(t, c, src, key, realLimiter(t, c, src))
 
 	body, err := s.call(context.Background(), endpointAccount, param{"omitZeroBalances", "true"})
 	if err != nil {

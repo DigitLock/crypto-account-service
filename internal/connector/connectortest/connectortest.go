@@ -64,16 +64,17 @@ func Run(t *testing.T, h Harness) {
 	t.Run("limit handling", func(t *testing.T) { limits(t, h) })
 }
 
-// Limiter records the reservations and pauses of a run; it never waits.
+// Limiter records the reservations, pauses and observations of a run; it never waits.
 type Limiter struct {
 	mu       sync.Mutex
 	reserved map[string]int
 	paused   map[string]time.Duration
+	observed map[string][]int
 }
 
 // NewLimiter returns an empty Limiter.
 func NewLimiter() *Limiter {
-	return &Limiter{reserved: map[string]int{}, paused: map[string]time.Duration{}}
+	return &Limiter{reserved: map[string]int{}, paused: map[string]time.Duration{}, observed: map[string][]int{}}
 }
 
 // Reserve implements connector.Limiter.
@@ -89,6 +90,24 @@ func (l *Limiter) Pause(budget string, d time.Duration) {
 	l.mu.Lock()
 	l.paused[budget] = d
 	l.mu.Unlock()
+}
+
+// Observe implements connector.Limiter.
+func (l *Limiter) Observe(budget string, used int) {
+	l.mu.Lock()
+	l.observed[budget] = append(l.observed[budget], used)
+	l.mu.Unlock()
+}
+
+// Observed returns the observed used units by budget, in order.
+func (l *Limiter) Observed() map[string][]int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[string][]int, len(l.observed))
+	for k, v := range l.observed {
+		out[k] = append([]int(nil), v...)
+	}
+	return out
 }
 
 // Paused returns the pauses by budget.

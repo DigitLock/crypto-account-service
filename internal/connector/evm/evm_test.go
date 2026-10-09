@@ -86,3 +86,5 @@ func (l failingLimiter) Reserve(context.Context, string, int) error {
 }
 
 func (l failingLimiter) Pause(string, time.Duration) { l.t.Error("a pause of the limiter") }
+
+func (l failingLimiter) Observe(string, int) { l.t.Error("an observation of the limiter") }

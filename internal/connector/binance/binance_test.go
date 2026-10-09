@@ -177,8 +177,8 @@ func TestT104_TimeOffset(t *testing.T) {
 	if got := srv.Received(); len(got) != 2 || got[0].Path != "/api/v3/time" || srv.Used(BudgetAPI) != 21 {
 		t.Fatalf("requests %v, weight %d; want the time first, then the account: 1 + 20", got, srv.Used(BudgetAPI))
 	}
-	if got := h.lim.reserved; !reflect.DeepEqual(got, []string{"/api/v3/time", "/api/v3/account"}) {
-		t.Errorf("reserved = %v; each request reserves first", got)
+	if got := h.lim.log(); !reflect.DeepEqual(got, []string{"reserve api 1", "observe api 1", "reserve api 20"}) {
+		t.Errorf("limiter = %v; each request reserves first", got)
 	}
 	if got := gauge(t, reg, "binance_time_offset_ms"); got != -ahead {
 		t.Errorf("binance_time_offset_ms = %v, want %d", got, -ahead)
@@ -214,7 +214,7 @@ func TestT104_TimeOffset(t *testing.T) {
 			timeCall(h.clock.now().UnixMilli() - 200),
 			accountCall(200, accountOK),
 		}}, weights)
-		s := h.c.session(source(`{"base_url": "`+other.URL()+`"}`), testKey(t))
+		s := mustSession(t, h.c, source(`{"base_url": "`+other.URL()+`"}`), testKey(t), h.lim)
 		if _, err := s.call(ctx, endpointAccount, param{"omitZeroBalances", "true"}); err != nil {
 			t.Fatal(err)
 		}
@@ -386,7 +386,7 @@ func TestT106_AnswersToErrors(t *testing.T) {
 		_, err := h.s.call(ctx, endpointTime)
 		checkError(t, "redirect", err, nil)
 	})
-	t.Run("rate limit answers pause through the seam", func(t *testing.T) {
+	t.Run("rate limit answers pause the budget in the limiter", func(t *testing.T) {
 		srv := httpfixture.Serve(t, httpfixture.File{Description: "429 and 418", Calls: []httpfixture.Call{
 			{Method: "GET", Path: "/api/v3/time", HTTPStatus: 429, Headers: map[string]string{"Retry-After": "30"}},
 			{Method: "GET", Path: "/api/v3/time", HTTPStatus: 418},

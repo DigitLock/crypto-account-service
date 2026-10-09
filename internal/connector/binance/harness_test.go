@@ -6,22 +6,27 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/DigitLock/crypto-account-service/internal/connector"
 	"github.com/DigitLock/crypto-account-service/internal/httpfixture"
+	"github.com/DigitLock/crypto-account-service/internal/limiter"
 	"github.com/DigitLock/crypto-account-service/internal/vault"
 )
 
-// weights is the weight table of the endpoints of st2 for the fake server (SRS — Binance §2.1.2).
-var weights = httpfixture.Weights{
-	"GET /api/v3/time":    {Budget: BudgetAPI, Weight: 1},
-	"GET /api/v3/account": {Budget: BudgetAPI, Weight: 20},
-}
+// weights is the weight table of the fake server, taken from the endpoint rows of the connector (SRS — Binance
+// §2.1.2).
+var weights = func() httpfixture.Weights {
+	w := httpfixture.Weights{}
+	for _, ep := range endpoints {
+		w[ep.method+" "+ep.path] = httpfixture.Weight{Budget: ep.budget, Weight: ep.weight}
+	}
+	return w
+}()
 
 // t0 is the local clock of a test at its start: a fixed point, so the time offset is exact.
 var t0 = time.UnixMilli(1790000000000)
@@ -66,32 +71,71 @@ func (c *fakeClock) advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-// recordingLimits records the calls of the limiter seam.
-type recordingLimits struct {
-	mu       sync.Mutex
-	reserved []string
-	paused   []time.Duration
+// recLimiter is a connector.Limiter that records its calls in order and never waits. sent, when set, tells how
+// many requests the fake server received: a reservation records it, so a test sees that it came before its request.
+type recLimiter struct {
+	mu     sync.Mutex
+	sent   func() int
+	events []string
+	paused []time.Duration
 }
 
-func (l *recordingLimits) reserve(_ context.Context, ep endpoint) error {
+func (l *recLimiter) add(event string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.reserved = append(l.reserved, ep.path)
+	l.events = append(l.events, event)
+}
+
+func (l *recLimiter) Reserve(_ context.Context, budget string, cost int) error {
+	event := fmt.Sprintf("reserve %s %d", budget, cost)
+	if l.sent != nil {
+		event += fmt.Sprintf(" after %d requests", l.sent())
+	}
+	l.add(event)
 	return nil
 }
 
-func (l *recordingLimits) observe(endpoint, http.Header) {}
+func (l *recLimiter) Observe(budget string, used int) {
+	l.add(fmt.Sprintf("observe %s %d", budget, used))
+}
 
-func (l *recordingLimits) pause(_ endpoint, d time.Duration) {
+func (l *recLimiter) Pause(budget string, d time.Duration) {
+	l.add(fmt.Sprintf("pause %s %v", budget, d))
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.paused = append(l.paused, d)
 }
 
-func (l *recordingLimits) pauses() []time.Duration {
+func (l *recLimiter) log() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.events...)
+}
+
+func (l *recLimiter) pauses() []time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]time.Duration(nil), l.paused...)
+}
+
+// realLimiter is the limiter of internal/limiter with the budgets of the connector for src, on the system clock.
+func realLimiter(t *testing.T, c *Connector, src connector.Source) *limiter.Limiter {
+	t.Helper()
+	l, err := limiter.New(c.Budgets(src), limiter.SystemClock{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+// mustSession is c.session that fails the test on an error.
+func mustSession(t *testing.T, c *Connector, src connector.Source, key *connector.ExchangeKey, lim connector.Limiter) *session {
+	t.Helper()
+	s, err := c.session(src, key, lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 // syncBuffer is a log sink that handlers of several goroutines may write.
@@ -118,7 +162,7 @@ type harness struct {
 	s     *session
 	clock *fakeClock
 	log   *syncBuffer
-	lim   *recordingLimits
+	lim   *recLimiter
 }
 
 func newHarness(t *testing.T, baseURL string, metrics Metrics) *harness {
@@ -127,9 +171,8 @@ func newHarness(t *testing.T, baseURL string, metrics Metrics) *harness {
 	c := New(metrics, slog.New(slog.NewJSONHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	clock := &fakeClock{t: t0}
 	c.now = clock.now
-	lim := &recordingLimits{}
-	s := c.session(source(`{"base_url": "`+baseURL+`"}`), testKey(t))
-	s.lim = lim
+	lim := &recLimiter{}
+	s := mustSession(t, c, source(`{"base_url": "`+baseURL+`"}`), testKey(t), lim)
 	return &harness{c: c, s: s, clock: clock, log: log, lim: lim}
 }
 

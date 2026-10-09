@@ -116,6 +116,9 @@ type Limiter interface {
 	Reserve(ctx context.Context, budget string, cost int) error
 	// Pause blocks a budget for the pause the source demands; the other budgets go on.
 	Pause(budget string, d time.Duration)
+	// Observe reports the units the source counts as used in a budget, as a header of its answer tells: the budget
+	// then counts at least used units in its current window (X1 D-7).
+	Observe(budget string, used int)
 }
 
 // Connection is what the page and snapshot calls get.
