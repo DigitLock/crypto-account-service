@@ -35,3 +35,34 @@ func TestT111_SignedAccountOnTestnet(t *testing.T) {
 		t.Errorf("binance_time_offset_ms = %v, want the offset read", got)
 	}
 }
+
+// X1-T416 — Req: package st5 exit; X1 D-20, X1 D-36. The spot step of the snapshot on the test network: the signed
+// account call and the zero-row rule; nothing stored; funding and Earn not called (the test network serves no /sapi).
+// Only make binance-live runs it (-live); the owner runs it. It prints the status and the count of SPOT balances:
+// never an asset, an amount, the uid, the key or a URL.
+func TestT416_SpotStepOnTestnet(t *testing.T) {
+	if !*live {
+		t.Skip("live test on the Binance test network: make binance-live")
+	}
+	base, key := testnet(t)
+	c := New(nil, nil)
+	src := source(`{"base_url": "` + base + `"}`)
+	s := mustSession(t, c, src, key, realLimiter(t, c, src))
+
+	spot, err := s.spot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := balances{}
+	for _, sb := range spot {
+		if err := b.add(AccountSpot, sb.asset, sb.free, sb.locked); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := b.list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("status 200")
+	t.Logf("SPOT balances: %d", len(list))
+}

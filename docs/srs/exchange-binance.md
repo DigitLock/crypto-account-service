@@ -217,13 +217,16 @@ See §2.1.1; four requests, some paged.
 |---|---|---|
 | 1 | Spot: `account` with `omitZeroBalances=true`, balances with `free` or `locked` above 0 | Account type `SPOT` |
 | 2 | Funding: `get-funding-asset`. `locked` = `locked` + `freeze` + `withdrawing` | Account type `FUNDING` |
-| 3 | Earn flexible: all pages of `flexible/position`; `totalAmount` → `free` | Account type `EARN_FLEXIBLE` |
+| 3 | Earn flexible: all pages of `flexible/position`; `totalAmount` → `free`, summed per asset | Account type `EARN_FLEXIBLE` |
 | 4 | Earn locked: all pages of `locked/position`; `amount` → `locked`, summed per asset | Account type `EARN_LOCKED` |
 | 5 | Drop spot balances that are wrapper assets: code `LD` + an asset that has a flexible position in step 3, and that is not a real asset in `asset_aliases` | No double counting |
 | 6 | Resolve native codes to canonical assets | — |
 | 7 | All four sources succeeded → write one snapshot. Otherwise write nothing and report the failure. An asset absent from the snapshot has a zero balance (SRS — Core §2.1.3) | — |
 
 - The time of the snapshot is the server time (local clock with the offset) at the first request of the run (X1 D-9).
+- Zero rows (X1 D-35): a balance whose `free` and `locked` are both 0 after the sums is not returned, in every account type.
+- Paging of steps 3 and 4: `size` 100, `current` from 1, until the rows read reach `total` or a page has fewer than 100 rows. More than 100 pages of one endpoint fail the snapshot.
+- Amounts are summed exactly as decimals. An amount that is not a plain decimal, or is negative, fails the snapshot (SRS — Core EC-117); the error quotes no amount.
 - Flexible `collateralAmount` and locked `redeemingAmt`: whether they are part of `totalAmount` and `amount` is verified on the real account in X1 when such a position exists (X1 D-9).
 
 ##### Preconditions

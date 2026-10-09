@@ -2,7 +2,7 @@
 // parsing of sources.config (config.go), the HMAC-SHA256 signature (sign.go), the HTTP client with the answers to
 // errors and the time offset (this file), the decimal amounts (decimal.go) and the metrics (metrics.go). X1 st3 adds
 // the budgets of the rate limiter (budgets.go) and their use by every request. X1 st4 adds the key check of UC-201
-// and the rest of connector.Connector (account.go). The balance snapshot comes with st5.
+// and the rest of connector.Connector (account.go). X1 st5 adds the balance stream and its snapshot (snapshot.go).
 //
 // Read calls only (ADR-3): the connector has no call that needs a trade, withdrawal or transfer permission. The key
 // and the secret are vault.Secret values; they and any signature never appear in a log line, an error or a returned

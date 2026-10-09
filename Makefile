@@ -54,10 +54,11 @@ fixtures-record:
 binance-aliases:
 	scripts/binance/gen-aliases.sh
 
-# Live test on the Binance test network with BINANCE_TESTNET_API_KEY and BINANCE_TESTNET_API_SECRET of .env
-# (BINANCE_TESTNET_URL optional): a signed account call. Prints the status, the time offset and the count of balances.
+# Live tests on the Binance test network with BINANCE_TESTNET_API_KEY and BINANCE_TESTNET_API_SECRET of .env
+# (BINANCE_TESTNET_URL optional): a signed account call (X1-T111), printing the status, the time offset and the count of
+# balances; the spot step of the snapshot (X1-T416), printing the status and the count of SPOT balances. Nothing stored.
 binance-live:
-	go test -count=1 -v -run '^TestT111_SignedAccountOnTestnet$$' ./internal/connector/binance -live
+	go test -count=1 -v -run '^(TestT111_SignedAccountOnTestnet|TestT416_SpotStepOnTestnet)$$' ./internal/connector/binance -live
 
 # Records the committed fixtures of testdata/fixtures/binance/ from the Binance test network, with the same variables:
 # time.json, account.json, error_bad_signature.json, error_bad_key.json. Only this target writes them; the /sapi

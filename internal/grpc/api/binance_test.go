@@ -139,9 +139,8 @@ func assertNoSecretLogged(t *testing.T, e *env, k exchangeKey) {
 }
 
 // X1-T301 — Req: UC-201, FR-202; Core UC-101; §3.2 Performance. A read-only key: ACTIVE, EXCHANGE, ["READ"],
-// fingerprint; external_account the fictitious uid; audit CONNECTION_CREATED; reservations 1 in the budget of
-// apiRestrictions and 20 in api besides the time call. No cursor in st4: the balance stream is declared with st5
-// (X1 D-33).
+// fingerprint; external_account the fictitious uid; the cursor balances due at once (st5, X1 D-33); audit
+// CONNECTION_CREATED; reservations 1 in the budget of apiRestrictions and 20 in api besides the time call.
 func TestT301_ReadOnlyKey(t *testing.T) {
 	e := setup(t)
 	resp, who, k, err := e.createOnBinance(t, "tenant-a", binanceFixture(t, "key_read_only.json"))
@@ -164,8 +163,13 @@ func TestT301_ReadOnlyKey(t *testing.T) {
 	if account != fixtureUID || len(enc) == 0 {
 		t.Errorf("external_account %s, ciphertext %d bytes; want %s and a ciphertext", account, len(enc), fixtureUID)
 	}
-	if n := count(t, e, `SELECT count(*) FROM sync_cursors WHERE connection_id = $1`, id); n != 0 {
-		t.Errorf("%d cursors; the balance stream comes with st5", n)
+	var cursor string
+	if err := e.owner.QueryRow(ctx, `SELECT string_agg(stream || ' ' || mode || ' ' || cursor::text || ' ' || (next_run_at = $2)::text, ',')
+		FROM sync_cursors WHERE connection_id = $1`, id, testNow).Scan(&cursor); err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "balances INCREMENTAL {} true" {
+		t.Errorf("cursors = %q, want balances INCREMENTAL {} due at once", cursor)
 	}
 	assertAudit(t, e, id, who.credentialID, map[string]any{
 		"source": "binance", "owner_ref": "owner-1", "permissions": []any{"READ"}, "ip_restricted": false,

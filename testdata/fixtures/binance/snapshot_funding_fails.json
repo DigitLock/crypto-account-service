@@ -1,0 +1,80 @@
+{
+  "description": "Balance snapshot where get-funding-asset answers 429 with Retry-After 30: no snapshot. /sapi answers written by hand from the examples of the Binance documentation, fictitious assets and amounts; the account answer fictitious and small (uid 100000001); the time from the recorded answer of the test network",
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/v3/time",
+      "query": "",
+      "http_status": 200,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "23"
+      },
+      "body": {
+        "serverTime": 1791547304746
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v3/account",
+      "query": "omitZeroBalances=true&recvWindow=5000",
+      "http_status": 200,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "21"
+      },
+      "body": {
+        "makerCommission": 10,
+        "takerCommission": 10,
+        "canTrade": true,
+        "canWithdraw": true,
+        "canDeposit": true,
+        "updateTime": 1790000000000,
+        "accountType": "SPOT",
+        "balances": [
+          {
+            "asset": "BTC",
+            "free": "0.00100000",
+            "locked": "0.00000000"
+          },
+          {
+            "asset": "USDT",
+            "free": "20.00000000",
+            "locked": "1.50000000"
+          },
+          {
+            "asset": "LDUSDT",
+            "free": "12.50000000",
+            "locked": "0.00000000"
+          },
+          {
+            "asset": "LDO",
+            "free": "3.50000000",
+            "locked": "0.00000000"
+          },
+          {
+            "asset": "TSTX",
+            "free": "1.00000000",
+            "locked": "0.00000000"
+          },
+          {
+            "asset": "ETH",
+            "free": "0.00000000",
+            "locked": "0.00000000"
+          }
+        ],
+        "permissions": [
+          "SPOT"
+        ],
+        "uid": 100000001
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/sapi/v1/asset/get-funding-asset",
+      "query": "recvWindow=5000",
+      "http_status": 429,
+      "headers": {
+        "Retry-After": "30"
+      }
+    }
+  ]
+}

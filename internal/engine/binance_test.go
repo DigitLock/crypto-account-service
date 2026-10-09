@@ -70,6 +70,13 @@ func (h *harness) createBinance(t *testing.T) (uuid.UUID, key, error) {
 	return c.ID, k, err
 }
 
+// parkBalances moves the balance stream of a connection far into the future: the rows of the key check do not run
+// it.
+func (h *harness) parkBalances(t *testing.T, id uuid.UUID) {
+	t.Helper()
+	h.exec(t, `UPDATE sync_cursors SET next_run_at = next_run_at + interval '100 years' WHERE connection_id = $1`, id)
+}
+
 // invalidAudits counts the CREDENTIALS_INVALID rows of a connection.
 func (h *harness) invalidAudits(t *testing.T, id uuid.UUID) int {
 	t.Helper()
@@ -110,6 +117,7 @@ func TestT309_PeriodicCheckStopsAKey(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			h.parkBalances(t, id)
 			e := h.engine(h.server)
 			h.pass(t, e) // the check is not due yet
 			if srv.Served() != 3 {
@@ -166,6 +174,7 @@ func TestT310_PeriodicCheckCannotReachBinance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.parkBalances(t, id)
 	e := h.engine(h.server)
 	start := testNow.Add(24 * time.Hour)
 
@@ -250,6 +259,7 @@ func TestT210_OneLimiterPerSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.parkBalances(t, a)
 	h.clock.Set(testNow.Add(24 * time.Hour)) // a new window of every budget; the check of a is due
 	e := h.engine(h.server)
 	passed := make(chan error, 1)

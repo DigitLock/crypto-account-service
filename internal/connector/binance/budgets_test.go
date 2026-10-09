@@ -562,14 +562,19 @@ func TestT109_ReplayCommittedFixtures(t *testing.T) {
 			}
 			return nil
 		},
-		"error_bad_signature.json":  keyRejected,
-		"error_bad_key.json":        keyRejected,
-		"key_read_only.json":        checkAccount(false, nil),
-		"key_ip_restricted.json":    checkAccount(true, nil),
-		"key_not_read_only.json":    checkAccount(false, &connector.KeyNotReadOnlyError{Permissions: []string{"enableWithdrawals"}}),
-		"key_reading_disabled.json": checkAccount(false, connector.ErrKeyRejected),
-		"key_rejected.json":         checkAccount(false, connector.ErrKeyRejected),
-		"key_account_rejected.json": checkAccount(false, connector.ErrKeyRejected),
+		"error_bad_signature.json":     keyRejected,
+		"error_bad_key.json":           keyRejected,
+		"key_read_only.json":           checkAccount(false, nil),
+		"key_ip_restricted.json":       checkAccount(true, nil),
+		"key_not_read_only.json":       checkAccount(false, &connector.KeyNotReadOnlyError{Permissions: []string{"enableWithdrawals"}}),
+		"key_reading_disabled.json":    checkAccount(false, connector.ErrKeyRejected),
+		"key_rejected.json":            checkAccount(false, connector.ErrKeyRejected),
+		"key_account_rejected.json":    checkAccount(false, connector.ErrKeyRejected),
+		"snapshot_full.json":           fetchSnapshot(8),
+		"snapshot_paged.json":          fetchSnapshot(4),
+		"snapshot_funding_fails.json":  fetchSnapshot(-1),
+		"snapshot_flexible_fails.json": fetchSnapshot(-1),
+		"snapshot_locked_fails.json":   fetchSnapshot(-1),
 	}
 	entries, err := os.ReadDir(fixturesDir)
 	if err != nil {
@@ -621,6 +626,24 @@ func checkAccount(ipRestricted bool, want error) func(h *harness) error {
 		case info.Identity != strconv.Itoa(httpfixture.FictitiousUID) || !slices.Equal(info.Permissions, []string{"READ"}) ||
 			info.IPRestricted == nil || *info.IPRestricted != ipRestricted:
 			return errors.New("unexpected account info")
+		}
+		return nil
+	}
+}
+
+// fetchSnapshot runs FetchSnapshot on a fixture: n balances, or an error when n is -1.
+func fetchSnapshot(n int) func(h *harness) error {
+	return func(h *harness) error {
+		src := source(`{"base_url": "` + h.s.cfg.BaseURL + `"}`)
+		src.Aliases = []connector.Alias{{NativeAsset: "LDO", Asset: "LDO"}}
+		snap, err := h.c.FetchSnapshot(context.Background(), connector.Connection{Source: src, Key: h.s.key, Limiter: h.lim})
+		switch {
+		case n < 0 && err == nil:
+			return errors.New("want an error")
+		case n >= 0 && err != nil:
+			return err
+		case n >= 0 && len(snap.Balances) != n:
+			return errors.New("want " + strconv.Itoa(n) + " balances, got " + strconv.Itoa(len(snap.Balances)))
 		}
 		return nil
 	}

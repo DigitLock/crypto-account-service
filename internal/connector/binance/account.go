@@ -123,20 +123,10 @@ func parseUID(body []byte) (string, error) {
 	return uid, nil
 }
 
-// Streams: none in X1 st4. The balance stream is declared with FetchSnapshot in st5 (X1 D-33).
-func (c *Connector) Streams(context.Context, connector.Source, connector.AccountInfo) ([]connector.Stream, error) {
-	return nil, nil
-}
-
-// errNotBuilt is the answer of the calls that later stages build.
-var errNotBuilt = errors.New("binance: not built in X1 st4")
+// errNoLedgerStream is the answer of FetchPage: Binance declares no ledger stream in X1.
+var errNoLedgerStream = errors.New("binance: no ledger stream in X1")
 
 // FetchPage: Binance has no ledger stream in X1.
 func (c *Connector) FetchPage(context.Context, connector.Connection, string, connector.Mode, json.RawMessage) (connector.Page, error) {
-	return connector.Page{}, errNotBuilt
-}
-
-// FetchSnapshot comes with st5.
-func (c *Connector) FetchSnapshot(context.Context, connector.Connection) (connector.Snapshot, error) {
-	return connector.Snapshot{}, errNotBuilt
+	return connector.Page{}, errNoLedgerStream
 }
