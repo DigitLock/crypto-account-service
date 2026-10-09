@@ -382,8 +382,9 @@ func TestT536_FakeSourceBehindItsFlag(t *testing.T) {
 	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake and its aliases exist: nothing changed\n" {
 		t.Errorf("second run printed %q", r.stdout)
 	}
-	// A lost alias is added again; the source stays.
-	if _, err := pool.Exec(ctx, `DELETE FROM asset_aliases WHERE native_asset = 'USDT'`); err != nil {
+	// A lost alias is added again; the source stays. Only the alias of fake: binance has one of USDT too.
+	if _, err := pool.Exec(ctx, `DELETE FROM asset_aliases WHERE native_asset = 'USDT'
+		AND source_id = (SELECT id FROM sources WHERE code = 'fake')`); err != nil {
 		t.Fatal(err)
 	}
 	if r := mustCasctl(t, "source", "add-fake"); r.stdout != "Source fake exists\nAliases added: USDT\n" {

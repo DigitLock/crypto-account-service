@@ -1,0 +1,17 @@
+{
+  "description": "GET /api/v3/time of the test network",
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/v3/time",
+      "query": "",
+      "http_status": 200,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "22"
+      },
+      "body": {
+        "serverTime": 1791547304486
+      }
+    }
+  ]
+}

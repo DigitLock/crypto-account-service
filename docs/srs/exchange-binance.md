@@ -102,6 +102,7 @@ X1 D-3. Binance error codes as of 2026-10-09.
 | `429`, `418` | Rate limit (`RateLimitError`) with `Retry-After`; 60 s when the header is missing |
 | `5xx`; `-1001`; `-1008`; transport error; no answer within 10 s | Unreachable (`ErrUnreachable`) |
 | `403`: a WAF rule, "a rate limit violation or a security block" | Unreachable, with one WARN line; no pause: the answer has no `Retry-After` |
+| `3xx` | Not followed: a redirect would carry `X-MBX-APIKEY` to another host (X1 D-28); plain failure of the call |
 | `-1021` (timestamp outside `recvWindow`) | The offset is read again and the request repeated once; a second `-1021` is a plain failure (EC-221) |
 | Any other answer | Plain failure of the call |
 
@@ -519,9 +520,11 @@ FR-216 and FR-217 apply from X1.
 
 Fixture format (X1 D-13):
 
-- One JSON file per case: the ordered list of requests and answers `{method, path, query, http_status, headers, body}`.
-- `query` without `timestamp` and `signature`; `headers` only the used-weight headers and `Retry-After`.
-- The recorder stores no host, no `X-MBX-APIKEY` and no signature, and replaces `uid` by a fictitious value.
+- One JSON file per case, package `internal/httpfixture`: `{description, context, calls}`; `context` optional, fictitious values only; `calls` the ordered list of requests and answers `{method, path, query, http_status, headers, body}`.
+- `query` the parameter string as sent, without `timestamp` and `signature`; `headers` only `X-MBX-USED-WEIGHT-1M`, `X-SAPI-USED-IP-WEIGHT-1M`, `X-SAPI-USED-UID-WEIGHT-1M` and `Retry-After`; `body` the JSON answer as received, absent when the answer has no JSON body.
+- The recorder stores no host, no URL, no `X-MBX-APIKEY` and no signature, and replaces the value of every field named `uid`, at any depth, by `100000001`. A request with a body is not recorded: parameters go in the query.
+- The fake server serves the calls in order; a request that does not match the next call by method, path and query, or comes after the last call, fails the test. It counts the weight of every request by a weight table of the test, per budget.
+- Recorded from the test network by `make fixtures-record-binance`: `time.json`, `account.json`, `error_bad_signature.json`, `error_bad_key.json`; each starts with its own read of the time.
 - The rules of the JSON-RPC fixtures of SRS — EVM Connector §2.6 apply: no URL, no key, fictitious context values.
 
 | ID | Requirement | Parent |

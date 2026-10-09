@@ -15,7 +15,7 @@ FROZEN_OPENAPI := api/openapi/frozen/card-auth.yaml
 
 .PHONY: build run casctl fmt vet test check secrets tools proto proto-check proto-freeze crs-proto crs-proto-check buf-version plugins \
 	migrate-tool migrate-url migrate-up migrate-down migrate-version sqlc-tool sqlc-generate sqlc-check \
-	bindings bindings-check openapi-check openapi-freeze fixtures-record
+	bindings bindings-check openapi-check openapi-freeze fixtures-record binance-aliases binance-live fixtures-record-binance
 
 build:
 	go build -o bin/ ./cmd/...
@@ -45,6 +45,25 @@ check: fmt vet build test
 fixtures-record:
 	go test -count=1 -run '^TestT107_RecordFromAnvil$$' ./internal/rpcfixture -record
 	go test -count=1 -run '^TestT420_RecordScenarios$$' ./internal/connector/evm -record
+
+# Binance (SRS - Binance §2.4, §2.6; X1 D-20, X1 D-21, X1 D-23). The owner runs these targets; make check never does.
+
+# Writes migrations/000010_binance_source.up.sql: the source binance and an identity alias row per base and quote
+# asset of GET https://api.binance.com/api/v3/exchangeInfo, a public call without a key. Prints the count of assets
+# and every code that starts with LD for review. Needs curl and jq.
+binance-aliases:
+	scripts/binance/gen-aliases.sh
+
+# Live test on the Binance test network with BINANCE_TESTNET_API_KEY and BINANCE_TESTNET_API_SECRET of .env
+# (BINANCE_TESTNET_URL optional): a signed account call. Prints the status, the time offset and the count of balances.
+binance-live:
+	go test -count=1 -v -run '^TestT111_SignedAccountOnTestnet$$' ./internal/connector/binance -live
+
+# Records the committed fixtures of testdata/fixtures/binance/ from the Binance test network, with the same variables:
+# time.json, account.json, error_bad_signature.json, error_bad_key.json. Only this target writes them; the /sapi
+# fixtures are written by hand.
+fixtures-record-binance:
+	go test -count=1 -v -run '^TestT110_RecordFromTestnet$$' ./internal/connector/binance -record
 
 secrets:
 	gitleaks git --redact --no-banner .

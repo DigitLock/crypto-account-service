@@ -1,0 +1,30 @@
+{
+  "description": "GET /api/v3/account signed with a wrong secret on the test network: the time first, then -1022",
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/v3/time",
+      "query": "",
+      "http_status": 200,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "44"
+      },
+      "body": {
+        "serverTime": 1791547305267
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v3/account",
+      "query": "omitZeroBalances=true\u0026recvWindow=5000",
+      "http_status": 400,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "64"
+      },
+      "body": {
+        "code": -1022,
+        "msg": "Signature for this request is not valid."
+      }
+    }
+  ]
+}
