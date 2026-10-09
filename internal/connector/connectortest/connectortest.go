@@ -1,14 +1,20 @@
-// Package connectortest is the shared connector test suite (ADR-2, SRS — EVM Connector §2.6, FR-316; S3 D-14):
-// the behaviour every connector must show, run on answers served without network access. It takes any
-// connector.Connector through a Harness. X1 reuses and extends it.
+// Package connectortest is the shared connector test suite (ADR-2, SRS — EVM Connector §2.6, FR-316; S3 D-14;
+// SRS — Core rule "Shared test suite", X1 D-12): the behaviour every connector must show, run on answers served
+// without network access. A connector offers the parts it supports through a Suite of harnesses.
 //
-// The suite checks:
+// The ledger part (Run, S3) checks:
 //   - idempotency: the same cursor gives the same entries, with the same external_id and leg, so a repeated page
 //     adds nothing;
 //   - cursor resume: reading page by page from the returned cursors gives the entries of one pass, none twice,
 //     none missing;
 //   - limit handling: a rate-limit answer gives connector.RateLimitError and a pause of its budget in the limiter,
 //     and no further request in that run.
+//
+// The snapshot part (X1) checks: the same answers give an equal snapshot; one failing source fails the whole
+// snapshot and returns no balance; a rate-limit answer gives connector.RateLimitError, a pause of its budget and no
+// further request. The key-check part (X1) checks: a read-only key is accepted with ["READ"] and an identity; a key
+// with a permission beyond reading gives *connector.KeyNotReadOnlyError naming it; a rejected key gives
+// connector.ErrKeyRejected.
 package connectortest
 
 import (
@@ -57,7 +63,30 @@ type Harness func(t *testing.T, c Case) Setup
 // MaxPages bounds a read of a history.
 const MaxPages = 100
 
-// Run runs the suite.
+// Suite holds the harnesses of the parts a connector supports; a nil harness skips its part.
+type Suite struct {
+	Ledger   Harness
+	Snapshot SnapshotHarness
+	KeyCheck KeyHarness
+}
+
+// RunSuite runs the parts of s.
+func RunSuite(t *testing.T, s Suite) {
+	if s.Ledger == nil && s.Snapshot == nil && s.KeyCheck == nil {
+		t.Fatal("the suite has no part")
+	}
+	if s.Ledger != nil {
+		t.Run("ledger", func(t *testing.T) { Run(t, s.Ledger) })
+	}
+	if s.Snapshot != nil {
+		t.Run("snapshot", func(t *testing.T) { runSnapshot(t, s.Snapshot) })
+	}
+	if s.KeyCheck != nil {
+		t.Run("key check", func(t *testing.T) { runKeyCheck(t, s.KeyCheck) })
+	}
+}
+
+// Run runs the ledger part.
 func Run(t *testing.T, h Harness) {
 	t.Run("idempotency", func(t *testing.T) { idempotency(t, h) })
 	t.Run("cursor resume", func(t *testing.T) { resume(t, h) })

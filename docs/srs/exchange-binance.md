@@ -516,7 +516,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 | Level | Data | Covers |
 |---|---|---|
 | Unit | Fixtures in `testdata/fixtures/binance/`: `/api` answers recorded from the test network with `uid` replaced by a fictitious value; `/sapi` answers written by hand from the examples of the Binance documentation, fictitious values; nothing from the real account (X1 D-13) | Mapping, paging, windows, wrapper rule, key check, answers to errors |
-| Connector test suite | Fake HTTP server that serves the fixtures and counts weight | The behaviour every connector must show: idempotency, cursor resume, limit handling; for a snapshot: an equal snapshot from the same answers, all or nothing, limit handling; for a key check: read-only accepted, non-read rejected with names (X1 D-12) |
+| Connector test suite | Fake HTTP server that serves the fixtures and counts weight | The behaviour every connector must show: idempotency, cursor resume, limit handling; for a snapshot: an equal snapshot from the same answers, all or nothing, limit handling; for a key check: read-only accepted, non-read rejected with names, a rejected key refused (X1 D-12) |
 | Test network | `testnet.binance.vision`, by live tests that the owner runs and that are skipped without the test-network key | Signing, time offset, the `account` call, the spot step of the snapshot (X1); trades (X2). No connection is created there (X1 D-20) |
 | Fake WebSocket server | Scripted events, drops, pings | Listener lifecycle, catch-up, merging of events (UC-205) |
 | Real account | Read-only key | Balances against the exchange UI (FR-206); facts of §4 |
