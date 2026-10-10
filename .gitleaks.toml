@@ -16,3 +16,14 @@ paths = [
   '''^internal/decision/ids_test\.go$''',
   '''^internal/grpc/api/cards_test\.go$''',
 ]
+
+# The HMAC example secret of the Binance Spot API documentation, the test vector of X1-T103. A public example of the
+# documentation, not a key of any account. Allowed only as that exact value and only in that test file.
+[[allowlists]]
+description = "HMAC example secret of the Binance Spot API documentation, test vector of X1-T103. Public, not a key of any account"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j$''']
+paths = [
+  '''^internal/connector/binance/binance_test\.go$''',
+]

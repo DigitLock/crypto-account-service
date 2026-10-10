@@ -98,8 +98,9 @@ func Migrator(t testing.TB) *migrate.Migrate {
 	return m
 }
 
-// Clean empties the tables of the test database and keeps the seeded sources and the alias of base-sepolia
-// seeded with them (migration 000007). A test that changes the config of a seeded source restores it.
+// Clean empties the tables of the test database and keeps the seeded sources and the aliases seeded with them: the
+// alias of base-sepolia (migration 000007) and those of binance (migration 000010). A test that changes the config of
+// a seeded source restores it.
 func Clean(t testing.TB) {
 	t.Helper()
 	pool := newPool(t, URL(t))
@@ -107,8 +108,8 @@ func Clean(t testing.TB) {
 		`TRUNCATE tenants, api_credentials, connections, sync_cursors, balance_snapshots, snapshot_balances,
 			ledger_entries, audit_log, cards, authorizations, authorization_events, returns, operator_txs,
 			operator_accounts, reconciliation_runs, balance_checkpoints RESTART IDENTITY CASCADE`,
-		`DELETE FROM asset_aliases WHERE source_id NOT IN (SELECT id FROM sources WHERE code = 'base-sepolia')`,
-		`DELETE FROM sources WHERE code NOT IN ('anvil', 'base-sepolia')`,
+		`DELETE FROM asset_aliases WHERE source_id NOT IN (SELECT id FROM sources WHERE code IN ('base-sepolia', 'binance'))`,
+		`DELETE FROM sources WHERE code NOT IN ('anvil', 'base-sepolia', 'binance')`,
 		// Every setup inserts the source fake again; without this the SMALLINT identity of sources.id
 		// grows with every run of the suite until it overflows.
 		`SELECT setval(pg_get_serial_sequence('sources', 'id'), COALESCE(MAX(id), 1), MAX(id) IS NOT NULL) FROM sources`,

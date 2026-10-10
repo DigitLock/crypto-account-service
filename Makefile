@@ -15,7 +15,7 @@ FROZEN_OPENAPI := api/openapi/frozen/card-auth.yaml
 
 .PHONY: build run casctl fmt vet test check secrets tools proto proto-check proto-freeze crs-proto crs-proto-check buf-version plugins \
 	migrate-tool migrate-url migrate-up migrate-down migrate-version sqlc-tool sqlc-generate sqlc-check \
-	bindings bindings-check openapi-check openapi-freeze fixtures-record
+	bindings bindings-check openapi-check openapi-freeze fixtures-record binance-aliases binance-live binance-real fixtures-record-binance
 
 build:
 	go build -o bin/ ./cmd/...
@@ -45,6 +45,32 @@ check: fmt vet build test
 fixtures-record:
 	go test -count=1 -run '^TestT107_RecordFromAnvil$$' ./internal/rpcfixture -record
 	go test -count=1 -run '^TestT420_RecordScenarios$$' ./internal/connector/evm -record
+
+# Binance (SRS - Binance §2.4, §2.6; X1 D-20, X1 D-21, X1 D-23). The owner runs these targets; make check never does.
+
+# Writes migrations/000010_binance_source.up.sql: the source binance and an identity alias row per base and quote
+# asset of GET https://api.binance.com/api/v3/exchangeInfo, a public call without a key. Prints the count of assets
+# and every code that starts with LD for review. Needs curl and jq.
+binance-aliases:
+	scripts/binance/gen-aliases.sh
+
+# Live tests on the Binance test network with BINANCE_TESTNET_API_KEY and BINANCE_TESTNET_API_SECRET of .env
+# (BINANCE_TESTNET_URL optional): a signed account call (X1-T111), printing the status, the time offset and the count of
+# balances; the spot step of the snapshot (X1-T416), printing the status and the count of SPOT balances. Nothing stored.
+binance-live:
+	go test -count=1 -v -run '^(TestT111_SignedAccountOnTestnet|TestT416_SpotStepOnTestnet)$$' ./internal/connector/binance -live
+
+# Dry run on the owner's real Binance account (X1 D-43; X1-T601, T605, T607) with BINANCE_API_KEY and BINANCE_API_SECRET of
+# .env and the production base URL: the key check and the snapshot once, nothing stored, no connection created. Prints
+# statuses, counts, field names and used-weight headers only: never a uid, an asset, an amount, the key or a URL.
+binance-real:
+	go test -count=1 -v -run '^TestT601_RealAccountDryRun$$' ./internal/connector/binance -real
+
+# Records the committed fixtures of testdata/fixtures/binance/ from the Binance test network, with the same variables:
+# time.json, account.json, error_bad_signature.json, error_bad_key.json. Only this target writes them; the /sapi
+# fixtures are written by hand.
+fixtures-record-binance:
+	go test -count=1 -v -run '^TestT110_RecordFromTestnet$$' ./internal/connector/binance -record
 
 secrets:
 	gitleaks git --redact --no-banner .

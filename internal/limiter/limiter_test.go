@@ -201,3 +201,122 @@ func TestT624_RateLimitPause(t *testing.T) {
 	clock.Advance(30 * time.Second)
 	assertDone(t, done)
 }
+
+// observeLimiter returns a limiter with one budget of 100 units per minute, and the time of its clock at the start.
+func observeLimiter(t *testing.T) (*Limiter, *fakeClock, time.Time) {
+	t.Helper()
+	clock := newFakeClock()
+	l, err := New([]connector.Budget{
+		{Name: "api", Units: 100, Window: time.Minute},
+		{Name: "other", Units: 100, Window: time.Minute},
+	}, clock, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l, clock, clock.Now()
+}
+
+// X1-T203 — Req: FR-213; X1 D-7; Core Connector contract "Rate limiter". The unit part of Observe; the Binance
+// connector reports the used-weight headers in internal/connector/binance.
+func TestT203_Observe(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("above the reserved units", func(t *testing.T) {
+		l, clock, start := observeLimiter(t)
+		if err := l.Reserve(ctx, "api", 10); err != nil {
+			t.Fatal(err)
+		}
+		l.Observe("api", 95)
+		if err := l.Reserve(ctx, "api", 5); err != nil {
+			t.Fatalf("95 + 5 fits 100: %v", err)
+		}
+		done := reserveAsync(l, "api", 1)
+		if got := clock.waitingUntil(t); !got.Equal(start.Add(time.Minute)) {
+			t.Errorf("waits until %v, want the next window at %v", got, start.Add(time.Minute))
+		}
+		clock.Advance(time.Minute)
+		assertDone(t, done)
+		if err := l.Reserve(ctx, "other", 100); err != nil {
+			t.Errorf("another budget took the observation: %v", err)
+		}
+	})
+
+	t.Run("below the reserved units", func(t *testing.T) {
+		l, clock, _ := observeLimiter(t)
+		if err := l.Reserve(ctx, "api", 90); err != nil {
+			t.Fatal(err)
+		}
+		l.Observe("api", 5) // the budget keeps its own larger count
+		if err := l.Reserve(ctx, "api", 10); err != nil {
+			t.Fatal(err)
+		}
+		done := reserveAsync(l, "api", 1)
+		clock.waitingUntil(t)
+		assertBlocked(t, done)
+		clock.Advance(time.Minute)
+		assertDone(t, done)
+	})
+
+	t.Run("before any reservation", func(t *testing.T) {
+		l, clock, start := observeLimiter(t)
+		clock.Advance(10 * time.Second)
+		l.Observe("api", 100) // starts a window now
+		done := reserveAsync(l, "api", 1)
+		if got := clock.waitingUntil(t); !got.Equal(start.Add(70 * time.Second)) {
+			t.Errorf("waits until %v, want the end of the window the observation started: %v", got, start.Add(70*time.Second))
+		}
+		clock.Advance(time.Minute)
+		assertDone(t, done)
+	})
+
+	t.Run("after the window ended", func(t *testing.T) {
+		l, clock, _ := observeLimiter(t)
+		if err := l.Reserve(ctx, "api", 100); err != nil {
+			t.Fatal(err)
+		}
+		clock.Advance(time.Minute)
+		l.Observe("api", 40) // a new window with 40
+		if err := l.Reserve(ctx, "api", 60); err != nil {
+			t.Fatalf("40 + 60 fits the new window: %v", err)
+		}
+		done := reserveAsync(l, "api", 1)
+		clock.waitingUntil(t)
+		assertBlocked(t, done)
+		clock.Advance(time.Minute)
+		assertDone(t, done)
+	})
+
+	t.Run("with a pause running", func(t *testing.T) {
+		l, clock, start := observeLimiter(t)
+		l.Pause("api", 30*time.Second)
+		l.Observe("api", 100) // counts; the pause stays
+		done := reserveAsync(l, "api", 1)
+		if got := clock.waitingUntil(t); !got.Equal(start.Add(30 * time.Second)) {
+			t.Errorf("waits until %v, want the end of the pause at %v", got, start.Add(30*time.Second))
+		}
+		clock.Advance(30 * time.Second)
+		if got := clock.waitingUntil(t); !got.Equal(start.Add(time.Minute)) {
+			t.Errorf("after the pause waits until %v, want the end of the window at %v", got, start.Add(time.Minute))
+		}
+		clock.Advance(30 * time.Second)
+		assertDone(t, done)
+	})
+
+	t.Run("unknown budget and negative used ignored", func(t *testing.T) {
+		l, _, _ := observeLimiter(t)
+		l.Observe("unknown", 1000)
+		l.Observe("api", -1)
+		if err := l.Reserve(ctx, "api", 100); err != nil {
+			t.Errorf("the budget changed: %v", err)
+		}
+	})
+
+	t.Run("the bounded limiter delegates", func(t *testing.T) {
+		l, _, _ := observeLimiter(t)
+		bounded := l.WithMaxWait(time.Millisecond)
+		bounded.Observe("api", 100)
+		if err := bounded.Reserve(ctx, "api", 1); !errors.Is(err, ErrNoBudget) {
+			t.Errorf("Reserve after Observe of the whole budget = %v, want ErrNoBudget", err)
+		}
+	})
+}

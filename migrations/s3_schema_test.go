@@ -55,10 +55,11 @@ func sourceConfigs(t *testing.T, pool *pgxpool.Pool) map[string]map[string]any {
 	return out
 }
 
+// aliases returns the alias rows of the EVM sources. Those of binance (migration 000010) are checked by X1-T101.
 func aliases(t *testing.T, pool *pgxpool.Pool) []string {
 	t.Helper()
 	rows, err := pool.Query(ctx, `SELECT format('%s %s %s %s', s.code, a.native_asset, a.asset, a.decimals)
-		FROM asset_aliases a JOIN sources s ON s.id = a.source_id ORDER BY 1`)
+		FROM asset_aliases a JOIN sources s ON s.id = a.source_id WHERE s.kind = 'EVM' ORDER BY 1`)
 	if err != nil {
 		t.Fatal(err)
 	}

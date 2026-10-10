@@ -383,7 +383,8 @@ func TestT306_CascadeUnderCasServer(t *testing.T) {
 	}
 }
 
-// C1-T307 — Req: SRS — EVM §2.4, §2.4
+// C1-T307 — Req: SRS — EVM §2.4, §2.4. The EVM networks; the source binance is checked by X1-T101
+// (binance_schema_test.go).
 func TestT307_Seed(t *testing.T) {
 	testdb.Open(t)
 	testdb.Clean(t)
@@ -396,6 +397,9 @@ func TestT307_Seed(t *testing.T) {
 	want := map[string]float64{"anvil": 31337, "base-sepolia": 84532}
 	got := map[string]float64{}
 	for _, s := range sources {
+		if s.Code == "binance" {
+			continue
+		}
 		var config map[string]any
 		if err := json.Unmarshal(s.Config, &config); err != nil {
 			t.Fatalf("%s config: %v", s.Code, err)
@@ -414,9 +418,7 @@ func TestT307_Seed(t *testing.T) {
 	if _, err := q.GetSourceByCode(ctx, "anvil"); err != nil {
 		t.Errorf("GetSourceByCode(anvil): %v", err)
 	}
-	for _, code := range []string{"fake", "binance"} {
-		if _, err := q.GetSourceByCode(ctx, code); !errors.Is(err, pgx.ErrNoRows) {
-			t.Errorf("GetSourceByCode(%s) = %v, want no rows", code, err)
-		}
+	if _, err := q.GetSourceByCode(ctx, "fake"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("GetSourceByCode(fake) = %v, want no rows", err)
 	}
 }

@@ -1,0 +1,30 @@
+{
+  "description": "GET /api/v3/account with a fictitious key on the test network: the time first, then the key rejected",
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/v3/time",
+      "query": "",
+      "http_status": 200,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "65"
+      },
+      "body": {
+        "serverTime": 1791547305930
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v3/account",
+      "query": "omitZeroBalances=true\u0026recvWindow=5000",
+      "http_status": 401,
+      "headers": {
+        "X-MBX-USED-WEIGHT-1M": "85"
+      },
+      "body": {
+        "code": -2015,
+        "msg": "Invalid API-key, IP, or permissions for action."
+      }
+    }
+  ]
+}

@@ -68,6 +68,7 @@ func (reporter) RateLimited(string)                       {}
 func (reporter) Connections(map[string]int)               {}
 func (reporter) Staleness(map[string]time.Duration)       {}
 func (reporter) LedgerGap(string, string, string, string) {}
+func (reporter) KeyCheckFinished(string, string)          {}
 
 // harness is the common precondition of phase 6 (docs/test-plan-s3.md §2): the test database, Anvil with MockUSDC
 // and the controller, the source anvil set to that deployment, the platform tenant cas-platform with the treasury

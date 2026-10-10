@@ -103,7 +103,7 @@ func (a *app) rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd(), a.reconcileCmd(), a.simCmd())
+	root.AddCommand(a.tenantCmd(), a.tokenCmd(), a.processorCmd(), a.sourceCmd(), a.reconcileCmd(), a.simCmd(), a.connectionCmd())
 	return root
 }
 

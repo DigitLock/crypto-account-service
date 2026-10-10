@@ -78,6 +78,12 @@ func newRig(t *testing.T) *rig {
 // startServer builds and starts server on the test database as cas_server, with a generated master key.
 func (r *rig) startServer(t *testing.T) {
 	t.Helper()
+	r.startServerWith(t)
+}
+
+// startServerWith is startServer with extra variables of the environment of server.
+func (r *rig) startServerWith(t *testing.T, extra ...string) {
+	t.Helper()
 	build := exec.Command("go", "build", "-o", r.binDir+string(os.PathSeparator), "./cmd/server")
 	build.Dir = repoRoot()
 	build.Env = baseEnv()
@@ -90,12 +96,12 @@ func (r *rig) startServer(t *testing.T) {
 	}
 	masterKey := base64.StdEncoding.EncodeToString(master)
 	r.secrets = append(r.secrets, masterKey)
-	r.startProcess(t, "server", filepath.Join(r.binDir, "server"), with(baseEnv(),
+	r.startProcess(t, "server", filepath.Join(r.binDir, "server"), with(with(baseEnv(),
 		"DATABASE_URL="+testdb.ServerURL(t),
 		"CAS_MASTER_KEY="+masterKey,
 		"GRPC_PORT="+strconv.Itoa(r.ports.grpc),
 		"HEALTH_HTTP_PORT="+strconv.Itoa(r.ports.health),
-	), r.ports.health)
+	), extra...), r.ports.health)
 }
 
 // startProcess starts a process, collects its output and waits for /healthz on healthPort; it stops on cleanup.

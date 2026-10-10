@@ -150,6 +150,9 @@ func (l *recLimiter) Pause(budget string, d time.Duration) {
 	l.mu.Unlock()
 }
 
+// Observe: the EVM connector reports no used units.
+func (l *recLimiter) Observe(string, int) {}
+
 // syncBuffer is the log of the connector, written by its runs and read by the test.
 type syncBuffer struct {
 	mu  sync.Mutex

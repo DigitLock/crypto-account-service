@@ -72,6 +72,9 @@ type AccountInfo struct {
 	Identity string
 	// Permissions of a key as reported by the source. Empty for a wallet.
 	Permissions []string
+	// IPRestricted reports whether the source restricts the key to IP addresses; nil when the source cannot tell
+	// (X1 D-2).
+	IPRestricted *bool
 }
 
 // Stream is a stream a connector declares for a connection.
@@ -116,6 +119,9 @@ type Limiter interface {
 	Reserve(ctx context.Context, budget string, cost int) error
 	// Pause blocks a budget for the pause the source demands; the other budgets go on.
 	Pause(budget string, d time.Duration)
+	// Observe reports the units the source counts as used in a budget, as a header of its answer tells: the budget
+	// then counts at least used units in its current window (X1 D-7).
+	Observe(budget string, used int)
 }
 
 // Connection is what the page and snapshot calls get.
