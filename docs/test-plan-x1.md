@@ -4,7 +4,7 @@
 - **Objects under test:** the Binance connector of `server` (signer, HTTP client, time offset, limiter budgets, key check and its periodic repeat, balance snapshot with the wrapper rule), the HTTP fixture format and recorder, the shared connector test suite extended for an exchange, the migration of the `binance` source and its alias rows, the script `scripts/binance/connect.sh`, the metrics of X1, the CI of X1.
 - **Parents:** [SRS — Binance](srs/exchange-binance.md) §2.1, UC-201, UC-202, §2.4, §2.5, §2.6, §3, §4 issues 2 and 6; [SRS — Core](srs/core.md) Connector contract, UC-101, UC-102, UC-104, §2.1.3, §3.1; [PRD — Exchange Accounts](prd/exchange-accounts.md) US-201 … US-205, US-210 … US-212; [BRD](brd.md) BR-1, BR-2, BR-3, G-3, G-5; ADR 2, 3, 4, 6.
 - **Decisions:** `X1 D-n` and `X1 P-n`, register of the X1 discovery (2026-10-09). `P-1` … `P-9` are the decisions of the milestone package.
-- **Status:** Pre-approved (X1 D-58). Created in the discovery stage of X1 on 2026-10-09. Run in st8a on 2026-10-10: 66 of 68 rows `Pass`; X1-T704 `Pass` in st8b on 2026-10-10: 67 of 68 rows `Pass`, X1-T705 at the close.
+- **Status:** Approved. Created in the discovery stage of X1 on 2026-10-09; completed stage by stage; run in st8a on 2026-10-10; X1-T704 in st8b; signed off on 2026-10-10 (§6): 67 of 68 rows `Pass`, X1-T705 at the close.
 
 ## 1. Environment
 
@@ -214,4 +214,4 @@ Batches run in the QA stage st8 in phase order; one line per batch and attempt. 
 
 | Role | Name | Date | Result |
 |---|---|---|---|
-| Owner, QA | Igor Kudinov | — | — |
+| Owner, QA | Igor Kudinov | 2026-10-10 | Pass: 67 of 68 rows, 0 open P0–P3. X1-T705, the tag guard, is done at the close after the merge and before the tag; the runs on the pull request and on `main` are read then (handoff §3.4) |
