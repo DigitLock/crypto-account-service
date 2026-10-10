@@ -315,6 +315,9 @@ func (s *session) answer(ep endpoint, status int, header http.Header, body []byt
 		return fmt.Errorf("%s: %w", where, connector.ErrKeyRejected)
 	case status >= 200 && status < 300:
 		return nil
+	case status >= 300 && status < 400:
+		// Not followed (X1 D-28); a plain failure whatever the body says (X1 D-56).
+		return errors.New(where)
 	}
 	code, ok := errorCode(body)
 	if !ok {

@@ -53,7 +53,7 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Tracked token | Token that CAS reads on a network: listed in the asset aliases of that network. |
 | RPC provider | Service that gives access to the network: reads, transaction submission, subscriptions. |
 | SIWE | Sign-In with Ethereum (EIP-4361): a signed message that proves control of a wallet. |
-| Testnet | Network with valueless coins for testing. CAS uses Base Sepolia and a local Anvil chain. |
+| Testnet | Network with valueless coins for testing. CAS uses Base Sepolia and a local Anvil chain; for Binance, `testnet.binance.vision` in live tests and the fixture recorder only (no connection). |
 
 ## Exchanges
 
@@ -63,8 +63,12 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Weight | Cost of one request in the exchange's rate limit. |
 | IP budget | Weight limit counted per calling IP and shared by all connections. |
 | UID budget | Weight limit counted per exchange account. |
+| Budget | Cost units a source may use per window in the rate limiter of CAS, shared by all its connections. Binance: `api` for every `/api` endpoint, `sapi:<path>` for each `/sapi` endpoint. |
+| Budget share | Part of each exchange limit a budget gets: `budget_share` of `sources.config`. |
+| Used weight | Weight the exchange reports as used in the current minute (`X-MBX-USED-WEIGHT-1M`, `X-SAPI-USED-IP-WEIGHT-1M`); the budget counts at least this value. |
+| Time offset | Local clock minus the exchange clock; corrects the `timestamp` of signed requests. |
 | Spot, Funding, Earn | Wallets inside one exchange account. Earn holds assets placed in yield products, flexible or locked. |
-| Wrapper asset | Code such as `LDUSDT`: a flexible Earn position shown in the spot wallet. |
+| Wrapper asset | Code `LD` + asset in the spot wallet that shows a flexible Earn position, without its accrued rewards. Dropped from the snapshot when a flexible position of the asset exists and the code is not a listed asset (SRS — Binance UC-202 step 5). |
 | Trading pair | Two assets traded against each other, e.g. `BTCUSDT`. Trade history is read per pair. |
 | Delisting | Removal of a trading pair by the exchange. Its trade history becomes unreachable through the API. |
 
@@ -78,6 +82,8 @@ Terms as they are used in the CAS documents. One meaning per term.
 | Source | An exchange or an EVM network that CAS can read. |
 | Connection | One account at one source: an exchange API key or a wallet address. |
 | Connector | Code adapter of one source behind the common interface. |
+| Key check | Check that an exchange key is valid and can only read: the account check at `CreateConnection` and the periodic key check every `KEY_CHECK_INTERVAL` (SRS — Core FR-119). |
+| Fixture | Recorded or hand-written answers of a source, served by a fake server in tests without network access. Never a key or a real account identifier. |
 | Stream | One kind of data of a connection with its own cursor: balances, deposits, trades of a pair, event logs. Streams of one kind form a family: `trades`. |
 | Cursor | Stored position of a stream: last ID, time window or block number. |
 | Backfill | Reading the history that existed before the connection was created: backwards from now for exchanges, forwards from the first block for EVM networks. |

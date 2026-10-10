@@ -6,7 +6,9 @@
 # What it does:
 #   1. reads GET https://api.binance.com/api/v3/exchangeInfo: a public call, no key;
 #   2. takes baseAsset and quoteAsset of every symbol, unique and sorted;
-#   3. writes the complete up migration: the source row with the values of SRS - Binance §3.1, then one identity row
+#   3. writes the complete up migration: the source row with the X1 values of SRS - Binance §3.1 (base_url,
+#      budget_share, recv_window_ms, time_sync_interval, sync_interval.balances; the keys of X2 and W1 come with
+#      their migrations), then one identity row
 #      (native_asset = asset, decimals NULL) per asset, with a header comment that states the generation date and the
 #      count of assets;
 #   4. prints the count and every code that starts with LD, for the owner to review: a real asset such as LDO gets a

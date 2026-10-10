@@ -405,6 +405,29 @@ func TestT106_AnswersToErrors(t *testing.T) {
 	})
 }
 
+// X1-T106 — Req: X1 D-3, X1 D-28, X1 D-56. A 3xx is a plain failure before its body is read: a 3xx whose JSON body
+// carries -2015 or -1001 is neither key rejected nor unreachable.
+func TestT106_RedirectWithBinanceCodeIsPlainFailure(t *testing.T) {
+	cases := []errorCase{
+		{"302 with -2015", 302, `{"code":-2015,"msg":"Invalid API-key, IP, or permissions for action."}`, nil},
+		{"307 with -1001", 307, `{"code":-1001,"msg":"Internal error; unable to process your request. Please try again."}`, nil},
+	}
+	calls := []httpfixture.Call{timeCall(t0.UnixMilli())}
+	for _, c := range cases {
+		calls = append(calls, accountCall(c.status, c.body))
+	}
+	srv := httpfixture.Serve(t, httpfixture.File{Description: "3xx with a Binance code", Calls: calls}, weights)
+	h := newHarness(t, srv.URL(), nil)
+	for _, c := range cases {
+		_, err := h.account(context.Background())
+		checkError(t, c.name, err, nil)
+	}
+	srv.AssertAllServed()
+	if got := h.lim.pauses(); len(got) != 0 {
+		t.Errorf("pauses = %v; a 3xx pauses no budget", got)
+	}
+}
+
 // signatureParam finds the value of a signature parameter in a text.
 var signatureParam = regexp.MustCompile(`signature=([0-9a-f]+)`)
 

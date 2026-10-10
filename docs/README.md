@@ -21,9 +21,9 @@ Source of truth for CAS requirements and design. Markdown in the repository.
 | Test Plan — C1 | `test-plan-c1.md` | Test matrix of Core, run log, sign-off of C1 | Approved |
 | Test Plan — S2 | `test-plan-s2.md` | Test matrix of `card-auth` and the card registry, run log, sign-off of S2 | Approved |
 | Test Plan — S3 | `test-plan-s3.md` | Test matrix of the EVM connector, the treasury connection and reconciliation, run log, sign-off of S3 | Approved |
-| Test Plan — X1 | `test-plan-x1.md` | Test matrix of the Binance connector: transport, rate limits, key check, balance snapshot, the shared connector test suite, the real-account check; run log, sign-off of X1 | Draft |
+| Test Plan — X1 | `test-plan-x1.md` | Test matrix of the Binance connector: transport, rate limits, key check, balance snapshot, the shared connector test suite, the real-account check; run log, sign-off of X1 | Pre-approved (X1 D-58) |
 | Deployment Guide | `deployment-guide.md` | How to deploy the contracts and run `card-auth` on Base Sepolia; test accounts, admin operations with `cast`; from S3, `server` with the EVM connector and reconciliation (§13) | Pre-approved, used in S2 st9b and S3 st8b |
-| Binance Key Guide | `binance-key-guide.md` | How the owner creates a read-only Binance key, runs the X1 real-account checks and removes the connection and the key | Approved |
+| Binance Key Guide | `binance-key-guide.md` | How the owner creates a read-only Binance key, runs the X1 real-account checks and removes the connection and the key | Pre-approved (X1 D-58) |
 | Backlog | `backlog.md` | Postponed items | Living |
 
 Status: `Draft` → `Pre-approved` (reviewed by the owner) → `Approved` (merged to `main`). `Living`: updated after each milestone, no approval status.

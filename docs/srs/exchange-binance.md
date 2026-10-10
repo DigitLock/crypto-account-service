@@ -9,7 +9,7 @@
 - **Milestones:** X1 (key check, balances), X2 (history, completeness check), W1 (event triggers).
 - **Out of scope:** everything shared by all sources — engine, cursors, ledger schema, consumer API: [SRS — Core](core.md).
 - **Parents:** [PRD — Exchange Accounts](../prd/exchange-accounts.md) (`US-2xx`, `EC-2xx`), [BRD](../brd.md) BR-2 … BR-5, [ADR](../adr/README.md) 2, 3, 5, 6, 13.
-- **Version:** 1.1, 2026-10-09. Completed by the discovery of X1 (decisions `X1 D-n`): API facts re-checked; the permission rule of the key check (X1 D-1); the IP restriction of a key (X1 D-2); answers to errors (X1 D-3); the key type (X1 D-4); seed data (X1 D-5); rate-limit values and budgets (X1 D-6, X1 D-7); the time offset (X1 D-8); snapshot rules (X1 D-9, X1 D-10, X1 D-11); the test approach and fixtures (X1 D-12, X1 D-13); metrics (X1 D-16); the test network (X1 D-20). Real-account check of X1 on 2026-10-10 (st7b): issues 2 and 6 closed; the used weight of the Earn position endpoints; the funding count (X1 D-53). Version 1.0, 2026-10-04, approved.
+- **Version:** 1.1, 2026-10-09. Completed by the discovery of X1 (decisions `X1 D-n`): API facts re-checked; the permission rule of the key check (X1 D-1); the IP restriction of a key (X1 D-2); answers to errors (X1 D-3); the key type (X1 D-4); seed data (X1 D-5); rate-limit values and budgets (X1 D-6, X1 D-7); the time offset (X1 D-8); snapshot rules (X1 D-9, X1 D-10, X1 D-11); the test approach and fixtures (X1 D-12, X1 D-13); metrics (X1 D-16); the test network (X1 D-20). Real-account check of X1 on 2026-10-10 (st7b): issues 2 and 6 closed; the used weight of the Earn position endpoints; the funding count (X1 D-53). Completed in X1 st8b, 2026-10-10, to match the code (X1-T704): any `3xx` a plain failure whatever its body (X1 D-56); `Retry-After` as an HTTP date; the body limit; the order of the signed parameters; the time call in the sequences of UC-201 and UC-202; the wallet credential refused by UC-201; the X1 keys of the seed `config` and `make binance-aliases` (X1 D-60); the note on `rate_limit_rejections_total`; the log lines; which fixtures are recorded and which written by hand; the flags of the tests the owner runs and `BINANCE_TESTNET_URL`; the valid values of §3.1 and the minimum of `budget_share` (X1 D-59); the term wrapper asset. Version 1.0, 2026-10-04, approved.
 - **API facts:** checked against the official Binance documentation on 2026-10-03; re-checked on 2026-10-09 against the Spot API documentation (`github.com/binance/binance-spot-api-docs` at `263ac1a`), the Wallet and Simple Earn pages of developers.binance.com, the Binance FAQ "How to Create API Keys on Binance?" (updated 2025-03-20), the Terms of Use (effective 2026-07-21) and the List of Prohibited Countries (updated 2026-01-05). Before each milestone they are re-checked against the official documentation and confirmed on recorded answers where they exist.
 
 | Term | Meaning |
@@ -17,7 +17,7 @@
 | Weight | Cost of a request in Binance's rate limit. |
 | IP budget | Weight limit counted per calling IP, shared by all connections. |
 | UID budget | Weight limit counted per Binance account. |
-| Wrapper asset | Code `LD` + asset in the spot wallet: a flexible Earn position shown as a balance, e.g. `LDUSDT`. |
+| Wrapper asset | Code `LD` + asset in the spot wallet, e.g. `LDUSDT`, that shows a flexible Earn position without its accrued rewards. Dropped from the snapshot by UC-202 step 5. |
 | Final record | A record whose outcome and amounts will not change: credited deposit, completed withdrawal, executed trade. |
 
 ---
@@ -68,7 +68,7 @@ sequenceDiagram
 
     St->>L: Reserve weight for the endpoint
     L-->>St: Granted, or wait until the budget allows
-    St->>Sg: Sign: query + timestamp + recvWindow
+    St->>Sg: Sign: query + recvWindow + timestamp, signature last
     Sg->>B: Request with X-MBX-APIKEY and signature
     alt 200
         B-->>St: Records + used-weight header
@@ -99,10 +99,12 @@ X1 D-3. Binance error codes as of 2026-10-09.
 | Answer | Error of the connector (SRS — Core Connector contract) |
 |---|---|
 | `401`; `-2015` (invalid key, IP or permissions); `-2014` (key format); `-1022` (invalid signature) | Key rejected (`ErrKeyRejected`) |
-| `429`, `418` | Rate limit (`RateLimitError`) with `Retry-After`; 60 s when the header is missing |
+| `429`, `418` | Rate limit (`RateLimitError`) with `Retry-After` in seconds or as an HTTP date; 60 s when it is missing, zero, malformed or in the past |
 | `5xx`; `-1001`; `-1008`; transport error; no answer within 10 s | Unreachable (`ErrUnreachable`) |
 | `403`: a WAF rule, "a rate limit violation or a security block" | Unreachable, with one WARN line; no pause: the answer has no `Retry-After` |
-| `3xx` | Not followed: a redirect would carry `X-MBX-APIKEY` to another host (X1 D-28); plain failure of the call |
+| `3xx` | Not followed: a redirect would carry `X-MBX-APIKEY` to another host (X1 D-28); plain failure of the call, before the body is read for a Binance code (X1 D-56) |
+| A body that cannot be read | Unreachable (`ErrUnreachable`) |
+| A body larger than 64 MiB | Plain failure of the call |
 | `-1021` (timestamp outside `recvWindow`) | The offset is read again and the request repeated once; a second `-1021` is a plain failure (EC-221) |
 | Any other answer | Plain failure of the call |
 
@@ -120,7 +122,7 @@ X1 D-3. Binance error codes as of 2026-10-09.
 - Before a request the weight of its row of §2.1.2 is reserved in its budget, the time call included; after the response the used weight of the header is reported to the limiter (`Limiter.Observe`, SRS — Core Connector contract): the budget counts at least Binance's count (X1 D-7).
 - Headers to budgets: `X-MBX-USED-WEIGHT-1M` of an `/api` answer → `api`; `X-SAPI-USED-IP-WEIGHT-1M` of a `/sapi` answer → the budget of that endpoint. `X-SAPI-USED-UID-WEIGHT-1M` is not read in X1: no UID-limited endpoint. A missing or malformed header reports nothing.
 - The connector uses at most `budget_share` of each limit: the IP is shared with other services.
-- `429` or `418`: every request of that budget stops for `Retry-After` seconds; 60 s without the header (X1 D-3). The connector pauses the budget before it returns `RateLimitError` and sends no further request of that budget in the call.
+- `429` or `418`: every request of that budget stops for `Retry-After` (seconds or an HTTP date); 60 s when the header is missing, zero, malformed or in the past (X1 D-3). The connector pauses the budget before it returns `RateLimitError` and sends no further request of that budget in the call.
 - An HTTP `403` is a WAF rule; it is handled by "Answers to errors".
 - EC-205 and EC-221 apply from X1, as FR-213 and FR-214: the limiter and the time offset exist before the first live call.
 
@@ -164,7 +166,7 @@ N/A — no UI.
 #### 2.3.1 UC-201 Check a key (X1)
 
 ##### Sequence diagram
-See §2.1.1; two requests in a row.
+See §2.1.1; two requests in a row, after the time call when it is due (§2.1.1 Time).
 
 ##### Algorithm
 
@@ -175,6 +177,8 @@ See §2.1.1; two requests in a row.
 | 3 | Reject if any permission other than `enableReading` and `enableFixReadOnly` is `true`. A permission is a boolean field whose name starts with `enable` or `permits`: as of 2026-10-09 `enableWithdrawals`, `enableInternalTransfer`, `permitsUniversalTransfer`, `enableSpotAndMarginTrading`, `enableMargin`, `enableFutures`, `enableVanillaOptions`, `enablePortfolioMarginTrading`, `enableFixApiTrade`, and any such field Binance adds. Other fields (`ipRestrict`, `createTime`, any other) are not permissions (X1 D-1) | `KEY_NOT_READ_ONLY`, with the Binance names of the enabled permissions |
 | 4 | `account`: take `uid`, a JSON integer, as the account identity in its decimal form | Binance rejects the key → `KEY_INVALID`; no `uid` → plain failure of the check |
 | 5 | Return permissions `["READ"]`, the `uid` and `ipRestrict` as the IP restriction of the key (`AccountInfo.IPRestricted`, X1 D-2); not reported when `ipRestrict` is missing or not a boolean | — |
+
+- A wallet credential instead of an exchange key is refused before any request: `INVALID_ARGUMENT` "binance takes an exchange key, not a wallet".
 
 ##### Preconditions
 - The time offset is known.
@@ -210,7 +214,7 @@ Steps 1–5.
 #### 2.3.2 UC-202 Take a balance snapshot (X1)
 
 ##### Sequence diagram
-See §2.1.1; four requests, some paged.
+See §2.1.1; four sources, some paged, after the time call when it is due (§2.1.1 Time).
 
 ##### Algorithm
 
@@ -468,8 +472,8 @@ Rows added by the migration that introduces the source.
 
 | Table | Row |
 |---|---|
-| `sources` | `code = binance`, `kind = EXCHANGE`, enabled, `config` with the values of §3.1 |
-| `asset_aliases` | Identity rows (native = canonical) of the base and quote assets of every symbol of `exchangeInfo` at release, generated once into the migration by a script the owner runs (a public call, no key). Real assets whose code starts with `LD` come with the list; a wrapper code never gets a row. A new listing shows in `unmapped_assets_total` and is added by a later migration (X1 D-5) |
+| `sources` | `code = binance`, `kind = EXCHANGE`, enabled, `config` with the X1 values of §3.1: `base_url`, `budget_share`, `recv_window_ms`, `time_sync_interval`, `sync_interval.balances`; the keys of X2 and W1 come with their migrations |
+| `asset_aliases` | Identity rows (native = canonical) of the base and quote assets of every symbol of `exchangeInfo` at release, generated once into the migration by `make binance-aliases` (`scripts/binance/gen-aliases.sh`: `exchangeInfo`, a public call, no key; prints the count of assets and every `LD` code for review). Real assets whose code starts with `LD` come with the list; a wrapper code never gets a row. A new listing shows in `unmapped_assets_total` and is added by a later migration (X1 D-5) |
 
 ##### Cursor formats
 
@@ -505,7 +509,7 @@ Added to the metrics of SRS — Core §2.5.
 | server | `sync_triggered_total{stream}` | — | — | Runs started by events | US-215 |
 
 - X1 builds `binance_used_weight`, `binance_rate_limit_responses_total` and `binance_time_offset_ms`; the others come with X2 and W1 (X1 D-16).
-- `binance_rate_limit_responses_total` counts every limit answer of Binance. `rate_limit_rejections_total{source}` of SRS — Core counts the runs and key checks that failed on a limit answer. Both stay: one answer of a run counts once in each (X1 D-16).
+- `binance_rate_limit_responses_total` counts every limit answer of Binance. `rate_limit_rejections_total{source}` of SRS — Core counts the runs and the periodic key checks that failed on a limit answer; the check of `CreateConnection` is not counted. Both stay: one answer of a run counts once in each (X1 D-16).
 
 #### 2.5.2 Alerts
 Conditions are in the Alert column above. Delivery channel: N/A — defined with the deployment.
@@ -516,7 +520,7 @@ Conditions are in the Alert column above. Delivery channel: N/A — defined with
 
 | Level | Data | Covers |
 |---|---|---|
-| Unit | Fixtures in `testdata/fixtures/binance/`: `/api` answers recorded from the test network with `uid` replaced by a fictitious value; `/sapi` answers written by hand from the examples of the Binance documentation, fictitious values; nothing from the real account (X1 D-13) | Mapping, paging, windows, wrapper rule, key check, answers to errors |
+| Unit | Fixtures in `testdata/fixtures/binance/`: `/api` answers recorded from the test network with `uid` replaced by a fictitious value; the `account` answers of the snapshot fixtures written by hand with fictitious balances; `/sapi` answers written by hand from the examples of the Binance documentation, fictitious values; nothing from the real account (X1 D-13) | Mapping, paging, windows, wrapper rule, key check, answers to errors |
 | Connector test suite | Fake HTTP server that serves the fixtures and counts weight | The behaviour every connector must show: idempotency, cursor resume, limit handling; for a snapshot: an equal snapshot from the same answers, all or nothing, limit handling; for a key check: read-only accepted, non-read rejected with names, a rejected key refused (X1 D-12) |
 | Test network | `testnet.binance.vision`, by live tests that the owner runs and that are skipped without the test-network key | Signing, time offset, the `account` call, the spot step of the snapshot (X1); trades (X2). No connection is created there (X1 D-20) |
 | Fake WebSocket server | Scripted events, drops, pings | Listener lifecycle, catch-up, merging of events (UC-205) |
@@ -533,6 +537,11 @@ Fixture format (X1 D-13):
 - Recorded from the test network by `make fixtures-record-binance`: `time.json`, `account.json`, `error_bad_signature.json`, `error_bad_key.json`; each starts with its own read of the time.
 - The rules of the JSON-RPC fixtures of SRS — EVM Connector §2.6 apply: no URL, no key, fictitious context values.
 
+Tests the owner runs:
+
+- Each runs only with its flag, set by its make target; `make check` sets none, so they are skipped there: `make binance-live` sets `-live` (live tests on the test network), `make fixtures-record-binance` sets `-record`, `make binance-real` sets `-real` (the dry run on the real account).
+- `-live` and `-record` read `BINANCE_TESTNET_API_KEY` and `BINANCE_TESTNET_API_SECRET`, and `BINANCE_TESTNET_URL`: optional, default `https://testnet.binance.vision`, an `https` base URL; the production URL is refused. `-real` reads `BINANCE_API_KEY` and `BINANCE_API_SECRET`.
+
 | ID | Requirement | Parent |
 |---|---|---|
 | FR-216 | The connector must pass the shared connector test suite on fixtures, with no network access. | US-213, BR-5 |
@@ -546,21 +555,23 @@ Fixture format (X1 D-13):
 
 Stored in `sources.config` of the `binance` row.
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `base_url` | `https://api.binance.com` | Base URL of the API. Tests point it at the fake Binance server; the test network has no source row (X1 D-20) |
-| `budget_share` | 0.5 | Part of each limit the connector may use |
-| `recv_window_ms` | 5000 | `recvWindow` of signed requests |
-| `time_sync_interval` | 1 h | Refresh of the time offset |
-| `sync_interval.balances` | 15 min | Balance stream |
-| `sync_interval.ledger` | 1 h | History streams |
-| `finality_lookback` | 7 days | Overlap re-read by incremental runs |
-| `backfill_floor` | 2017-07-01 | Earliest date of the backfill |
-| `discovery_interval` | 7 days | Full trade discovery pass |
-| `events.enabled` | `true` from W1 | Event listener on or off |
-| `events.merge_window` | 2 s | Events for one stream inside this window start one run |
-| `events.renew_after` | 23 h | Planned reconnect before the 24-hour limit |
-| `events.reconnect_backoff` | 1 s, doubling, cap 5 min, with jitter | Delay between reconnect attempts |
+| Parameter | Default | Valid values | Meaning |
+|---|---|---|---|
+| `base_url` | `https://api.binance.com` | An `http` or `https` URL with a host; no user info, query, fragment or path; a trailing slash is trimmed | Base URL of the API. Tests point it at the fake Binance server; the test network has no source row (X1 D-20) |
+| `budget_share` | 0.5 | A JSON number above 0, at most 1. Minimum in practice 0.0125 (X1 D-59): below it a `/sapi` budget is under the 150 of an Earn page and every snapshot fails; below about 0.0034 `api` is under 20 | Part of each limit the connector may use |
+| `recv_window_ms` | 5000 | A JSON integer, 1 … 60000 | `recvWindow` of signed requests |
+| `time_sync_interval` | 1 h | A positive duration, e.g. `"1h"` | Refresh of the time offset |
+| `sync_interval.balances` | 15 min | As SRS — Core §3.1 | Balance stream |
+| `sync_interval.ledger` | 1 h | From X2 | History streams |
+| `finality_lookback` | 7 days | From X2 | Overlap re-read by incremental runs |
+| `backfill_floor` | 2017-07-01 | From X2 | Earliest date of the backfill |
+| `discovery_interval` | 7 days | From X2 | Full trade discovery pass |
+| `events.enabled` | `true` from W1 | From W1 | Event listener on or off |
+| `events.merge_window` | 2 s | From W1 | Events for one stream inside this window start one run |
+| `events.renew_after` | 23 h | From W1 | Planned reconnect before the 24-hour limit |
+| `events.reconnect_backoff` | 1 s, doubling, cap 5 min, with jitter | From W1 | Delay between reconnect attempts |
+
+- A missing value, or one outside its valid values, takes its default (SRS — Core §3.1; [backlog](../backlog.md) item 3). The minimum of `budget_share` is not checked in the code ([backlog](../backlog.md) item 20).
 
 ### 3.2 General Non-functional Requirements
 
@@ -572,6 +583,7 @@ Stored in `sources.config` of the `binance` row.
   - withdrawals: at most 5 requests per minute per account, half of the UID budget.
 - **Security:**
   - the key and secret are decrypted only for signing and never logged; signed URLs are logged without the signature;
+  - log lines of the connector: DEBUG `binance request` per request with `method`, `url` (without `signature`), `status`, `ms`, or `error`; one WARN line per `403` with `method` and `path`; never a key, secret, signature or body;
   - production sync runs from one static IP; the owner is advised to restrict the key to it.
 
 ---

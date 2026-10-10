@@ -8,7 +8,7 @@
 - **Link to architecture documentation:** [C4](../c4/), [ADR](../adr/README.md) 1–6, 13, [SRS — Core](../srs/core.md)
 - **Link to Rollout plan:** §4
 - **Other related documents:** SRS — Binance (`../srs/exchange-binance.md`)
-- **Document Version:** 1.1, 2026-10-09: the test network in §2.5 and §4.3, by the discovery of X1 (X1 D-20). Version 1.0, 2026-10-04, approved
+- **Document Version:** 1.1, 2026-10-09: the test network in §2.5 and §4.3, by the discovery of X1 (X1 D-20). Completed in X1 st8b, 2026-10-10 (X1-T704): §5 issues 2 and 3 closed on the real account (X1-T605, X1-T604); the region risk confirmed; the demo risk and the goal of G-5 aligned with X1 D-20 and the real-account check. Version 1.0, 2026-10-04, approved
 
 ---
 
@@ -44,7 +44,7 @@
 
 | Goal (SMART) | Measurable Metrics | Value | Business Outcome | Priority |
 |---|---|---|---|---|
-| Balances match the exchange (G-5, X1) | Spot, funding and Earn balances equal the exchange UI at snapshot time on the test account | Trust in the numbers | ET shows complete holdings | High |
+| Balances match the exchange (G-5, X1) | Spot, funding and Earn balances equal the exchange UI at snapshot time on the owner's read-only real account | Trust in the numbers | ET shows complete holdings | High |
 | Least privilege (G-3, X1) | 0 keys with a non-read permission accepted; permissions re-checked daily | The owner risks no funds by connecting | Lower barrier to connect | High |
 | No rate-limit bans (X1) | 0 "rate limit exceeded" answers in normal operation | One user cannot break sync for all | Stable service on a shared IP | High |
 | No duplicates in history (G-4, X2) | A repeated sync adds 0 entries | Consumers can re-pull safely | No clean-up logic in consumers | High |
@@ -201,10 +201,10 @@ Platform-wide risks are in BRD §10. Module-specific additions:
 | Risk | Severity | Mitigation Plan | Status | Owner |
 |---|---|---|---|---|
 | The exchange changes or retires an endpoint | MEDIUM | Connector tests on recorded fixtures; the exchange changelog is checked before each milestone | CONFIRMED | Igor |
-| The exchange limits API access for the owner's region or account type | MEDIUM | Verify on the real account at X1 | TO CONFIRM | Igor |
+| The exchange limits API access for the owner's region or account type | MEDIUM | Verified on the real account 2026-10-10 (X1-T605) | CONFIRMED | Igor |
 | The ledger does not explain the balance: delisted pairs, operation kinds not covered | MEDIUM | Completeness check per asset; gaps documented; file import as a later option | CONFIRMED | Igor |
 | A leaked read-only key exposes balances and history | MEDIUM | Encryption at rest; key restricted to the sync IP; no secrets in logs | CONFIRMED | Igor |
-| Real balances show up in the public demo | HIGH | The demo uses the test network and fixtures only; the real connection lives in a separate environment | CONFIRMED | Igor |
+| Real balances show up in the public demo | HIGH | The demo of Binance uses fixtures only (X1 D-20); the real connection lives in a separate environment | CONFIRMED | Igor |
 | The next exchange has no usable test environment | LOW | Test environment is a selection criterion for X3; Kraken on fixtures | CONFIRMED | Igor |
 
 ---
@@ -256,8 +256,8 @@ Platform-wide risks are in BRD §10. Module-specific additions:
 | # | Issue | Contact Point | Decision |
 |---|---|---|---|
 | 1 | Which exchange is second (X3) | Igor | Open; decided after X1. Candidates to check against the criteria: Bybit, OKX |
-| 2 | API restrictions for the owner's Binance account and region | Igor | Verify on the real account at X1 |
-| 3 | Earn wrapper codes in the spot wallet: how to avoid double counting | Igor | Decided in SRS — Binance UC-202: wrapper balances are dropped. To be verified on the real account at X1 |
+| 2 | API restrictions for the owner's Binance account and region | Igor | Closed 2026-10-10 on the real account (X1-T605): every endpoint of X1 answered for an account with residence Serbia (SRS — Binance §4 issue 6) |
+| 3 | Earn wrapper codes in the spot wallet: how to avoid double counting | Igor | Decided in SRS — Binance UC-202 step 5: a spot `LD` + asset code is dropped when a flexible position of the asset exists and the code is not a listed asset; the amount of the position counts. Closed 2026-10-10 (X1-T604): the wrapper does not follow accrued rewards; the rule matches the UI |
 | 4 | Scope of minor history lists: small-balance conversion, distributions, convert | Igor | Decided in SRS — Binance §2.1.2: all three are in X2, with Earn rewards |
 | 5 | Default backfill depth | Igor | Decided: full history, down to `backfill_floor` (SRS — Binance §3.1) |
 | 6 | Trades on delisted pairs | Igor | Decided: documented gap, visible in the completeness check; file import stays in the backlog |

@@ -1,6 +1,6 @@
 # Deployment Guide — Base Sepolia
 
-- **Version:** 1.1, 2026-10-08, S3 st8b and st8c: §13, the EVM connector and reconciliation of `server` on Base Sepolia, with the evidence of 2026-10-08; the measured finality distance in §5.3 and §7; the treasury guard of `server` (S3 D-42) in §13.2 and §13.3. Version 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Completed in S2 st10a, 2026-10-06: the idle RPC load after the fix of st9b (S2-T808); the port defaults of `measure.sh`, the fallback check of `run-card-auth.sh` and the probe of the primary, to match the scripts and the code; the mode of `cas-sepolia-deployment.env` as the script creates it. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
+- **Version:** 1.1, 2026-10-08, S3 st8b and st8c: §13, the EVM connector and reconciliation of `server` on Base Sepolia, with the evidence of 2026-10-08; the measured finality distance in §5.3 and §7; the treasury guard of `server` (S3 D-42) in §13.2 and §13.3. Completed in X1: `casctl connection inspect` in §13 (st7a, X1 D-45); `scripts/binance/connect.sh` and `CAS_X1_CREDENTIALS` in the variables of §5.2 (st8b, 2026-10-10). Version 1.0, 2026-10-06, S2 st9b close: the evidence of Base Sepolia in §12; the order of the terminals. Completed in S2 st10a, 2026-10-06: the idle RPC load after the fix of st9b (S2-T808); the port defaults of `measure.sh`, the fallback check of `run-card-auth.sh` and the probe of the primary, to match the scripts and the code; the mode of `cas-sepolia-deployment.env` as the script creates it. Version 0.2, 2026-10-06, S2 st9b fix: the RPC default of the scripts; the load-balanced public endpoint and HTTP 429 in §10. Version 0.1, 2026-10-06, S2 st9a: first version, written with the scripts of `scripts/sepolia/` and their local rehearsal, with placeholders for the values of Base Sepolia.
 - **Status:** Pre-approved: used by the owner for S2 st9b on 2026-10-06.
 - **Parents:** [SRS — Card Spend](srs/card-spend.md) §3.1, §3.2, UC-4; [SRS — Core](srs/core.md) UC-105, `CreateConnection`, `RegisterCard`, `GetReconciliationReport`, §3.2; [SRS — EVM Connector](srs/evm-connector.md) §2.4, §3.1; [test plan S2](test-plan-s2.md) phase 8; [test plan S3](test-plan-s3.md) phase 8.
 
@@ -106,9 +106,10 @@ CREATE ROLE cas_card_auth LOGIN PASSWORD '…';
 | `CAS_SEPOLIA_KEYS` | — (required) | all |
 | `CAS_SEPOLIA_RPC_URL` | `CARD_AUTH_RPC_URL` of the environment file when set, else `https://sepolia.base.org` | `deploy.sh`, `setup.sh`, `register.sh` |
 | `CAS_SEPOLIA_FALLBACK_URL` | `https://sepolia.base.org` | `run-card-auth.sh` |
-| `CAS_ENV_FILE` | `.env` of the repository | `register.sh`, `run-card-auth.sh`, `measure.sh` |
-| `CAS_BIN_DIR` | `bin/` | `register.sh`, `run-card-auth.sh`, `measure.sh` |
-| `CAS_GRPC_ADDR` | `127.0.0.1:50053` | `register.sh` |
+| `CAS_ENV_FILE` | `.env` of the repository | `register.sh`, `run-card-auth.sh`, `measure.sh`, `scripts/binance/connect.sh` |
+| `CAS_BIN_DIR` | `bin/` | `register.sh`, `run-card-auth.sh`, `measure.sh`, `scripts/binance/connect.sh` |
+| `CAS_GRPC_ADDR` | `127.0.0.1:50053`; loopback only for `connect.sh` | `register.sh`, `scripts/binance/connect.sh` |
+| `CAS_X1_CREDENTIALS` | `~/.config/cas/x1-real.env`, outside the repository, mode 600 | `scripts/binance/connect.sh` ([Binance Key Guide](binance-key-guide.md) §4) |
 | `CAS_TENANT`, `CAS_OWNER_REF`, `CAS_CARD_REF`, `CAS_CARD_DAILY_LIMIT` | `sepolia-demo`, `owner-a`, `card_A`, 200 USDC | `register.sh`; `CAS_CARD_REF` also `measure.sh` |
 | `CAS_SETUP_MINT`, `CAS_SETUP_ALLOWANCE`, `CAS_SETUP_DAILY_LIMIT`, `CAS_SETUP_REFUND_ALLOWANCE` | 100, 100, 50, 100 USDC | `setup.sh` |
 | `CAS_MEASURE_N`, `CAS_MEASURE_AMOUNT` | 30, 1.00 USD | `measure.sh` |
